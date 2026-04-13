@@ -1,0 +1,29 @@
+# データベースファイル
+*.db
+*.sqlite
+*.sqlite3
+
+# moomoo OpenDバイナリ（サードパーティ）
+investment_support/moomoo_OpenD_10.2.6208_Windows/
+
+# Python キャッシュ
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# egg-info
+*.egg-info/
+
+# 仮想環境
+venv/
+.venv/
+env/
+
+# ログ
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

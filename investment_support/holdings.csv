@@ -1,0 +1,4 @@
+ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
+VT,Vanguard Total World Stock ETF,US,139.655,2026-04-11,0.116,128.48,moomoo同期
+NVDA,NVIDIA,US,180.254,2026-04-11,0.0552,159.51,moomoo同期
+GOOG,Alphabet-C,US,194.009,2026-04-11,0.0701,178.49,moomoo同期

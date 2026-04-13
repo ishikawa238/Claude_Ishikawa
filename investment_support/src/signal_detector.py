@@ -1,0 +1,301 @@
+"""
+売買シグナル検出モジュール
+
+パターンA: モメンタムブレイクアウト
+パターンB: 押し目買い
+
+各条件の充足状況をフラグで記録し、daily_signals テーブルに保存する。
+市場環境が caution / full_caution の場合は skip のみ保存して終了する。
+"""
+
+from datetime import date
+from typing import Optional
+
+from src.config import CONFIG
+from src.data_store import fetch_all, get_connection, upsert
+from src.logger import get_logger
+
+logger = get_logger(__name__)
+
+_SIG = CONFIG["signal"]
+_PA_RSI_MIN       = float(_SIG["pattern_a_rsi_min"])
+_PA_RSI_MAX       = float(_SIG["pattern_a_rsi_max"])
+_PA_VOL_RATIO     = float(_SIG["pattern_a_volume_ratio_min"])
+_PA_52W_PCT       = float(_SIG["pattern_a_52w_high_pct"])
+_PB_RSI_MIN       = float(_SIG["pattern_b_rsi_min"])
+_PB_RSI_MAX       = float(_SIG["pattern_b_rsi_max"])
+_PB_MA25_TOUCH    = float(_SIG["pattern_b_ma25_touch_pct"])
+_PB_LOOKBACK      = int(_SIG["pattern_b_lookback_days"])
+_MAX_CANDIDATES   = int(_SIG["max_candidates_per_pattern"])
+
+
+# ============================================================
+# メイン: シグナル検出と保存
+# ============================================================
+
+def detect_and_save_signals(
+    screened_tickers: list[dict],
+    target_date: date,
+    market_mode: str,
+) -> list[dict]:
+    """
+    流動性フィルタ通過銘柄に対してシグナル検出を行い、daily_signals に保存する。
+
+    引数:
+        screened_tickers: market_filter.get_screened_tickers() の返り値
+        target_date: 対象日
+        market_mode: "normal" / "caution" / "full_caution"
+
+    返り値: label='candidate' の銘柄リスト（エントリーセット計算に使用）
+    """
+    target_str = target_date.strftime("%Y-%m-%d")
+    candidates: list[dict] = []
+    all_rows: list[dict] = []
+
+    if market_mode in ("caution", "full_caution"):
+        logger.info(f"市場環境 [{market_mode}]: シグナル検出をスキップ")
+        return []
+
+    for tk in screened_tickers:
+        ticker = tk["ticker"]
+        market = tk["market"]
+
+        # パターンA評価
+        row_a = _eval_pattern_a(tk, target_str, market)
+        # パターンB評価
+        row_b = _eval_pattern_b(tk, target_str, market)
+
+        # どちらかが candidate なら採用
+        best = _pick_best(row_a, row_b)
+        all_rows.append(best)
+        if best["label"] == "candidate":
+            candidates.append(best)
+
+    # vol_ratio 降順でランク付け
+    candidates.sort(key=lambda x: x.get("vol_ratio") or 0, reverse=True)
+    for rank, c in enumerate(candidates, start=1):
+        c["rs_rank"] = rank
+
+    # all_rows にも rs_rank を反映
+    rank_map = {c["ticker"]: c["rs_rank"] for c in candidates}
+    for row in all_rows:
+        row["rs_rank"] = rank_map.get(row["ticker"])
+
+    # DB 保存（500件ずつ）
+    chunk = 500
+    for i in range(0, len(all_rows), chunk):
+        with get_connection() as conn:
+            upsert(conn, "daily_signals", all_rows[i:i + chunk])
+
+    candidate_count = len(candidates)
+    logger.info(
+        f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
+        f"candidate={candidate_count} 件 / "
+        f"watch={sum(1 for r in all_rows if r['label']=='watch')} 件"
+    )
+    return candidates[:_MAX_CANDIDATES]  # 最大件数に絞って返す
+
+
+# ============================================================
+# パターンA 評価
+# ============================================================
+
+def _eval_pattern_a(tk: dict, target_str: str, market: str) -> dict:
+    """
+    パターンA（モメンタムブレイクアウト）の全条件を評価する。
+    全条件充足 → candidate、1〜2条件未充足 → watch、それ以外 → skip
+    """
+    close     = tk.get("close") or tk.get("adj_close")
+    ma5       = tk.get("ma5")
+    ma25      = tk.get("ma25")
+    ma75      = tk.get("ma75")
+    ma200     = tk.get("ma200")
+    ma200_5d  = tk.get("ma200_5d_ago")
+    vol       = tk.get("volume")
+    vol_avg   = tk.get("vol_20d_avg")
+    high_52w  = tk.get("high_52w")
+    rsi       = tk.get("rsi14")
+
+    # 各条件評価（None は「データ不足」として 0 扱い）
+    c1 = _flag(ma200 and ma200_5d and ma200 > ma200_5d)         # MA200上昇中
+    c2 = _flag(ma75 and ma200 and ma25 and ma75 and
+               ma75 >= ma200 and ma25 >= ma75 and
+               (ma5 or 0) >= ma25)                              # MA整列
+    c3 = _flag(close and high_52w and close >= high_52w * _PA_52W_PCT)  # 52週高値近傍
+    c4 = _flag(vol and vol_avg and vol_avg > 0 and
+               vol / vol_avg >= _PA_VOL_RATIO)                  # 出来高急増
+    c5 = _flag(rsi and _PA_RSI_MIN <= rsi <= _PA_RSI_MAX)       # RSI適正
+    c6 = _flag(close and ma25 and close >= ma25)                # MA25上方
+
+    all_conds = [c1, c2, c3, c4, c5, c6]
+    met = sum(all_conds)
+    total = len(all_conds)
+
+    if met == total:
+        label = "candidate"
+    elif met >= total - 2:
+        label = "watch"
+    else:
+        label = "skip"
+
+    vol_ratio = (vol / vol_avg) if (vol and vol_avg and vol_avg > 0) else None
+
+    return {
+        "ticker":  tk["ticker"],
+        "date":    target_str,
+        "market":  market,
+        "pattern": "A",
+        "label":   label,
+        "cond_a_ma200_rising":  c1,
+        "cond_a_ma_aligned":    c2,
+        "cond_a_52w_high_near": c3,
+        "cond_a_volume_surge":  c4,
+        "cond_a_rsi_ok":        c5,
+        "cond_a_above_ma25":    c6,
+        "cond_b_ma200_rising":     None,
+        "cond_b_ma_aligned":       None,
+        "cond_b_pullback_touched": None,
+        "cond_b_bounced":          None,
+        "cond_b_ma25_rising":      None,
+        "cond_b_rsi_ok":           None,
+        "close":     close,
+        "rsi14":     rsi,
+        "atr14":     tk.get("atr14"),
+        "vol_ratio": vol_ratio,
+        "rs_rank":   None,
+    }
+
+
+# ============================================================
+# パターンB 評価
+# ============================================================
+
+def _eval_pattern_b(tk: dict, target_str: str, market: str) -> dict:
+    """
+    パターンB（押し目買い）の全条件を評価する。
+    押し目タッチの判定には price_history から過去5日分を参照する。
+    """
+    close     = tk.get("close") or tk.get("adj_close")
+    ma25      = tk.get("ma25")
+    ma75      = tk.get("ma75")
+    ma200     = tk.get("ma200")
+    ma200_5d  = tk.get("ma200_5d_ago")
+    ma25_5d   = tk.get("ma25_5d_ago")
+    vol       = tk.get("volume")
+    vol_avg   = tk.get("vol_20d_avg")
+    rsi       = tk.get("rsi14")
+
+    c1 = _flag(ma200 and ma200_5d and ma200 > ma200_5d)         # MA200上昇中
+    c2 = _flag(ma75 and ma200 and ma25 and
+               ma75 >= ma200 and ma25 >= ma75)                  # MA整列
+    c3, c4 = _check_pullback(tk["ticker"], target_str, ma25)    # 押し目タッチ・反発
+    c5 = _flag(ma25 and ma25_5d and ma25 > ma25_5d)             # MA25上昇中
+    c6 = _flag(rsi and _PB_RSI_MIN <= rsi <= _PB_RSI_MAX)       # RSI適正
+
+    # 出来高はパターンBでは必須条件ではないが参考値として記録
+    vol_ratio = (vol / vol_avg) if (vol and vol_avg and vol_avg > 0) else None
+
+    all_conds = [c1, c2, c3, c4, c5, c6]
+    met = sum(all_conds)
+    total = len(all_conds)
+
+    if met == total:
+        label = "candidate"
+    elif met >= total - 2:
+        label = "watch"
+    else:
+        label = "skip"
+
+    return {
+        "ticker":  tk["ticker"],
+        "date":    target_str,
+        "market":  market,
+        "pattern": "B",
+        "label":   label,
+        "cond_a_ma200_rising":  None,
+        "cond_a_ma_aligned":    None,
+        "cond_a_52w_high_near": None,
+        "cond_a_volume_surge":  None,
+        "cond_a_rsi_ok":        None,
+        "cond_a_above_ma25":    None,
+        "cond_b_ma200_rising":     c1,
+        "cond_b_ma_aligned":       c2,
+        "cond_b_pullback_touched": c3,
+        "cond_b_bounced":          c4,
+        "cond_b_ma25_rising":      c5,
+        "cond_b_rsi_ok":           c6,
+        "close":     close,
+        "rsi14":     rsi,
+        "atr14":     tk.get("atr14"),
+        "vol_ratio": vol_ratio,
+        "rs_rank":   None,
+    }
+
+
+def _check_pullback(
+    ticker: str,
+    target_str: str,
+    ma25: Optional[float],
+) -> tuple[int, int]:
+    """
+    直近 _PB_LOOKBACK 日間に MA25 へのタッチと反発があるか確認する。
+    返り値: (pullback_touched: int, bounced: int)
+    """
+    if not ma25:
+        return 0, 0
+
+    with get_connection() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT date, low, adj_close FROM price_history "
+            "WHERE ticker = ? AND date <= ? AND is_holiday = 0 "
+            "ORDER BY date DESC LIMIT ?",
+            (ticker, target_str, _PB_LOOKBACK + 1),
+        )
+
+    if len(rows) < 2:
+        return 0, 0
+
+    rows_asc = list(reversed(rows))  # 昇順に直す
+    today_close = float(rows_asc[-1]["adj_close"] or 0)
+
+    # 直近 _PB_LOOKBACK 日以内（今日を除く）に安値が MA25 × _PB_MA25_TOUCH 以下
+    touched = False
+    for r in rows_asc[:-1]:  # 最後（今日）を除く
+        low = float(r["low"] or r["adj_close"] or 0)
+        if low <= ma25 * _PB_MA25_TOUCH:
+            touched = True
+            break
+
+    bounced = _flag(today_close >= ma25) if touched else 0
+    return _flag(touched), bounced
+
+
+# ============================================================
+# ユーティリティ
+# ============================================================
+
+def _flag(condition) -> int:
+    """bool → 0 / 1 に変換する。None は 0 扱い。"""
+    return 1 if condition else 0
+
+
+def _pick_best(row_a: dict, row_b: dict) -> dict:
+    """
+    パターンA・B のうち、より強いシグナルを持つ方を返す。
+    candidate > watch > skip の優先順で選ぶ。
+    同じ強度の場合は vol_ratio が高い方を優先する。
+    """
+    priority = {"candidate": 2, "watch": 1, "skip": 0}
+    pa = priority[row_a["label"]]
+    pb = priority[row_b["label"]]
+
+    if pa > pb:
+        return row_a
+    if pb > pa:
+        return row_b
+
+    # 同順位 → vol_ratio が高い方
+    va = row_a.get("vol_ratio") or 0
+    vb = row_b.get("vol_ratio") or 0
+    return row_a if va >= vb else row_b

@@ -16,6 +16,9 @@ from src.data_store import get_connection, insert_one
 from src.logger import get_logger
 from src.order_executor import generate_order_url
 
+_EARNINGS_WARN_DAYS     = int(CONFIG["jquants"].get("earnings_alert_days_warning",  7))
+_EARNINGS_CRITICAL_DAYS = int(CONFIG["jquants"].get("earnings_alert_days_critical", 3))
+
 logger = get_logger(__name__)
 
 _WEBHOOK_URL = CONFIG["slack"]["webhook_url"]
@@ -72,6 +75,14 @@ def send_morning_report(
         blocks.append(_section(f"🚨 *【要即時対応】損切り対象（{len(forced)}件）*"))
         for h in forced:
             blocks.append(_holding_block(h, color="danger"))
+        blocks.append(_divider())
+
+    # 決算アラート
+    earnings_alerts = _get_earnings_alerts(holdings)
+    if earnings_alerts:
+        blocks.append(_section("📅 *決算アラート*"))
+        for h in earnings_alerts:
+            blocks.append(_earnings_alert_block(h))
         blocks.append(_divider())
 
     # 市場環境
@@ -161,6 +172,14 @@ def send_evening_report(
         blocks.append(_divider())
     else:
         blocks.append(_section("本日は買い候補が検出されませんでした。"))
+        blocks.append(_divider())
+
+    # 決算アラート
+    earnings_alerts = _get_earnings_alerts(holdings)
+    if earnings_alerts:
+        blocks.append(_section("📅 *決算アラート*"))
+        for h in earnings_alerts:
+            blocks.append(_earnings_alert_block(h))
         blocks.append(_divider())
 
     # 保有銘柄全件
@@ -337,6 +356,40 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
         if url:
             text += f"\n📱 <{url}|ワンクリック売り注文（{qty}株）>"
 
+    return _section(text)
+
+
+def _get_earnings_alerts(holdings: list[dict]) -> list[dict]:
+    """警告閾値以内に決算が迫っている保有銘柄を返す（日数昇順）。"""
+    alerts = [
+        h for h in holdings
+        if h.get("earnings_days") is not None
+        and h["earnings_days"] <= _EARNINGS_WARN_DAYS
+    ]
+    return sorted(alerts, key=lambda h: h["earnings_days"])
+
+
+def _earnings_alert_block(h: dict) -> dict:
+    """決算アラート1件分の Block Kit セクションを生成する。"""
+    days     = h["earnings_days"]
+    ann_date = h["earnings_date"]
+    ticker   = h["ticker"]
+    name     = h.get("name") or ticker
+    qty      = h.get("quantity")
+    pnl_amt  = h.get("pnl_amount")
+    market   = h["market"]
+
+    days_str = "本日" if days == 0 else f"{days}日後"
+    emoji    = "🚨" if days <= _EARNINGS_CRITICAL_DAYS else "📅"
+
+    pnl_str = ""
+    if qty is not None and pnl_amt is not None:
+        currency = "円" if market == "JP" else "USD"
+        pnl_str  = f"\n現在保有中: {qty:.0f}株 / 含み損益: {pnl_amt:+,.0f}{currency}"
+    elif qty is not None:
+        pnl_str = f"\n現在保有中: {qty:.0f}株"
+
+    text = f"{emoji} *{ticker} {name}* — {days_str}に決算発表予定（{ann_date}）{pnl_str}"
     return _section(text)
 
 

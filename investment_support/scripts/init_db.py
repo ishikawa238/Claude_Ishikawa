@@ -302,6 +302,58 @@ DDL_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_batch_run_log_date ON batch_run_log(run_date, batch_type)",
+
+    # ----------------------------------------------------------
+    # 決算発表予定日（J-Quants fins/announcement から取得）
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS earnings_schedule (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker            TEXT    NOT NULL,
+        announcement_date DATE    NOT NULL,
+        fiscal_year       TEXT,
+        fiscal_quarter    TEXT,
+        fetched_at        DATE    NOT NULL,
+        created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ticker) REFERENCES universe_master(ticker)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_schedule_ticker_date ON earnings_schedule(ticker, announcement_date)",
+    "CREATE INDEX IF NOT EXISTS idx_earnings_schedule_date ON earnings_schedule(announcement_date)",
+
+    # ----------------------------------------------------------
+    # 財務スナップショット（J-Quants fins/statements から取得）
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker              TEXT    NOT NULL,
+        fiscal_year         TEXT    NOT NULL,
+        fiscal_quarter      TEXT    NOT NULL,
+        revenue             REAL,
+        operating_income    REAL,
+        ordinary_income     REAL,
+        net_income          REAL,
+        eps                 REAL,
+        bps                 REAL,
+        shares_outstanding  REAL,
+        dividend_per_share  REAL,
+        per                 REAL,
+        pbr                 REAL,
+        dividend_yield      REAL,
+        fetched_at          DATE    NOT NULL,
+        created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ticker) REFERENCES universe_master(ticker)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamentals_ticker_period ON fundamentals_snapshot(ticker, fiscal_year, fiscal_quarter)",
+]
+
+# 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）
+MIGRATION_STATEMENTS = [
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN per            REAL",
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN pbr            REAL",
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN dividend_yield REAL",
 ]
 
 
@@ -342,6 +394,7 @@ def init_db() -> None:
                 conn.close()
                 raise
 
+        _run_migrations(conn)
         conn.commit()
         logger.info(f"DB初期化完了: テーブル {success_count} 件を作成（または確認）しました。")
 
@@ -349,6 +402,22 @@ def init_db() -> None:
         conn.close()
 
     _print_table_summary(db_path)
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """
+    既存DBに対してカラム追加などのマイグレーションを実行する。
+    カラムが既に存在する場合は OperationalError を無視する（冪等）。
+    """
+    for stmt in MIGRATION_STATEMENTS:
+        try:
+            conn.execute(stmt)
+            logger.info(f"  マイグレーション実行: {stmt.strip()[:60]}")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                pass  # 既に存在する場合はスキップ
+            else:
+                raise
 
 
 def _extract_table_name(ddl: str) -> str:

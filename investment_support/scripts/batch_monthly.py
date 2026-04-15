@@ -24,6 +24,7 @@ from src.data_fetcher import fetch_exchange_symbols
 from src.data_store import (
     fetch_all, get_connection, insert_one, log_error, upsert,
 )
+from src.jquants_fetcher import fetch_and_save_fundamentals
 from src.logger import get_logger
 from src.report_generator import send_monthly_report
 
@@ -46,6 +47,20 @@ def main() -> int:
         # ────────────────────────────────────────
         logger.info("STEP 1: 銘柄マスタ更新")
         _update_universe()
+
+        # ────────────────────────────────────────
+        # STEP 1.5: 財務データ更新（J-Quants, JP のみ）
+        # ────────────────────────────────────────
+        logger.info("STEP 1.5: 財務データ更新（J-Quants）")
+        with get_connection() as conn:
+            jp_tickers = [
+                r["ticker"] for r in fetch_all(
+                    conn,
+                    "SELECT ticker FROM universe_master "
+                    "WHERE market='JP' AND is_active=1 AND is_excluded=0",
+                )
+            ]
+        fetch_and_save_fundamentals(jp_tickers, _TODAY)
 
         # ────────────────────────────────────────
         # STEP 2: 前月レポート送信

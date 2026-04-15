@@ -9,7 +9,7 @@
 """
 
 import csv
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -130,6 +130,7 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             entry_price, stop_loss_price, pnl_pct
         )
 
+        next_earnings = _get_next_earnings(ticker, target_str)
         results.append({
             "ticker":          ticker,
             "name":            h["name"] or ticker,
@@ -144,6 +145,8 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "pnl_amount":      round(pnl_amount, 0) if pnl_amount else None,
             "label":           label,
             "reasons":         reasons,
+            "earnings_date":   next_earnings["date"] if next_earnings else None,
+            "earnings_days":   next_earnings["days"] if next_earnings else None,
         })
 
     forced = sum(1 for r in results if r["label"] == "forced_stop")
@@ -290,6 +293,28 @@ def _get_technical(ticker: str, target_str: str) -> Optional[dict]:
             (ticker, target_str),
         )
     return dict(row) if row else None
+
+
+def _get_next_earnings(ticker: str, target_str: str) -> Optional[dict]:
+    """
+    earnings_schedule から当日以降で最も近い決算発表予定日を取得する。
+    返り値: {"date": "YYYY-MM-DD", "days": N} または None
+    """
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT announcement_date FROM earnings_schedule "
+            "WHERE ticker=? AND announcement_date>=? "
+            "ORDER BY announcement_date ASC LIMIT 1",
+            (ticker, target_str),
+        )
+    if not row:
+        return None
+    ann_date = row["announcement_date"]
+    target_dt = datetime.strptime(target_str, "%Y-%m-%d").date()
+    ann_dt    = datetime.strptime(ann_date,   "%Y-%m-%d").date()
+    days = (ann_dt - target_dt).days
+    return {"date": ann_date, "days": days}
 
 
 def _get_technical_5d_ago(ticker: str, target_str: str, column: str) -> Optional[float]:

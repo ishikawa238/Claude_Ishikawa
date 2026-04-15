@@ -29,6 +29,18 @@ _SERVER_HOST = _SERVER_CFG.get("host", "127.0.0.1")
 _SERVER_PORT = int(_SERVER_CFG.get("port", 5100))
 _SECRET = _SERVER_CFG.get("secret", "")
 
+_GUI_UNLOCK_DISABLED_MARKERS = (
+    "unlock api has been disabled in the gui version",
+    "use the unlock button in the interface",
+)
+
+_TRADE_LOCKED_MARKERS = (
+    "unlock trade",
+    "unlock trading",
+    "trade is locked",
+    "trading is locked",
+)
+
 
 # ============================================================
 # URL 署名・検証
@@ -112,6 +124,29 @@ def _resolve_security_firm(ft):
     return val
 
 
+def _normalize_error_message(message) -> str:
+    if message is None:
+        return ""
+    return str(message).strip()
+
+
+def _is_gui_unlock_disabled_message(message) -> bool:
+    normalized = _normalize_error_message(message).lower()
+    return any(marker in normalized for marker in _GUI_UNLOCK_DISABLED_MARKERS)
+
+
+def _is_trade_unlock_required_message(message) -> bool:
+    normalized = _normalize_error_message(message).lower()
+    return any(marker in normalized for marker in _TRADE_LOCKED_MARKERS)
+
+
+def _manual_unlock_guidance() -> str:
+    return (
+        "GUI版 OpenD では API で取引ロック解除できません。"
+        " moomoo の画面で取引ロックを解除してから、もう一度注文を実行してください"
+    )
+
+
 def place_order(
     action: str,
     ticker: str,
@@ -146,6 +181,7 @@ def place_order(
     sub_acc = getattr(ft.SubAccType, jp_acc_type, ft.SubAccType.JP_TOKUTEI)
 
     ctx = None
+    gui_unlock_disabled = False
     try:
         ctx = ft.OpenSecTradeContext(
             filter_trdmarket=trd_market,
@@ -156,14 +192,16 @@ def place_order(
 
         # REAL 環境は取引ロック解除が必要
         if env == ft.TrdEnv.REAL:
-            if not _TRADE_PWD_MD5:
-                return _fail(
-                    "取引パスワードが未設定です。config.json の "
-                    "moomoo.trade_password_md5 を設定してください"
-                )
-            ret, msg = ctx.unlock_trade(password_md5=_TRADE_PWD_MD5)
-            if ret != ft.RET_OK:
-                return _fail(f"取引ロック解除失敗: {msg}")
+            if _TRADE_PWD_MD5:
+                ret, msg = ctx.unlock_trade(password_md5=_TRADE_PWD_MD5)
+                if ret != ft.RET_OK:
+                    if _is_gui_unlock_disabled_message(msg):
+                        gui_unlock_disabled = True
+                        logger.info("GUI版 OpenD のため API unlock をスキップし、手動解除前提で注文を継続")
+                    else:
+                        return _fail(f"取引ロック解除失敗: {msg}")
+            else:
+                logger.info("moomoo.trade_password_md5 未設定のため API unlock をスキップ")
 
         # 成行注文を発注
         ret, data = ctx.place_order(
@@ -189,8 +227,26 @@ def place_order(
                 "details": info,
             }
         else:
-            logger.error(f"注文失敗: {data}")
-            return _fail(f"注文失敗: {data}")
+            error_message = _normalize_error_message(data)
+            logger.error(f"注文失敗: {error_message}")
+
+            if env == ft.TrdEnv.REAL and (
+                gui_unlock_disabled or _is_gui_unlock_disabled_message(error_message)
+            ):
+                return _fail(f"{_manual_unlock_guidance()}。詳細: {error_message}")
+
+            if env == ft.TrdEnv.REAL and not _TRADE_PWD_MD5 and _is_trade_unlock_required_message(error_message):
+                return _fail(
+                    "取引ロックが解除されていません。"
+                    " GUI版 OpenD なら moomoo の画面で解除し、通常版 OpenD なら "
+                    "config.json の moomoo.trade_password_md5 を設定してください。"
+                    f" 詳細: {error_message}"
+                )
+
+            if env == ft.TrdEnv.REAL and _is_trade_unlock_required_message(error_message):
+                return _fail(f"取引ロックが解除されていません。{error_message}")
+
+            return _fail(f"注文失敗: {error_message}")
 
     except Exception as e:
         logger.error(f"注文実行エラー: {e}", exc_info=True)

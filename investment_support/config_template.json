@@ -76,5 +76,12 @@
     "host": "127.0.0.1",
     "port": 5100,
     "secret": "YOUR_RANDOM_SECRET_HEX"
+  },
+
+  "jquants": {
+    "api_key": "YOUR_JQUANTS_API_KEY",
+    "request_interval_sec": 1.0,
+    "earnings_alert_days_warning": 7,
+    "earnings_alert_days_critical": 3
   }
 }

@@ -184,6 +184,10 @@ def _render_confirm(action, ticker, market, qty, price, stop, name, sig):
       ⚠️ 成行注文は市場価格で即座に約定します。内容を確認してから実行してください。
     </div>
 
+    <div class="warn">
+      ℹ️ GUI版 OpenD を使っている場合、注文前に moomoo の画面側で取引ロックを解除しておく必要があります。
+    </div>
+
     <form method="POST" action="/order/execute">
       <input type="hidden" name="action" value="{escape(action)}">
       <input type="hidden" name="ticker" value="{escape(ticker)}">
@@ -292,9 +296,10 @@ def main():
 
     if not pwd_md5:
         print("⚠️  config.json の moomoo.trade_password_md5 が未設定です。")
-        print("   以下のコマンドで取引パスワードの MD5 ハッシュを生成できます:")
+        print("   GUI版 OpenD を使う場合は、moomoo の画面で手動解除すれば注文できることがあります。")
+        print("   通常版 OpenD で API unlock を使う場合は、以下のコマンドで MD5 を生成してください:")
         print('   python -c "from src.order_executor import hash_trade_password; '
-              "print(hash_trade_password('あなたのパスワード'))\"")
+          "print(hash_trade_password('あなたのパスワード'))\"")
         print("   (SIMULATE 環境のみ使用する場合は空のままでも OK)")
 
     print(f"🚀 注文確認サーバーを起動します: http://{_HOST}:{_PORT}")

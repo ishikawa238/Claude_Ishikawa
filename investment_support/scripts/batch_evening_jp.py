@@ -130,6 +130,7 @@ def main() -> int:
         # ────────────────────────────────────────
         logger.info("STEP 7: 保有銘柄判定")
         sync_holdings_from_csv()
+        _update_earnings_schedule_for_holdings()
         holdings = evaluate_holdings(_TODAY)
 
         # ────────────────────────────────────────
@@ -162,6 +163,21 @@ def main() -> int:
 # ============================================================
 # ユーティリティ
 # ============================================================
+
+def _update_earnings_schedule_for_holdings() -> None:
+    """保有中の JP 銘柄（最大3件程度）の決算予定日を J-Quants から更新する。"""
+    from src.jquants_fetcher import fetch_and_save_earnings_schedule
+    with get_connection() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT DISTINCT h.ticker FROM holdings h "
+            "INNER JOIN universe_master u ON h.ticker = u.ticker "
+            "WHERE h.is_closed=0 AND u.market='JP'",
+        )
+    jp_tickers = [r["ticker"] for r in rows]
+    if jp_tickers:
+        fetch_and_save_earnings_schedule(jp_tickers, _TODAY)
+
 
 def _save_in_chunks(rows: list, table: str, chunk: int = 5000) -> None:
     for i in range(0, len(rows), chunk):

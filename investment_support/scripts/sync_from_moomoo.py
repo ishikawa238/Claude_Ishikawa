@@ -250,7 +250,7 @@ def fetch_positions_from_moomoo(trade_env: str = _ENV_AUTO) -> tuple[list[dict],
                     "name": name,
                     "entry_price": round(cost_price, 4),
                     "quantity": qty,
-                    "entry_date": str(row.get("position_side", date.today().strftime("%Y-%m-%d"))),
+                    "entry_date": date.today().strftime("%Y-%m-%d"),
                 })
         except Exception as e:
             message = f"{market_code} 市場への接続または取得に失敗しました: {e}"

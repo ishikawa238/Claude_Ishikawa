@@ -9,7 +9,7 @@
 """
 
 import csv
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -34,7 +34,10 @@ _SL_NEAR_PCT = 2.0
 def sync_holdings_from_csv() -> int:
     """
     holdings.csv を読み込んで holdings テーブルを更新する。
-    CSV に存在しない行は変更しない（手動決済の記録を保持するため）。
+    - 既存の未決済行（is_closed=0）がある場合は UPDATE する。
+    - なければ INSERT する。
+    - 同一 ticker で is_closed=0 の重複行がある場合は id が最大の行を残して削除する。
+    - CSV に存在しない行は変更しない（手動決済の記録を保持するため）。
     返り値: 同期件数
     """
     if not _HOLDINGS_CSV.exists():
@@ -72,10 +75,104 @@ def sync_holdings_from_csv() -> int:
 
     if rows:
         with get_connection() as conn:
-            upsert(conn, "holdings", rows)
+            _dedup_open_holdings(conn)
+            _upsert_holdings(conn, rows)
 
     logger.info(f"保有銘柄同期完了: {len(rows)} 件")
     return len(rows)
+
+
+def _dedup_open_holdings(conn) -> None:
+    """
+    同一 ticker で is_closed=0 の重複行を削除する。
+    id が最大（最新）の行を残し、それ以外を削除する。
+    """
+    dupes = conn.execute(
+        """
+        SELECT ticker FROM holdings
+        WHERE is_closed = 0
+        GROUP BY ticker
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+
+    for row in dupes:
+        ticker = row[0]
+        conn.execute(
+            """
+            DELETE FROM holdings
+            WHERE ticker = ? AND is_closed = 0
+              AND id < (
+                  SELECT MAX(id) FROM holdings
+                  WHERE ticker = ? AND is_closed = 0
+              )
+            """,
+            (ticker, ticker),
+        )
+        logger.info(f"重複行を削除しました: {ticker}")
+
+
+def _upsert_holdings(conn, rows: list[dict]) -> None:
+    """
+    holdings テーブルに対して ticker+is_closed=0 をキーとした
+    UPDATE / INSERT を実行する（INSERT OR REPLACE の代替）。
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in rows:
+        ticker = row["ticker"]
+        existing = conn.execute(
+            "SELECT id FROM holdings WHERE ticker = ? AND is_closed = 0",
+            (ticker,),
+        ).fetchone()
+
+        if existing:
+            conn.execute(
+                """
+                UPDATE holdings
+                SET name            = ?,
+                    market          = ?,
+                    entry_price     = ?,
+                    entry_date      = ?,
+                    quantity        = ?,
+                    stop_loss_price = ?,
+                    memo            = ?,
+                    updated_at      = ?
+                WHERE id = ?
+                """,
+                (
+                    row["name"],
+                    row["market"],
+                    row["entry_price"],
+                    row["entry_date"],
+                    row["quantity"],
+                    row["stop_loss_price"],
+                    row["memo"],
+                    now,
+                    existing[0],
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO holdings
+                    (ticker, name, market, entry_price, entry_date,
+                     quantity, stop_loss_price, memo, is_closed,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    row["ticker"],
+                    row["name"],
+                    row["market"],
+                    row["entry_price"],
+                    row["entry_date"],
+                    row["quantity"],
+                    row["stop_loss_price"],
+                    row["memo"],
+                    now,
+                    now,
+                ),
+            )
 
 
 # ============================================================
@@ -265,6 +362,58 @@ def _check_profit_fade(
 
     max_return_pct = (float(row["max_close"]) - entry_price) / entry_price * 100
     return max_return_pct >= 10.0
+
+
+# ============================================================
+# 保有銘柄の価格補完
+# ============================================================
+
+def ensure_holding_prices(target_date: date) -> list[str]:
+    """
+    保有銘柄のうち price_history に直近30日分のデータがない銘柄を
+    EODHD 個別エンドポイントで補完取得し price_history に保存する。
+    ETF（VT 等、universe_master 未登録銘柄）も対象。
+
+    返り値: 補完フェッチを試みたティッカーのリスト
+    """
+    from src.data_fetcher import fetch_price_history
+
+    target_str = target_date.strftime("%Y-%m-%d")
+    from_date  = target_date - timedelta(days=30)
+
+    # 未決済の保有銘柄を取得
+    with get_connection() as conn:
+        holdings = fetch_all(
+            conn,
+            "SELECT DISTINCT ticker, market FROM holdings WHERE is_closed = 0",
+        )
+
+    fetched = []
+    for h in holdings:
+        ticker = h["ticker"]
+        market = h["market"]
+
+        # price_history に対象日以降（または30日以内）のデータがあればスキップ
+        with get_connection() as conn:
+            row = fetch_one(
+                conn,
+                "SELECT date FROM price_history WHERE ticker = ? AND date >= ? LIMIT 1",
+                (ticker, from_date.strftime("%Y-%m-%d")),
+            )
+        if row:
+            continue
+
+        logger.info(f"保有銘柄の価格を補完取得します: {ticker} ({market})")
+        rows = fetch_price_history(ticker, market, from_date, target_date)
+        if rows:
+            with get_connection() as conn:
+                upsert(conn, "price_history", rows)
+            logger.info(f"  補完完了: {ticker} {len(rows)} 件")
+        else:
+            logger.warning(f"  補完失敗（価格データなし）: {ticker}")
+        fetched.append(ticker)
+
+    return fetched
 
 
 # ============================================================

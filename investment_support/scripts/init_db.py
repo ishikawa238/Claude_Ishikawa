@@ -356,6 +356,21 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE fundamentals_snapshot ADD COLUMN dividend_yield REAL",
 ]
 
+# 冪等なデータ修正マイグレーション（毎回実行しても安全）
+DATA_MIGRATION_STATEMENTS = [
+    # holdings テーブルの重複行クリーンアップ（同 ticker/is_closed=0 で id 最大以外を削除）
+    # sync_holdings_from_csv() が INSERT OR REPLACE（UNIQUE制約なし）で重複を生じさせていた問題の修正
+    """
+    DELETE FROM holdings
+    WHERE is_closed = 0
+      AND id NOT IN (
+          SELECT MAX(id) FROM holdings
+          WHERE is_closed = 0
+          GROUP BY ticker
+      )
+    """,
+]
+
 
 # ============================================================
 # 初期化処理
@@ -418,6 +433,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 pass  # 既に存在する場合はスキップ
             else:
                 raise
+
+    # データ修正マイグレーション（冪等・エラー無視しない）
+    for stmt in DATA_MIGRATION_STATEMENTS:
+        try:
+            cursor = conn.execute(stmt)
+            affected = cursor.rowcount
+            if affected > 0:
+                logger.info(f"  データマイグレーション実行（{affected}行影響）: {stmt.strip()[:60]}")
+        except sqlite3.OperationalError as e:
+            logger.warning(f"  データマイグレーションスキップ: {e}")
 
 
 def _extract_table_name(ddl: str) -> str:

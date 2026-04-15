@@ -30,7 +30,7 @@ from src.data_store import (
     insert_one, log_error, upsert,
 )
 from src.entry_calculator import save_entry_sets
-from src.holdings_monitor import evaluate_holdings, sync_holdings_from_csv
+from src.holdings_monitor import ensure_holding_prices, evaluate_holdings, sync_holdings_from_csv
 from src.logger import get_logger
 from src.market_filter import get_screened_tickers, judge_market_environment
 from src.notifier import send_morning_report
@@ -119,6 +119,7 @@ def main() -> int:
         # ────────────────────────────────────────
         logger.info("STEP 5: 保有銘柄判定")
         sync_holdings_from_csv()
+        ensure_holding_prices(_TODAY)  # ETF等 universe_master 未登録銘柄の価格を補完
         holdings = evaluate_holdings(_TODAY)
 
         # ────────────────────────────────────────

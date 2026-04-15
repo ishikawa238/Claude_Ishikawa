@@ -1,10 +1,19 @@
-# 投資判断支援システム 詳細設計書 v1.2
+# 投資判断支援システム 詳細設計書 v1.3
 
 ## 1. 文書概要
 
 本書は、要件定義書 v2.0 をもとに、DB定義・バッチフロー設計・Slack通知テンプレート・ディレクトリ構成・設定ファイル仕様を定義する。
 
 ### 1.1 変更履歴
+
+#### v1.3（2026-04-15）
+
+- 保有銘柄取得の不具合を調査・修正（セクション12を追加）
+  - holdings テーブルの重複行蓄積バグを修正（NVDA/GOOG が過大表示されていた原因）
+  - ETF（VT等）がスキップされる問題を修正（price_history 欠落の問題）
+  - `sync_from_moomoo.py` の `entry_date` 不具合を修正（position_side を誤用）
+  - 修正対象ファイル: `src/holdings_monitor.py`, `scripts/init_db.py`, `scripts/sync_from_moomoo.py`, `scripts/batch_*.py`
+  - テスト追加: `tests/test_holdings_monitor.py`（14テスト全パス）
 
 #### v1.2（2026-04-11）
 
@@ -1164,3 +1173,131 @@ python -m scripts.order_server
 | 日本株のティッカー形式 | EODHD では「7203.T」形式 | ✅ 解決済み。fetch_bulk_eod 内で `.T` / `.US` サフィックスを自動除去 |
 | 米国株の市場休場日リスト | EODHD で休場日フラグが取れるか未確認 | 🔴 未解決。取れない場合は NYSE 休場日カレンダーをローカルで管理 |
 | Windows タスクスケジューラの設定 | 具体的な登録手順が未定 | ✅ 解決済み。`setup_scheduler.ps1` で一括登録（管理者権限で実行） |
+
+---
+
+## 12. 保有銘柄取得不具合の調査・修正（v1.3）
+
+### 12.1 問題の概要
+
+バッチ実行ごとに NVDA・GOOG が Slack 通知で複数件表示される、
+VT（Vanguard Total World ETF）等が通知に出てこない、という現象が確認された。
+
+### 12.2 調査で判明した原因
+
+#### 原因1: holdings テーブルに UNIQUE 制約なし → 重複行が蓄積
+
+`holdings` テーブルの `ticker` 列に UNIQUE 制約が存在しなかった。
+
+```sql
+-- 修正前のテーブル定義（抜粋）
+CREATE TABLE holdings (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT    NOT NULL,   -- UNIQUE 制約なし
+    ...
+)
+```
+
+`upsert()` 関数は `INSERT OR REPLACE` を使うが、REPLACE が機能するには
+**UNIQUE 制約違反が発生する必要がある**。制約がないため毎回 INSERT になり、
+バッチ実行のたびに同一銘柄の行が増殖していた。
+
+**実際の重複状況（修正前）:**
+
+| ticker | 行数 |
+|--------|------|
+| GOOG   | 6    |
+| NVDA   | 6    |
+| VT     | 6    |
+| 計     | 18   |
+
+`evaluate_holdings()` は `WHERE is_closed=0` で全行を取得するため、
+同一銘柄が6件として処理・通知されていた。
+
+#### 原因2: ETF（VT等）の price_history データ欠落
+
+VT（Vanguard Total World Stock ETF）は `holdings.csv` に存在するが、
+`universe_master` に登録されない（ETFは `is_excluded=1` で除外）。
+このため EODHD の Bulk EOD フェッチ対象外となり、`price_history` にデータがない。
+
+`_get_latest_price()` が None を返す → `evaluate_holdings()` で警告ログを出してスキップ
+→ **Slack 通知に VT が一切出てこない**という状態だった。
+
+#### 原因3: sync_from_moomoo.py の entry_date 誤設定
+
+`scripts/sync_from_moomoo.py` の253行目で、moomoo API の `position_side` 列
+（値は "LONG"/"SHORT" など方向を示す文字列）を `entry_date` に使用していた。
+
+```python
+# 修正前（バグ）
+"entry_date": str(row.get("position_side", date.today().strftime("%Y-%m-%d"))),
+
+# 修正後
+"entry_date": date.today().strftime("%Y-%m-%d"),
+```
+
+### 12.3 採用した修正方針
+
+| 問題 | 修正方針 | 理由 |
+|------|---------|------|
+| 重複行蓄積 | `sync_holdings_from_csv()` を `UPDATE + INSERT` に変更 | UNIQUE 制約追加はスキーマ変更が大きく、歴史的な決済済み行に影響する可能性があるため |
+| 既存重複行 | `init_db.py` に DATA_MIGRATION（重複行 DELETE）を追加 | `init_db` 再実行で冪等にクリーンアップ可能 |
+| ETF 価格欠落 | `ensure_holding_prices()` を追加しバッチ実行時に補完フェッチ | universe_master の設計を変えず、保有銘柄だけ個別取得 |
+| entry_date 誤設定 | 常に `date.today()` を使用 | moomoo API には信頼できる取得日がないため |
+
+### 12.4 実装内容
+
+#### src/holdings_monitor.py
+
+- `sync_holdings_from_csv()`: `upsert()` を廃止し、内部で `_dedup_open_holdings()` + `_upsert_holdings()` を呼ぶ形に変更
+- `_dedup_open_holdings(conn)`: 同一 ticker/is_closed=0 の重複行を削除（最大 id を残す）
+- `_upsert_holdings(conn, rows)`: ticker+is_closed=0 をキーとした UPDATE/INSERT
+- `ensure_holding_prices(target_date)`: price_history にデータがない保有銘柄を EODHD から補完フェッチして保存
+
+```python
+# バッチスクリプトでの呼び出し順序（evening/morning 共通）
+sync_holdings_from_csv()        # CSV → DB 同期（重複なし）
+ensure_holding_prices(_TODAY)   # ETF等の価格を補完
+evaluate_holdings(_TODAY)       # 損益・ラベル判定
+```
+
+#### scripts/init_db.py
+
+- `DATA_MIGRATION_STATEMENTS` リストを新設
+- 既存重複行を削除する SQL を追加（冪等・初回実行時は 0 行削除）
+- `_run_migrations()` で DATA_MIGRATION_STATEMENTS も実行するよう拡張
+
+#### scripts/sync_from_moomoo.py
+
+- `entry_date` に `position_side` を使っていたバグを修正
+
+#### scripts/batch_evening_jp.py / batch_morning_all.py
+
+- `ensure_holding_prices` をインポートし、`evaluate_holdings` 前に呼び出し追加
+
+### 12.5 検証結果
+
+```
+# マイグレーション実行後の holdings テーブル
+holdings: 3行（VT×1, NVDA×1, GOOG×1）← 18行から正常に削減
+
+# テスト実行結果
+Ran 14 tests in 0.079s: OK（全パス）
+```
+
+新規追加テスト（`tests/test_holdings_monitor.py`）:
+- `DeduplicateOpenHoldingsTests`: 重複削除ロジック（2テスト）
+- `UpsertHoldingsTests`: UPDATE/INSERT振り分け（3テスト）
+- `SyncHoldingsFromCsvIdempotencyTests`: 3回呼んでも重複しない（1テスト）
+- `EnsureHoldingPricesTests`: 補完フェッチ・スキップ（2テスト）
+
+### 12.6 今後の TODO（保留事項）
+
+| 項目 | 内容 |
+|------|------|
+| holdings UNIQUE 制約 | 長期的には `(ticker, is_closed=0)` に対する部分ユニーク制約を追加するのが望ましい（SQLite は部分インデックスの UNIQUE に非対応のため、代替案として CHECK 制約か application 側管理） |
+| ETF テクニカル指標 | VT 等の ETF は price_history に補完されても technical_snapshot は計算されない。売り検討条件（MA クロス等）は機能しないため注意 |
+| SNS/ニュース Deep Research 活用 | 実現のためには NewsAPI・X API・Perplexity API 等の外部サービス契約が必要。API キー未設定のためブロッカー。config.json に拡張ポイントを設けることは可能 |
+| 3ペルソナエージェント | Claude API 連携で実現可能。`src/persona_analyzer.py` として notifier.py から呼ぶ設計が自然。実装未着手 |
+| moomoo AI 連携 | moomoo の公開 API には AI 分析エンドポイントは存在しない（2026-04時点）。moomoo アプリ内の AI チャットは外部 API 非公開。代替: Claude API で保有銘柄のテクニカル分析コメントを生成する方向が現実的 |
+| 通知内容の拡充 | return_5d/return_20d/volatility_20d 等、計算済みだが通知に出ていない指標を追加可能。notifier.py のブロック構造を変更するのみ |

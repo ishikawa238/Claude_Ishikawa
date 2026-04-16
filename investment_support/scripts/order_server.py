@@ -156,6 +156,11 @@ def _render_report(today_str, market_env, holdings, candidates):
     _MODE_COLOR = {"normal": "#4CAF50", "caution": "#FF9800", "full_caution": "#D32F2F"}
     _PATTERN_NAME = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
 
+    # sqlite3.Row → dict に変換
+    market_env = dict(market_env) if market_env else {}
+    holdings   = [dict(h) for h in holdings]
+    candidates = [dict(c) for c in candidates]
+
     mode = (market_env or {}).get("mode", "unknown")
     mode_label = _MODE_LABEL.get(mode, mode)
     mode_color = _MODE_COLOR.get(mode, "#999")
@@ -208,7 +213,7 @@ def _render_report(today_str, market_env, holdings, candidates):
           <td>{escape(h['ticker'])}</td>
           <td>{escape(h['name'] or '')}</td>
           <td>{escape(h['market'] or '')}</td>
-          <td>{cp:,.2f if cp else '—'}</td>
+          <td>{f'{cp:,.2f}' if cp else '—'}</td>
           <td style="{pnl_color}">{pnl_str}</td>
           <td>{sl:,.2f}</td>
           <td>{target_str}</td>

@@ -84,9 +84,13 @@ def calc_entry_set(signal: dict) -> dict:
         "recommended_amount": round(recommended_amount, 0) if recommended_amount else None,
         "market_mode":        signal.get("market_mode", "normal"),
         "conditions_met":     json.dumps(conditions_met, ensure_ascii=False),
-        # 警告フラグ（通知側で使用）
+        # 警告フラグ（通知側で使用・DB保存対象外）
         "_warn_narrow":  stop_loss_pct < _WARN_MIN_PCT,
         "_warn_wide":    stop_loss_pct > _WARN_MAX_PCT,
+        # 通知の根拠数値（DB保存対象外・notifier で使用）
+        "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
+        "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
+        "_rs_rank":   signal.get("rs_rank"),
     }
     return result
 

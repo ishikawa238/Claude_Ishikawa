@@ -22,6 +22,8 @@ _EARNINGS_CRITICAL_DAYS = int(CONFIG["jquants"].get("earnings_alert_days_critica
 logger = get_logger(__name__)
 
 _WEBHOOK_URL = CONFIG["slack"]["webhook_url"]
+_SIG = CONFIG["signal"]
+_REPORT_URL = "http://127.0.0.1:5100/report"
 
 # モード → 絵文字
 _MODE_EMOJI = {
@@ -119,6 +121,9 @@ def send_morning_report(
         f"SL接近: {len(sl_near)}件 ｜ 強制損切り: {len(forced)}件"
     ))
 
+    # フッター：詳細レポートリンク
+    blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
+
     payload = {"blocks": blocks}
     return _send(payload, target_date, "morning")
 
@@ -202,6 +207,9 @@ def send_evening_report(
             f"⚠️ データ取得失敗: {failed_tickers_count}件（logs/を確認してください）"
         ))
 
+    # フッター：詳細レポートリンク
+    blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
+
     payload = {"blocks": blocks}
     return _send(payload, target_date, "evening")
 
@@ -267,6 +275,8 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     market  = es["market"]
     pattern = es["pattern"]
     p_name  = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
+    rs_rank = es.get("_rs_rank")
+    rank_str = f"  ランク{rs_rank}位" if rs_rank else ""
 
     warn_str = ""
     if es.get("_warn_narrow"):
@@ -283,13 +293,30 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     amount_str = f"{amount:,.0f}" if amount else "計算不可"
     currency   = "円" if market == "JP" else "USD"
 
+    # RSI・出来高倍率
+    rsi = es.get("_rsi14")
+    vol = es.get("_vol_ratio")
+    if pattern == "A":
+        rsi_min = int(float(_SIG.get("pattern_a_rsi_min", 50)))
+        rsi_max = int(float(_SIG.get("pattern_a_rsi_max", 70)))
+    else:
+        rsi_min = int(float(_SIG.get("pattern_b_rsi_min", 40)))
+        rsi_max = int(float(_SIG.get("pattern_b_rsi_max", 60)))
+    metrics_parts = []
+    if rsi:
+        metrics_parts.append(f"RSI: {rsi:.0f}（適正 {rsi_min}–{rsi_max}）")
+    if vol:
+        metrics_parts.append(f"出来高: {vol:.1f}倍（平均比）")
+    metrics_str = "\n📊 " + "  ".join(metrics_parts) if metrics_parts else ""
+
     text = (
-        f"*[{pattern}] {ticker} {name} ({market})*\n"
+        f"*[{pattern}] {ticker} {name} ({market}){rank_str}*\n"
         f"パターン：{p_name}\n"
-        f"エントリー目安：{entry:,.2f}{warn_str}\n"
-        f"損切りライン：{stop:,.2f}（{sl_pct:.1f}%）\n"
-        f"利確目安：{target:,.2f}（+{tg_pct:.1f}%）\n"
+        f"エントリー目安：{entry:,.2f}\n"
+        f"損切りライン：{stop:,.2f}（-{sl_pct:.1f}%）→ 利確目安：{target:,.2f}（+{tg_pct:.1f}%）  リスクリワード2:1"
+        f"{warn_str}\n"
         f"推奨投入額：{amount_str} {currency}"
+        f"{metrics_str}"
     )
 
     if show_conditions:
@@ -343,6 +370,18 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
         f"{emoji} *{label_str}* | {ticker} {name} ({market})\n"
         f"終値: {current:,.2f} ｜ 損益: {pnl_str} ｜ SL: {sl:,.2f}"
     )
+
+    # 保有日数・目標距離
+    holding_days = h.get("holding_days")
+    target_price = h.get("target_price")
+    detail_parts = []
+    if holding_days is not None:
+        detail_parts.append(f"保有: {holding_days}日目")
+    if target_price and current > 0:
+        target_dist_pct = (target_price - current) / current * 100
+        detail_parts.append(f"目標まで: {target_dist_pct:+.1f}%（利確目安: {target_price:,.2f}）")
+    if detail_parts:
+        text += "\n" + " ｜ ".join(detail_parts)
 
     if detail and reasons:
         text += "\n理由: " + " / ".join(reasons)

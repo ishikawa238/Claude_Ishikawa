@@ -228,6 +228,17 @@ def evaluate_holdings(target_date: date) -> list[dict]:
         )
 
         next_earnings = _get_next_earnings(ticker, target_str)
+
+        # 保有日数（entry_date が設定されている場合のみ）
+        holding_days = None
+        entry_date_str = h["entry_date"]
+        if entry_date_str:
+            try:
+                entry_dt = datetime.strptime(entry_date_str, "%Y-%m-%d").date()
+                holding_days = (target_date - entry_dt).days
+            except ValueError:
+                pass
+
         results.append({
             "ticker":          ticker,
             "name":            h["name"] or ticker,
@@ -244,6 +255,8 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "reasons":         reasons,
             "earnings_date":   next_earnings["date"] if next_earnings else None,
             "earnings_days":   next_earnings["days"] if next_earnings else None,
+            "holding_days":    holding_days,
+            "target_price":    _get_target_price(ticker),
         })
 
     forced = sum(1 for r in results if r["label"] == "forced_stop")
@@ -464,6 +477,18 @@ def _get_next_earnings(ticker: str, target_str: str) -> Optional[dict]:
     ann_dt    = datetime.strptime(ann_date,   "%Y-%m-%d").date()
     days = (ann_dt - target_dt).days
     return {"date": ann_date, "days": days}
+
+
+def _get_target_price(ticker: str) -> Optional[float]:
+    """trade_signal_log から最新の target_price を取得する。"""
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT target_price FROM trade_signal_log "
+            "WHERE ticker = ? ORDER BY signal_date DESC LIMIT 1",
+            (ticker,),
+        )
+    return float(row["target_price"]) if row and row["target_price"] else None
 
 
 def _get_technical_5d_ago(ticker: str, target_str: str, column: str) -> Optional[float]:

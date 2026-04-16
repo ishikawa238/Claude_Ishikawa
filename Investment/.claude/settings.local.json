@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cp config_template.json config.json)",
+      "Bash(python -m scripts.init_db)",
+      "Bash(py --version)",
+      "Bash(where.exe python:*)",
+      "Bash(where.exe python3:*)",
+      "Read(//usr/**)",
+      "Read(//usr/local/**)",
+      "Bash(sqlite3 data/investment.db \"SELECT id, ticker, name, market, quantity, entry_price, stop_loss_price, is_closed FROM holdings ORDER BY ticker;\")",
+      "Bash(python -m unittest discover -s tests -v)",
+      "Bash(python -c ':*)",
+      "Bash(.venv/Scripts/python.exe -c ':*)",
+      "Bash(curl:*)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill:*)",
+      "Bash(cmd:*)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m scripts.order_server)"
+    ],
+    "defaultMode": "plan"
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -Command \"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); [System.Windows.Forms.MessageBox]::Show('Claude Code needs your attention', 'Claude Code')\""
+          }
+        ]
+      },
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -Command \"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); [System.Windows.Forms.MessageBox]::Show('Claude Code is waiting for your input', 'Claude Code')\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\",\"updatedPermissions\":[{\"type\":\"setMode\",\"mode\":\"acceptEdits\",\"destination\":\"session\"}]}}}'"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python .claude/statusline.py",
+    "padding": 1
+  }
+}

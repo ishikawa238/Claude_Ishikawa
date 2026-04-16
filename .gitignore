@@ -4,7 +4,10 @@
 *.sqlite3
 
 # moomoo OpenDバイナリ（サードパーティ）
-investment_support/moomoo_OpenD_10.2.6208_Windows/
+Investment/investment_support/moomoo_OpenD_10.2.6208_Windows/
+
+# API キー・シークレット
+Investment/investment_support/config.json
 
 # Python キャッシュ
 __pycache__/
@@ -27,3 +30,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code ローカル設定
+.claude/settings.local.json

@@ -1,0 +1,26 @@
+﻿{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -Command \"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); [System.Windows.Forms.MessageBox]::Show('Claude Code needs your attention', 'Claude Code')\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Review the current task status before allowing Claude to stop. If code, tests, or README were changed, verify whether pytest should be run and whether the requested work is actually complete. If work remains, respond with ok=false and explain what remains. If everything is done, respond with ok=true.",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,10 +1,20 @@
-# 投資判断支援システム 詳細設計書 v1.3
+# 投資判断支援システム 詳細設計書 v1.4
 
 ## 1. 文書概要
 
 本書は、要件定義書 v2.0 をもとに、DB定義・バッチフロー設計・Slack通知テンプレート・ディレクトリ構成・設定ファイル仕様を定義する。
 
 ### 1.1 変更履歴
+
+#### v1.4（2026-04-16）
+
+- 通知内容拡充・日次HTMLレポートページを追加（セクション13）
+  - 買い候補ブロックにランク・RSI実値・出来高倍率・損切り→利確1行表示を追加
+  - 保有銘柄ブロックに保有日数・利確目安までの距離を追加
+  - 朝夜通知フッターに `/report` リンクを追加
+  - `order_server.py` に `/report` エンドポイント（保有銘柄・シグナル履歴・市場環境）を追加
+  - 修正対象ファイル: `src/entry_calculator.py`, `src/holdings_monitor.py`, `src/notifier.py`, `scripts/order_server.py`
+  - テスト追加: `tests/test_notifier.py`（16テスト全パス）
 
 #### v1.3（2026-04-15）
 
@@ -1300,4 +1310,63 @@ Ran 14 tests in 0.079s: OK（全パス）
 | SNS/ニュース Deep Research 活用 | 実現のためには NewsAPI・X API・Perplexity API 等の外部サービス契約が必要。API キー未設定のためブロッカー。config.json に拡張ポイントを設けることは可能 |
 | 3ペルソナエージェント | Claude API 連携で実現可能。`src/persona_analyzer.py` として notifier.py から呼ぶ設計が自然。実装未着手 |
 | moomoo AI 連携 | moomoo の公開 API には AI 分析エンドポイントは存在しない（2026-04時点）。moomoo アプリ内の AI チャットは外部 API 非公開。代替: Claude API で保有銘柄のテクニカル分析コメントを生成する方向が現実的 |
-| 通知内容の拡充 | return_5d/return_20d/volatility_20d 等、計算済みだが通知に出ていない指標を追加可能。notifier.py のブロック構造を変更するのみ |
+| 通知内容の拡充 | ~~return_5d/return_20d/volatility_20d 等、計算済みだが通知に出ていない指標を追加可能。~~ → **セクション13で実装済み（v1.4）** |
+
+---
+
+## 13. 通知内容拡充・日次HTMLレポート（v1.4）
+
+### 13.1 背景と方針
+
+既存のSlack通知は価格・損益率・条件チェックリストのみで、「なぜその判断か」を裏付ける数値が初心者には伝わりにくかった。  
+Slackはコンパクトに保ちつつ、詳細はHTMLレポートで補完する2段構え方針を採用した。
+
+### 13.2 Slack通知の変更点
+
+#### 買い候補ブロック（`_entry_set_block()`）
+
+| 追加項目 | 表示例 | 取得元 |
+|----------|--------|--------|
+| ランク順位 | `ランク1位` | `_rs_rank`（vol_ratio降順） |
+| 損切り→利確を1行化 | `損切りライン: 138.00（-8.0%）→ 利確目安: 174.00（+16.0%）  リスクリワード2:1` | 既存フィールド |
+| RSI実値 | `RSI: 55（適正 50–70）` | `_rsi14`・config の pattern_[ab]_rsi_[min/max] |
+| 出来高倍率 | `出来高: 2.3倍（平均比）` | `_vol_ratio` |
+
+`_rsi14`/`_vol_ratio`/`_rs_rank` は `entry_calculator.calc_entry_set()` の返り値に `_` プレフィックス付きで追加（DB保存対象外）。  
+これらは `signal_detector` の candidates が元々保持しているフィールドをパススルーするだけなので、DB変更は不要。
+
+#### 保有銘柄ブロック（`_holding_block()`）
+
+| 追加項目 | 表示例 | 取得元 |
+|----------|--------|--------|
+| 保有日数 | `保有: 15日目` | `holdings.entry_date` → `evaluate_holdings()` で算出 |
+| 利確目安までの距離 | `目標まで: +13.5%（利確目安: 210.00）` | `trade_signal_log` の最新 `target_price` |
+
+`holdings_monitor.evaluate_holdings()` の返り値に `holding_days`・`target_price` を追加した。
+
+#### フッター（朝通知・夜通知共通）
+
+```
+📊 <http://127.0.0.1:5100/report|詳細レポートを見る>
+```
+
+order_server が未起動の場合も通知は正常送信される（リンクが開けないだけ）。
+
+### 13.3 日次HTMLレポートページ（`/report`）
+
+`order_server.py` に `/report` エンドポイントを追加。Bootstrap CDN を使用したシンプルなHTML。
+
+**表示内容:**
+
+| セクション | 内容 |
+|------------|------|
+| 市場環境 | 最新の `market_environment` レコード（モード・日経平均・S&P500 vs MA25） |
+| 保有銘柄テーブル | ticker / 現在値 / 損益% / SL / 利確目安 / 保有日数 / 数量 |
+| 直近7日間のシグナル履歴 | `trade_signal_log` から7日分（日付・パターン・エントリー/SL/利確/推奨投入額） |
+
+### 13.4 テスト（`tests/test_notifier.py`）
+
+新規追加（16テスト）:
+
+- `EntrySetBlockTests`（10テスト）: ランク表示・RSI/出来高表示・パターン別RSI適正範囲・損切り→利確1行・マイナス符号・警告フラグ
+- `HoldingBlockTests`（6テスト）: 保有日数・目標距離・理由文の表示/非表示

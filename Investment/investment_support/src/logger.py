@@ -1,50 +1,8 @@
 """
-ロギング設定モジュール
-各モジュールは get_logger(__name__) でロガーを取得する。
-ログはコンソールとファイル（logs/batch_YYYYMMDD.log）に同時出力される。
+ロギング設定モジュール（Investment 用再エクスポート）
+
+shared.logger.get_logger を再エクスポートする。
+各モジュールは従来どおり from src.logger import get_logger で利用可能。
 """
 
-import logging
-import os
-from datetime import datetime
-from pathlib import Path
-
-from src.config import CONFIG
-
-
-def get_logger(name: str) -> logging.Logger:
-    """指定名のロガーを返す。初回呼び出し時にハンドラを設定する。"""
-    logger = logging.getLogger(name)
-
-    # すでにハンドラが設定済みなら再設定しない
-    if logger.handlers:
-        return logger
-
-    log_level_str = CONFIG.get("logging", {}).get("log_level", "INFO")
-    log_level = getattr(logging, log_level_str.upper(), logging.INFO)
-    logger.setLevel(log_level)
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    # コンソールハンドラ（Windows の cp932 環境でも文字化けしないよう utf-8 で出力）
-    import sys
-    import io
-    console_stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    console_handler = logging.StreamHandler(console_stream)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    # ファイルハンドラ
-    log_dir = Path(CONFIG.get("logging", {}).get("log_dir", "./logs"))
-    log_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime("%Y%m%d")
-    log_file = log_dir / f"batch_{today}.log"
-
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    return logger
+from shared.logger import get_logger  # noqa: F401

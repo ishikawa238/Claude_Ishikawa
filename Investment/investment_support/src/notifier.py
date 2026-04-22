@@ -6,15 +6,18 @@ Slack 通知モジュール
 """
 
 import json
-import math
 from datetime import date, datetime
 
-import requests
+from shared.slack import (
+    divider as _divider,
+    print_blocks as _print_blocks,
+    section as _section,
+    send_webhook,
+)
 
 from src.config import CONFIG
 from src.data_store import get_connection, insert_one
 from src.logger import get_logger
-from src.order_executor import generate_order_url
 
 _EARNINGS_WARN_DAYS     = int(CONFIG["jquants"].get("earnings_alert_days_warning",  7))
 _EARNINGS_CRITICAL_DAYS = int(CONFIG["jquants"].get("earnings_alert_days_critical", 3))
@@ -99,16 +102,23 @@ def send_morning_report(
             blocks.append(_holding_block(h, color="warning"))
         blocks.append(_divider())
 
-    # 買い候補（通常モードのみ）
+    # 買い候補（市場環境にかかわらずスコア付きで表示）
     morning_candidates = candidates[:2]
-    if mode == "normal" and morning_candidates:
-        blocks.append(_section(f"🟢 *本日の買い候補（{len(morning_candidates)}件）*"))
+    if morning_candidates:
+        mode_note = ""
+        if mode == "caution":
+            mode_note = "（⚠️ 警戒モード — スコア減点あり）"
+        elif mode == "full_caution":
+            mode_note = "（🔴 全面警戒 — スコア大幅減点あり）"
+        blocks.append(_section(
+            f"📈 *本日の買い候補（{len(morning_candidates)}件）*{mode_note}"
+        ))
         for es in morning_candidates:
             blocks.append(_entry_set_block(es))
         blocks.append(_divider())
     elif mode != "normal":
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — 本日の新規買いは見送りを推奨します*"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — 本日はスコア基準を満たす候補がありません*"
         ))
         blocks.append(_divider())
 
@@ -161,22 +171,27 @@ def send_evening_report(
     blocks.append(_market_env_block(market_env, detail=True))
     blocks.append(_divider())
 
-    # 買い候補（通常モードのみ）
+    # 買い候補（市場環境にかかわらずスコア付きで表示）
     evening_sets = entry_sets[:3]
-    if mode == "normal" and evening_sets:
-        blocks.append(_section(f"🟢 *新規買い候補（{len(evening_sets)}件）*"))
+    if evening_sets:
+        mode_note = ""
+        if mode == "caution":
+            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア減点あり\n" + _mode_detail(market_env)
+        elif mode == "full_caution":
+            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア大幅減点あり\n" + _mode_detail(market_env)
+        blocks.append(_section(f"📈 *新規買い候補（{len(evening_sets)}件）*{mode_note}"))
         for i, es in enumerate(evening_sets, start=1):
             blocks.append(_section(f"━ No.{i} ━━━━━━━━━━━━━━━━━━━━━━━━"))
             blocks.append(_entry_set_block(es, show_conditions=True))
         blocks.append(_divider())
     elif mode != "normal":
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — 新規買いシグナルは停止しています*\n"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — スコア基準を満たす候補がありません*\n"
             + _mode_detail(market_env)
         ))
         blocks.append(_divider())
     else:
-        blocks.append(_section("本日は買い候補が検出されませんでした。"))
+        blocks.append(_section("本日はスコア基準を満たす買い候補が検出されませんでした。"))
         blocks.append(_divider())
 
     # 決算アラート
@@ -218,12 +233,7 @@ def send_evening_report(
 # Block Kit ヘルパー
 # ============================================================
 
-def _section(text: str) -> dict:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
-
-
-def _divider() -> dict:
-    return {"type": "divider"}
+# _section, _divider, _print_blocks は shared.slack から import 済み
 
 
 def _market_env_block(env: dict, detail: bool = False) -> dict:
@@ -309,9 +319,20 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
         metrics_parts.append(f"出来高: {vol:.1f}倍（平均比）")
     metrics_str = "\n📊 " + "  ".join(metrics_parts) if metrics_parts else ""
 
+    # スコア表示
+    final_score    = es.get("_final_score") or es.get("final_score")
+    recommend_rank = es.get("_recommend_rank") or es.get("recommend_rank") or ""
+    recommend_reason = es.get("_recommend_reason") or es.get("recommend_reason") or ""
+    score_str = ""
+    if final_score is not None:
+        score_str = f"\n🏅 おすすめ度：*{final_score}点（{recommend_rank}ランク）*"
+        if recommend_reason:
+            score_str += f"\n💡 {recommend_reason}"
+
     text = (
         f"*[{pattern}] {ticker} {name} ({market}){rank_str}*\n"
-        f"パターン：{p_name}\n"
+        f"パターン：{p_name}"
+        f"{score_str}\n"
         f"エントリー目安：{entry:,.2f}\n"
         f"損切りライン：{stop:,.2f}（-{sl_pct:.1f}%）→ 利確目安：{target:,.2f}（+{tg_pct:.1f}%）  リスクリワード2:1"
         f"{warn_str}\n"
@@ -326,16 +347,6 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
                 text += "\n" + "\n".join(conds)
         except (json.JSONDecodeError, TypeError):
             pass
-
-    # 買い注文リンク
-    buy_qty = _calc_buy_qty(amount, entry, market)
-    if buy_qty and buy_qty > 0:
-        url = generate_order_url(
-            action="buy", ticker=ticker, market=market,
-            qty=buy_qty, price=entry, stop=stop, name=name,
-        )
-        if url:
-            text += f"\n📱 <{url}|ワンクリック買い注文（{buy_qty}株）>"
 
     return _section(text)
 
@@ -386,15 +397,6 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     if detail and reasons:
         text += "\n理由: " + " / ".join(reasons)
 
-    # 売り注文リンク（強制損切り・売り検討のみ）
-    if label in ("forced_stop", "sell_watch") and qty and qty > 0:
-        url = generate_order_url(
-            action="sell", ticker=ticker, market=market,
-            qty=qty, price=current, name=name,
-        )
-        if url:
-            text += f"\n📱 <{url}|ワンクリック売り注文（{qty}株）>"
-
     return _section(text)
 
 
@@ -444,20 +446,6 @@ def _build_tomorrow_notes(holdings: list[dict]) -> list[str]:
     return notes
 
 
-def _calc_buy_qty(amount, entry_price, market: str) -> float | None:
-    """推奨投入額とエントリー価格から買い数量を計算する。"""
-    if not amount or not entry_price or entry_price <= 0:
-        return None
-    raw = amount / entry_price
-    if market == "JP":
-        # 日本株は100株単位
-        lots = math.floor(raw / 100)
-        return lots * 100 if lots > 0 else None
-    else:
-        # 米国株は端株対応（小数第2位まで）
-        return math.floor(raw * 100) / 100 if raw >= 0.01 else None
-
-
 # ============================================================
 # 送信・保存
 # ============================================================
@@ -468,33 +456,18 @@ def _send(payload: dict, target_date: date, report_type: str) -> bool:
     返り値: 成功なら True
     """
     content = json.dumps(payload, ensure_ascii=False)
+    success = send_webhook(_WEBHOOK_URL, payload, logger=logger)
 
-    # テスト用: Webhook URL が未設定の場合はコンソール出力のみ
     if not _WEBHOOK_URL or "XXXXX" in _WEBHOOK_URL:
-        logger.warning("Slack Webhook URL が未設定です。コンソールに出力します。")
-        _print_blocks(payload)
-        _save_report_log(target_date, report_type, content, "skipped")
-        return True
+        status = "skipped"
+    elif success:
+        logger.info(f"Slack 送信成功: {report_type}")
+        status = "success"
+    else:
+        status = "failed"
 
-    try:
-        resp = requests.post(
-            _WEBHOOK_URL,
-            data=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            logger.info(f"Slack 送信成功: {report_type}")
-            _save_report_log(target_date, report_type, content, "success")
-            return True
-        else:
-            logger.error(f"Slack 送信失敗: HTTP {resp.status_code} / {resp.text}")
-            _save_report_log(target_date, report_type, content, "failed")
-            return False
-    except Exception as e:
-        logger.error(f"Slack 送信エラー: {e}")
-        _save_report_log(target_date, report_type, content, "failed")
-        return False
+    _save_report_log(target_date, report_type, content, status)
+    return success
 
 
 def _save_report_log(
@@ -508,17 +481,3 @@ def _save_report_log(
             "slack_status": status,
         })
 
-
-def _print_blocks(payload: dict) -> None:
-    """Webhook 未設定時にブロック内容をコンソールに出力する。"""
-    import io, sys
-    out = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    out.write("\n" + "=" * 60 + "\n")
-    for block in payload.get("blocks", []):
-        if block.get("type") == "section":
-            text = block.get("text", {}).get("text", "")
-            out.write(text + "\n")
-        elif block.get("type") == "divider":
-            out.write("-" * 40 + "\n")
-    out.write("=" * 60 + "\n\n")
-    out.flush()

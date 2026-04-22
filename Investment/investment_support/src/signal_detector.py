@@ -5,7 +5,8 @@
 パターンB: 押し目買い
 
 各条件の充足状況をフラグで記録し、daily_signals テーブルに保存する。
-市場環境が caution / full_caution の場合は skip のみ保存して終了する。
+市場環境モードにかかわらずシグナル検出を実施する。
+market_mode は entry_calculator を通じて trade_signal_log に記録される。
 """
 
 from datetime import date
@@ -14,6 +15,7 @@ from typing import Optional
 from src.config import CONFIG
 from src.data_store import fetch_all, get_connection, upsert
 from src.logger import get_logger
+from src.scoring import compute_score, fetch_recent_lows
 
 logger = get_logger(__name__)
 
@@ -52,27 +54,54 @@ def detect_and_save_signals(
     candidates: list[dict] = []
     all_rows: list[dict] = []
 
-    if market_mode in ("caution", "full_caution"):
-        logger.info(f"市場環境 [{market_mode}]: シグナル検出をスキップ")
-        return []
+    logger.info(f"市場環境 [{market_mode}]: シグナル検出を実施")
+
+    # 直近5日の最安値を一括取得（pattern_b スコア用）
+    tickers_list = [tk["ticker"] for tk in screened_tickers]
+    recent_lows = fetch_recent_lows(tickers_list, target_str) if tickers_list else {}
 
     for tk in screened_tickers:
         ticker = tk["ticker"]
         market = tk["market"]
 
-        # パターンA評価
+        # スコア計算
+        recent_low = recent_lows.get(ticker)
+        scores = compute_score(tk, market_mode, recent_low)
+
+        # パターンA評価（既存 cond_* フラグ維持）
         row_a = _eval_pattern_a(tk, target_str, market)
         # パターンB評価
         row_b = _eval_pattern_b(tk, target_str, market)
 
         # どちらかが candidate なら採用
         best = _pick_best(row_a, row_b)
+
+        # --- スコアベースのラベル決定 ---
+        # final_score >= 50 → candidate に昇格（既存 AND 条件を緩和）
+        final_score = scores["final_score"]
+        if final_score >= 50 and best["label"] != "candidate":
+            best["label"] = "candidate"
+        elif final_score >= 30 and best["label"] == "skip":
+            best["label"] = "watch"
+
+        # スコアフィールドを行に追加
+        best["trend_score"]      = scores["trend_score"]
+        best["pattern_a_score"]  = scores["pattern_a_score"]
+        best["pattern_b_score"]  = scores["pattern_b_score"]
+        best["liquidity_score"]  = scores["liquidity_score"]
+        best["base_score"]       = scores["base_score"]
+        best["market_multiplier"] = scores["market_multiplier"]
+        best["final_score"]      = scores["final_score"]
+        best["recommend_rank"]   = scores["recommend_rank"]
+        best["recommend_reason"] = scores["recommend_reason"]
+        best["market_mode"]      = market_mode
+
         all_rows.append(best)
         if best["label"] == "candidate":
             candidates.append(best)
 
-    # vol_ratio 降順でランク付け
-    candidates.sort(key=lambda x: x.get("vol_ratio") or 0, reverse=True)
+    # final_score 降順でランク付け
+    candidates.sort(key=lambda x: x.get("final_score") or 0, reverse=True)
     for rank, c in enumerate(candidates, start=1):
         c["rs_rank"] = rank
 

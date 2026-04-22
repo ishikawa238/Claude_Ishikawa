@@ -1,4 +1,4 @@
-# 投資判断支援システム 詳細設計書 v1.4
+# 投資判断支援システム 詳細設計書 v1.5
 
 ## 1. 文書概要
 
@@ -6,9 +6,20 @@
 
 ### 1.1 変更履歴
 
+#### v1.5（2026-04-19）
+
+- 半自動注文機能（moomoo連携）を削除
+  - `src/order_executor.py`, `scripts/sync_from_moomoo.py`, `run_order_server.bat` を削除
+  - `src/notifier.py` から注文リンク生成コードを除去
+  - `scripts/order_server.py` を注文確認機能なしのレポートサーバーに変更（`/report`, `/health` のみ）
+  - `config.json` の `moomoo`・`order_server` セクションを削除し `report_server` に置き換え
+  - セクション9（moomoo OpenAPI 連携）・セクション10（半自動注文機能）を削除
+- Slack通知のバッチを毎日実行（平日のみから変更）
+  - タスクスケジューラ設定を月〜日（全曜日）20:30/07:30 に更新済み
+
 #### v1.4（2026-04-16）
 
-- 通知内容拡充・日次HTMLレポートページを追加（セクション13）
+- 通知内容拡充・日次HTMLレポートページを追加（セクション11）
   - 買い候補ブロックにランク・RSI実値・出来高倍率・損切り→利確1行表示を追加
   - 保有銘柄ブロックに保有日数・利確目安までの距離を追加
   - 朝夜通知フッターに `/report` リンクを追加
@@ -18,27 +29,16 @@
 
 #### v1.3（2026-04-15）
 
-- 保有銘柄取得の不具合を調査・修正（セクション12を追加）
+- 保有銘柄取得の不具合を調査・修正（セクション10を追加）
   - holdings テーブルの重複行蓄積バグを修正（NVDA/GOOG が過大表示されていた原因）
   - ETF（VT等）がスキップされる問題を修正（price_history 欠落の問題）
-  - `sync_from_moomoo.py` の `entry_date` 不具合を修正（position_side を誤用）
-  - 修正対象ファイル: `src/holdings_monitor.py`, `scripts/init_db.py`, `scripts/sync_from_moomoo.py`, `scripts/batch_*.py`
+  - 修正対象ファイル: `src/holdings_monitor.py`, `scripts/init_db.py`, `scripts/batch_*.py`
   - テスト追加: `tests/test_holdings_monitor.py`（14テスト全パス）
 
 #### v1.2（2026-04-11）
 
-- 半自動注文機能を追加（セクション11）
-  - Slack 通知にワンクリック注文リンクを埋め込み
-  - ローカル Web サーバーで確認画面を表示→成行注文を発注
-  - `src/order_executor.py`, `scripts/order_server.py` を新規追加
-  - config.json に `order_server` セクション・`moomoo.trade_password_md5` を追加
-
-#### v1.1（2026-04-11）
-
 - 初回セットアップフロー（yfinance による3年分履歴一括取得）を追記
-- moomoo OpenAPI 連携（保有ポジション自動同期）セクションを追加
 - ディレクトリ構成を実装に合わせて更新（実行用 .bat / .ps1 / SETUP.md 等）
-- 設定ファイルに `moomoo` セクションを追加
 - バッチスケジュール時刻を実装に合わせて修正（20:30 / 07:30 起動）
 - 未解決事項の解決済み項目を更新
 
@@ -372,7 +372,7 @@ CREATE INDEX IF NOT EXISTS idx_batch_run_log_date
 ### 3.1 全体スケジュール
 
 ```
-平日（日本時間）
+毎日（日本時間）
 20:30 ──── [夜バッチ：日本株] ─────────────────────────────────
              └─ 日本株価格取得・テクニカル計算・シグナル検出
              └─ 夜通知（Slack）送信
@@ -794,14 +794,13 @@ investment_support/
 │
 ├── config.json               # 設定ファイル（APIキー・総資金・Slack URL等）※Git管理外
 ├── config_template.json      # 設定ファイルのテンプレート（APIキーは空欄）
-├── holdings.csv              # 保有銘柄管理ファイル（手動更新 or moomoo同期）
+├── holdings.csv              # 保有銘柄管理ファイル（手動更新）
 ├── requirements.txt          # Python依存パッケージ一覧
 ├── SETUP.md                  # セットアップ手順書
 │
 ├── run_evening_jp.bat        # 夜バッチ起動用バッチファイル
 ├── run_morning_all.bat       # 朝バッチ起動用バッチファイル
 ├── run_monthly.bat           # 月次バッチ起動用バッチファイル
-├── run_order_server.bat      # 注文確認Webサーバー起動用
 ├── setup_scheduler.ps1       # Windowsタスクスケジューラ一括登録スクリプト
 │
 ├── data/
@@ -823,15 +822,13 @@ investment_support/
 │   ├── signal_detector.py    # パターンA・B の検出ロジック
 │   ├── entry_calculator.py   # エントリーセット計算・ポジションサイジング
 │   ├── holdings_monitor.py   # 保有銘柄の損益計算・損切り判定
-│   ├── notifier.py           # Slack Block Kit 生成・送信・注文リンク埋め込み
-│   ├── order_executor.py     # moomoo 経由の成行注文発注・署名生成
+│   ├── notifier.py           # Slack Block Kit 生成・送信
 │   └── report_generator.py   # 月次集計レポート生成
 │
 ├── scripts/
 │   ├── init_db.py            # DB初期化（DDL実行）
 │   ├── fetch_historical.py   # 初回3年分履歴データ一括取得（yfinance使用）
-│   ├── sync_from_moomoo.py   # moomoo保有ポジション → holdings.csv 同期
-│   ├── order_server.py       # 注文確認用ローカルWebサーバー（Flask）
+│   ├── order_server.py       # 日次レポート用ローカルWebサーバー（Flask）
 │   ├── batch_evening_jp.py   # 夜バッチ エントリーポイント
 │   ├── batch_morning_all.py  # 朝バッチ エントリーポイント
 │   ├── batch_monthly.py      # 月次バッチ エントリーポイント
@@ -839,7 +836,8 @@ investment_support/
 │
 └── tests/
     ├── __init__.py
-    └── test_sync_from_moomoo.py  # moomoo同期のユニットテスト
+    ├── test_holdings_monitor.py
+    └── test_notifier.py
 ```
 
 ---
@@ -914,41 +912,21 @@ investment_support/
     "history_years": 3
   },
 
-  "moomoo": {
+  "report_server": {
     "host": "127.0.0.1",
-    "port": 11111,
-    "security_firm": "FUTUJP",
-    "trade_password_md5": ""
-  },
-
-  "order_server": {
-    "host": "127.0.0.1",
-    "port": 5100,
-    "secret": "YOUR_RANDOM_SECRET_HEX"
+    "port": 5100
   }
 }
 ```
 
-### 6.1 moomoo セクション仕様
-
-| キー | 型 | 必須 | 説明 |
-|------|-----|------|------|
-| host | TEXT | ✅ | OpenD の接続先ホスト（通常 127.0.0.1） |
-| port | INTEGER | ✅ | OpenD の接続先ポート（デフォルト 11111） |
-| security_firm | TEXT | ✅ | 証券会社コード。moomoo Japan の場合は `FUTUJP` |
-| trade_password_md5 | TEXT | | 取引パスワードの MD5 ハッシュ。半自動注文機能使用時に必要 |
-
-※ `security_firm` を正しく設定しないと、moomoo Japan のリアル口座が見えない。
-
-### 6.2 order_server セクション仕様
+### 6.1 report_server セクション仕様
 
 | キー | 型 | 必須 | 説明 |
 |------|-----|------|------|
 | host | TEXT | ✅ | Web サーバーのリスンホスト（必ず 127.0.0.1） |
 | port | INTEGER | ✅ | Web サーバーのポート（デフォルト 5100） |
-| secret | TEXT | ✅ | HMAC 署名用秘密鍵。ランダムな16バイト以上の文字列 |
 
-※ `secret` が空の場合、Slack 通知に注文リンクは埋め込まれない（通常の通知のみ）。
+Slack 通知フッターの「詳細レポートを見る」リンクの接続先。`python -m scripts.order_server` で起動する。
 
 ---
 
@@ -1036,14 +1014,9 @@ recommended_amount_usd = total_capital_usd * 0.02 / stop_loss_pct
         ├─ EODHD: インデックス4本の過去3年分取得 → index_snapshot
         └─ テクニカルスナップショット計算（最終日のみ） → technical_snapshot
 
-[4] moomoo 同期（任意）
-    ├─ 前提: moomoo アプリ + OpenD が起動済み
-    └─ python -m scripts.sync_from_moomoo --dry-run
-        → 確認後、--dry-run を外して実行
-
-[5] タスクスケジューラ登録
+[4] タスクスケジューラ登録
     └─ PowerShell (管理者) で setup_scheduler.ps1 を実行
-        → 夜バッチ(20:30)・朝バッチ(07:30)・月次バッチ(毎月1日 08:00) を登録
+        → 夜バッチ(20:30)・朝バッチ(07:30)・月次バッチ(毎月1日 08:00) を登録（全曜日）
 ```
 
 ### 8.2 初回履歴取得の詳細（fetch_historical）
@@ -1061,121 +1034,7 @@ recommended_amount_usd = total_capital_usd * 0.02 / stop_loss_pct
 
 ---
 
-## 9. moomoo OpenAPI 連携
-
-### 9.1 概要
-
-moomoo（富途証券）の OpenD ローカルデーモンを介して、保有ポジションを自動取得し holdings.csv に同期する。
-
-### 9.2 前提条件
-
-- moomoo アプリがインストール済みであること
-- OpenD（ローカルデーモン）が起動していること（デフォルト: 127.0.0.1:11111）
-- futu-api パッケージがインストール済みであること
-- config.json の `moomoo.security_firm` が正しく設定されていること（moomoo Japan: `FUTUJP`）
-
-### 9.3 処理フロー
-
-```
-python -m scripts.sync_from_moomoo [--dry-run] [--env auto|real|simulate]
-│
-├─ [1] OpenD に接続（config.json の host / port）
-├─ [2] security_firm を解決（config → 自動検出フォールバック）
-├─ [3] 取引口座を自動検出
-│   ├─ --env auto（デフォルト）: REAL 口座を優先 → 無ければ SIMULATE
-│   ├─ --env real: REAL 口座のみ使用
-│   └─ --env simulate: SIMULATE 口座のみ使用
-├─ [4] 対応市場（US, JP）ごとにポジション取得
-│   └─ HK, SH, SZ はシステム未対応のためスキップ
-├─ [5] holdings.csv と照合
-│   ├─ 新規: 行を追加（stop_loss_price = entry_price × 0.92）
-│   ├─ 既存: entry_price, quantity のみ更新（stop_loss_price は保持）
-│   └─ moomoo にない行: 削除しない（手動管理分を保護）
-└─ [6] holdings.csv に書き込み
-```
-
-### 9.4 対応市場マッピング
-
-| moomoo 市場コード | 内部市場コード | 対応状況 |
-|-------------------|--------------|----------|
-| US | US | ✅ 対応 |
-| JP | JP | ✅ 対応 |
-| HK | - | ❌ 未対応（スキップ） |
-| SH | - | ❌ 未対応（スキップ） |
-| SZ | - | ❌ 未対応（スキップ） |
-
----
-
-## 10. 半自動注文機能
-
-### 10.1 概要
-
-Slack 通知に「ワンクリック注文」リンクを埋め込み、クリック → ブラウザで確認 → 成行注文を発注する半自動注文機能。
-
-### 10.2 アーキテクチャ
-
-```
-[Slack 通知]
-  │ 📱 ワンクリック買い注文（2株）  ← HMAC 署名付き URL
-  │
-  ▼ ユーザーがリンクをクリック
-[ブラウザ: 確認画面]  ← localhost:5100 (Flask)
-  │ 銘柄・数量・口座タイプ・取引環境を表示
-  │ 数量は変更可能
-  │
-  ▼ 「注文を実行する」ボタン
-[order_executor.py]
-  │ moomoo OpenD に接続
-  │ unlock_trade → place_order (成行注文)
-  │
-  ▼
-[ブラウザ: 結果画面]
-  └─ 注文ID表示 or エラーメッセージ
-```
-
-### 10.3 セキュリティ設計
-
-| 対策 | 内容 |
-|------|------|
-| localhost 限定 | Web サーバーは 127.0.0.1 でのみリッスン（外部アクセス不可） |
-| HMAC 署名 | 注文リンクの URL にパラメータ署名を付与。改ざん検知 |
-| ブラウザ確認 | リンク押下だけでは発注されない。確認画面での操作が必要 |
-| 取引パスワード | moomoo の unlock_trade に MD5 ハッシュが必要（config.json に保存） |
-
-### 10.4 対応する注文
-
-| 注文 | トリガー | Slack 通知内の表示位置 |
-|------|---------|---------------------|
-| 買い（成行） | 買い候補（candidate）が検出された時 | 夜通知・朝通知の各候補の末尾 |
-| 売り（成行） | 強制損切り / 売り検討の保有銘柄 | 夜通知・朝通知の保有銘柄ブロック末尾 |
-
-### 10.5 数量の自動計算
-
-- **買い**: `推奨投入額 ÷ エントリー価格`
-  - US 株: 小数第2位まで（端株対応）
-  - JP 株: 100株単位に切り捨て
-- **売り**: holdings.csv の `quantity` をそのまま使用
-- 確認画面で数量は変更可能
-
-### 10.6 前提条件
-
-1. `run_order_server.bat`（または `python -m scripts.order_server`）でサーバーが起動していること
-2. OpenD が起動していること
-3. config.json に以下が設定されていること:
-   - `order_server.secret`（HMAC 署名用秘密鍵）
-   - `moomoo.trade_password_md5`（取引パスワードの MD5。REAL 環境のみ必要）
-
-### 10.7 注文サーバーの起動
-
-```
-python -m scripts.order_server
-```
-
-または `run_order_server.bat` をダブルクリック。タスクスケジューラに登録してPC起動時に自動起動することも可能。
-
----
-
-## 11. 未解決事項
+## 9. 未解決事項
 
 | 項目 | 内容 | 状態 |
 |------|------|------|
@@ -1186,14 +1045,14 @@ python -m scripts.order_server
 
 ---
 
-## 12. 保有銘柄取得不具合の調査・修正（v1.3）
+## 10. 保有銘柄取得不具合の調査・修正（v1.3）
 
-### 12.1 問題の概要
+### 10.1 問題の概要
 
 バッチ実行ごとに NVDA・GOOG が Slack 通知で複数件表示される、
 VT（Vanguard Total World ETF）等が通知に出てこない、という現象が確認された。
 
-### 12.2 調査で判明した原因
+### 10.2 調査で判明した原因
 
 #### 原因1: holdings テーブルに UNIQUE 制約なし → 重複行が蓄積
 
@@ -1233,29 +1092,15 @@ VT（Vanguard Total World Stock ETF）は `holdings.csv` に存在するが、
 `_get_latest_price()` が None を返す → `evaluate_holdings()` で警告ログを出してスキップ
 → **Slack 通知に VT が一切出てこない**という状態だった。
 
-#### 原因3: sync_from_moomoo.py の entry_date 誤設定
-
-`scripts/sync_from_moomoo.py` の253行目で、moomoo API の `position_side` 列
-（値は "LONG"/"SHORT" など方向を示す文字列）を `entry_date` に使用していた。
-
-```python
-# 修正前（バグ）
-"entry_date": str(row.get("position_side", date.today().strftime("%Y-%m-%d"))),
-
-# 修正後
-"entry_date": date.today().strftime("%Y-%m-%d"),
-```
-
-### 12.3 採用した修正方針
+### 10.3 採用した修正方針
 
 | 問題 | 修正方針 | 理由 |
 |------|---------|------|
 | 重複行蓄積 | `sync_holdings_from_csv()` を `UPDATE + INSERT` に変更 | UNIQUE 制約追加はスキーマ変更が大きく、歴史的な決済済み行に影響する可能性があるため |
 | 既存重複行 | `init_db.py` に DATA_MIGRATION（重複行 DELETE）を追加 | `init_db` 再実行で冪等にクリーンアップ可能 |
 | ETF 価格欠落 | `ensure_holding_prices()` を追加しバッチ実行時に補完フェッチ | universe_master の設計を変えず、保有銘柄だけ個別取得 |
-| entry_date 誤設定 | 常に `date.today()` を使用 | moomoo API には信頼できる取得日がないため |
 
-### 12.4 実装内容
+### 10.4 実装内容
 
 #### src/holdings_monitor.py
 
@@ -1277,15 +1122,11 @@ evaluate_holdings(_TODAY)       # 損益・ラベル判定
 - 既存重複行を削除する SQL を追加（冪等・初回実行時は 0 行削除）
 - `_run_migrations()` で DATA_MIGRATION_STATEMENTS も実行するよう拡張
 
-#### scripts/sync_from_moomoo.py
-
-- `entry_date` に `position_side` を使っていたバグを修正
-
 #### scripts/batch_evening_jp.py / batch_morning_all.py
 
 - `ensure_holding_prices` をインポートし、`evaluate_holdings` 前に呼び出し追加
 
-### 12.5 検証結果
+### 10.5 検証結果
 
 ```
 # マイグレーション実行後の holdings テーブル
@@ -1301,27 +1142,25 @@ Ran 14 tests in 0.079s: OK（全パス）
 - `SyncHoldingsFromCsvIdempotencyTests`: 3回呼んでも重複しない（1テスト）
 - `EnsureHoldingPricesTests`: 補完フェッチ・スキップ（2テスト）
 
-### 12.6 今後の TODO（保留事項）
+### 10.6 今後の TODO（保留事項）
 
 | 項目 | 内容 |
 |------|------|
 | holdings UNIQUE 制約 | 長期的には `(ticker, is_closed=0)` に対する部分ユニーク制約を追加するのが望ましい（SQLite は部分インデックスの UNIQUE に非対応のため、代替案として CHECK 制約か application 側管理） |
 | ETF テクニカル指標 | VT 等の ETF は price_history に補完されても technical_snapshot は計算されない。売り検討条件（MA クロス等）は機能しないため注意 |
 | SNS/ニュース Deep Research 活用 | 実現のためには NewsAPI・X API・Perplexity API 等の外部サービス契約が必要。API キー未設定のためブロッカー。config.json に拡張ポイントを設けることは可能 |
-| 3ペルソナエージェント | Claude API 連携で実現可能。`src/persona_analyzer.py` として notifier.py から呼ぶ設計が自然。実装未着手 |
-| moomoo AI 連携 | moomoo の公開 API には AI 分析エンドポイントは存在しない（2026-04時点）。moomoo アプリ内の AI チャットは外部 API 非公開。代替: Claude API で保有銘柄のテクニカル分析コメントを生成する方向が現実的 |
-| 通知内容の拡充 | ~~return_5d/return_20d/volatility_20d 等、計算済みだが通知に出ていない指標を追加可能。~~ → **セクション13で実装済み（v1.4）** |
+| 通知内容の拡充 | ~~return_5d/return_20d/volatility_20d 等、計算済みだが通知に出ていない指標を追加可能。~~ → **セクション11で実装済み（v1.4）** |
 
 ---
 
-## 13. 通知内容拡充・日次HTMLレポート（v1.4）
+## 11. 通知内容拡充・日次HTMLレポート（v1.4）
 
-### 13.1 背景と方針
+### 11.1 背景と方針
 
 既存のSlack通知は価格・損益率・条件チェックリストのみで、「なぜその判断か」を裏付ける数値が初心者には伝わりにくかった。  
 Slackはコンパクトに保ちつつ、詳細はHTMLレポートで補完する2段構え方針を採用した。
 
-### 13.2 Slack通知の変更点
+### 11.2 Slack通知の変更点
 
 #### 買い候補ブロック（`_entry_set_block()`）
 
@@ -1352,9 +1191,9 @@ Slackはコンパクトに保ちつつ、詳細はHTMLレポートで補完す�
 
 order_server が未起動の場合も通知は正常送信される（リンクが開けないだけ）。
 
-### 13.3 日次HTMLレポートページ（`/report`）
+### 11.3 日次HTMLレポートページ（`/report`）
 
-`order_server.py` に `/report` エンドポイントを追加。Bootstrap CDN を使用したシンプルなHTML。
+`scripts/order_server.py` は `/report` と `/health` のみを提供するレポートサーバー。Bootstrap CDN を使用したシンプルなHTML。`python -m scripts.order_server` で起動する。
 
 **表示内容:**
 
@@ -1364,7 +1203,7 @@ order_server が未起動の場合も通知は正常送信される（リンク�
 | 保有銘柄テーブル | ticker / 現在値 / 損益% / SL / 利確目安 / 保有日数 / 数量 |
 | 直近7日間のシグナル履歴 | `trade_signal_log` から7日分（日付・パターン・エントリー/SL/利確/推奨投入額） |
 
-### 13.4 テスト（`tests/test_notifier.py`）
+### 11.4 テスト（`tests/test_notifier.py`）
 
 新規追加（16テスト）:
 

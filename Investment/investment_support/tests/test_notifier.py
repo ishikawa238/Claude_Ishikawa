@@ -17,14 +17,13 @@ _CONFIG_MOCK = {
         "pattern_a_rsi_min": "50", "pattern_a_rsi_max": "70",
         "pattern_b_rsi_min": "40", "pattern_b_rsi_max": "60",
     },
-    "order_server": {"secret": "testsecret", "host": "127.0.0.1", "port": "5100"},
+    "report_server": {"host": "127.0.0.1", "port": "5100"},
     "database": {"db_path": ":memory:", "backup_dir": "/tmp", "backup_retention_days": "7"},
     "capital": {"total_capital_jpy": "1000000", "total_capital_usd": "10000",
                 "max_risk_per_trade_pct": "2", "default_stop_loss_pct": "8"},
 }
 
-with patch("src.config.CONFIG", _CONFIG_MOCK), \
-     patch("src.order_executor.generate_order_url", return_value=None):
+with patch("src.config.CONFIG", _CONFIG_MOCK):
     from src import notifier
 
 

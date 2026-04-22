@@ -17,7 +17,13 @@
       "Bash(netstat -ano)",
       "Bash(taskkill:*)",
       "Bash(cmd:*)",
-      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m scripts.order_server)"
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m scripts.order_server)",
+      "Bash(find . -name \"*.py\" -exec grep -l \"daily_signals\" {} \\\\;)",
+      "Bash(sqlite3 ./data/investment.db \"SELECT COUNT\\(*\\) as daily_signals_count FROM daily_signals WHERE date = date\\('now'\\);\")",
+      "Bash(python3)",
+      "Bash(python -m unittest tests.test_notifier -v)",
+      "Bash(python -m unittest tests.test_signal_detector -v)",
+      "Bash(python -m unittest tests.test_scoring -v)"
     ],
     "defaultMode": "plan"
   },

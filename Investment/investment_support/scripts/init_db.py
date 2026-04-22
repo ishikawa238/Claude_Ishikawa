@@ -354,6 +354,17 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE fundamentals_snapshot ADD COLUMN per            REAL",
     "ALTER TABLE fundamentals_snapshot ADD COLUMN pbr            REAL",
     "ALTER TABLE fundamentals_snapshot ADD COLUMN dividend_yield REAL",
+    # v1 スコアリング: daily_signals にスコア列を追加
+    "ALTER TABLE daily_signals ADD COLUMN trend_score       REAL",
+    "ALTER TABLE daily_signals ADD COLUMN pattern_a_score   REAL",
+    "ALTER TABLE daily_signals ADD COLUMN pattern_b_score   REAL",
+    "ALTER TABLE daily_signals ADD COLUMN liquidity_score   REAL",
+    "ALTER TABLE daily_signals ADD COLUMN base_score        REAL",
+    "ALTER TABLE daily_signals ADD COLUMN market_multiplier REAL",
+    "ALTER TABLE daily_signals ADD COLUMN final_score       REAL",
+    "ALTER TABLE daily_signals ADD COLUMN recommend_rank    TEXT",
+    "ALTER TABLE daily_signals ADD COLUMN recommend_reason  TEXT",
+    "ALTER TABLE daily_signals ADD COLUMN market_mode       TEXT",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）

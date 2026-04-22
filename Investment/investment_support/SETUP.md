@@ -110,5 +110,5 @@ python -c "import sqlite3; conn=sqlite3.connect('./data/investment.db'); [print(
 
 | タスク名 | 実行時刻 | 実行コマンド |
 |---------|---------|-------------|
-| investment_evening_jp | 毎平日 20:00 | `python -m scripts.batch_evening_jp` |
-| investment_morning_all | 毎平日 07:00 | `python -m scripts.batch_morning_all` |
+| investment_evening_jp | 毎日 20:30 | `python -m scripts.batch_evening_jp` |
+| investment_morning_all | 毎日 07:30 | `python -m scripts.batch_morning_all` |

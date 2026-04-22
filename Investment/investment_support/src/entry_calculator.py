@@ -91,6 +91,10 @@ def calc_entry_set(signal: dict) -> dict:
         "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
         "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
         "_rs_rank":   signal.get("rs_rank"),
+        # スコアリング情報（DB保存対象外・notifier で使用）
+        "_final_score":      signal.get("final_score"),
+        "_recommend_rank":   signal.get("recommend_rank"),
+        "_recommend_reason": signal.get("recommend_reason"),
     }
     return result
 

@@ -13,6 +13,7 @@ API コール数の設計:
 - EODHD 無料プラン（20回/日）で日次バッチが動作可能
 """
 
+import io
 import time
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -36,7 +37,7 @@ _RETRY_WAIT_SEC = 5
 
 # 市場インデックスのティッカー定義
 INDEX_TICKERS = {
-    "N225":   "^N225",         # 日経平均
+    "N225":   "N225.INDX",      # 日経平均
     "TOPIX":  "TOPIX.INDX",    # TOPIX
     "SP500":  "GSPC.INDX",     # S&P500
     "NASDAQ": "IXIC.INDX",     # NASDAQ総合
@@ -223,6 +224,8 @@ def fetch_index_history(
 def fetch_exchange_symbols(market: str) -> list[dict]:
     """
     指定市場の銘柄一覧を取得する。
+    JP: JPX 公開の上場銘柄一覧 Excel を使用（EODHD exchange-symbol-list は JP 非対応）
+    US: EODHD exchange-symbol-list を使用
 
     返り値: [
         {
@@ -239,6 +242,9 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
         ...
     ]
     """
+    if market == "JP":
+        return _fetch_jp_symbols_from_jpx()
+
     exchange = EXCHANGE_CODES.get(market)
     if not exchange:
         logger.error(f"未定義の市場コード: {market}")
@@ -258,11 +264,9 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
         if not ticker_raw:
             continue
 
-        # EODHD の JP ティッカーは "7203" 形式（.T サフィックスなし）
         ticker = ticker_raw.replace(".T", "").replace(".US", "").strip()
         asset_type = (r.get("Type") or "").lower()
 
-        # 対象外資産の判定
         is_excluded, exclude_reason = _check_excluded(asset_type)
 
         rows.append({
@@ -270,7 +274,7 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
             "name":               (r.get("Name") or "").strip(),
             "market":             market,
             "exchange":           exchange,
-            "shares_outstanding": None,  # 別途 fundamental API で取得が必要
+            "shares_outstanding": None,
             "is_active":          1,
             "is_excluded":        1 if is_excluded else 0,
             "exclude_reason":     exclude_reason,
@@ -279,6 +283,97 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
 
     logger.info(f"銘柄マスタ取得完了: {market} {len(rows)}銘柄")
     return rows
+
+
+# JPX 上場銘柄一覧の URL（毎営業日更新）
+_JPX_SYMBOLS_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/misc/"
+    "tvdivq0000001vg2-att/data_j.xls"
+)
+
+# JPX Excel の列名
+_JPX_COL_CODE    = "コード"
+_JPX_COL_NAME    = "銘柄名"
+_JPX_COL_SEGMENT = "市場・商品区分"
+
+
+def _fetch_jp_symbols_from_jpx() -> list[dict]:
+    """
+    JPX が公開する上場銘柄一覧 Excel から JP 銘柄マスタを取得する。
+    EODHD exchange-symbol-list の JP 代替。
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        logger.error("pandas がインストールされていません: pip install pandas openpyxl")
+        return []
+
+    logger.info("JPX 上場銘柄一覧を取得中...")
+    try:
+        resp = requests.get(_JPX_SYMBOLS_URL, timeout=30)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"JPX 銘柄一覧ダウンロード失敗: {e}")
+        return []
+
+    try:
+        df = pd.read_excel(
+            io.BytesIO(resp.content),
+            dtype={_JPX_COL_CODE: str},
+            engine="xlrd",
+        )
+    except Exception as e:
+        logger.error(f"JPX Excel パース失敗: {e}")
+        return []
+
+    if _JPX_COL_CODE not in df.columns:
+        logger.error(
+            f"JPX Excel に '{_JPX_COL_CODE}' 列が見つかりません。"
+            f"実際の列: {list(df.columns)}"
+        )
+        return []
+
+    today = date.today().strftime("%Y-%m-%d")
+    rows = []
+    for _, r in df.iterrows():
+        code = str(r.get(_JPX_COL_CODE, "")).strip()
+        # 4桁数字のみを対象とする（ETF等は別途 segment で除外）
+        if not code or not code.isdigit():
+            continue
+
+        segment = str(r.get(_JPX_COL_SEGMENT, "")).lower()
+        is_excluded, exclude_reason = _classify_jpx_segment(segment)
+
+        rows.append({
+            "ticker":             code,
+            "name":               str(r.get(_JPX_COL_NAME, "")).strip(),
+            "market":             "JP",
+            "exchange":           "TSE",
+            "shares_outstanding": None,
+            "is_active":          1,
+            "is_excluded":        1 if is_excluded else 0,
+            "exclude_reason":     exclude_reason,
+            "last_updated":       today,
+        })
+
+    logger.info(f"JPX 銘柄マスタ取得完了: {len(rows)} 銘柄")
+    return rows
+
+
+def _classify_jpx_segment(segment: str) -> tuple[bool, Optional[str]]:
+    """
+    JPX の市場・商品区分文字列から除外判定を行う。
+    返り値: (is_excluded: bool, reason: str or None)
+    """
+    if "etf" in segment or "etn" in segment:
+        return True, "ETF"
+    if "reit" in segment or "不動産投資信託" in segment:
+        return True, "REIT"
+    if "インフラファンド" in segment:
+        return True, "インフラファンド"
+    if "優先出資" in segment:
+        return True, "優先株"
+    return False, None
 
 
 def _check_excluded(asset_type: str) -> tuple[bool, Optional[str]]:

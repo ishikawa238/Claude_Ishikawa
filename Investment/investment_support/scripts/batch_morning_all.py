@@ -4,7 +4,7 @@
 実行方法（investment_support/ から）:
     python -m scripts.batch_morning_all
 
-実行タイミング: 毎平日 07:00（Windowsタスクスケジューラで登録）
+実行タイミング: 毎日 07:30（Windowsタスクスケジューラで登録）
 
 処理順序:
 1. 米国株 + インデックス（SP500/NASDAQ）の価格データ取得
@@ -100,15 +100,11 @@ def main() -> int:
         # ────────────────────────────────────────
         # STEP 4: 米国株シグナル検出
         # ────────────────────────────────────────
-        us_entry_sets = []
-        if mode == "normal":
-            logger.info("STEP 4: 流動性フィルタ・シグナル検出（US）")
-            screened = get_screened_tickers(_TODAY, "US")
-            candidates = detect_and_save_signals(screened, _TODAY, mode)
-            signals_count = len(candidates)
-            us_entry_sets = save_entry_sets(candidates, mode)
-        else:
-            logger.info(f"市場環境 [{mode}]: STEP 4 スキップ")
+        logger.info("STEP 4: 流動性フィルタ・シグナル検出（US）")
+        screened = get_screened_tickers(_TODAY, "US")
+        candidates = detect_and_save_signals(screened, _TODAY, mode)
+        signals_count = len(candidates)
+        us_entry_sets = save_entry_sets(candidates, mode)
 
         # 前夜バッチの JP entry_sets も取得（朝通知の上位2件に含める）
         jp_entry_sets = _load_last_evening_entry_sets()
@@ -150,15 +146,19 @@ def main() -> int:
 def _load_last_evening_entry_sets() -> list[dict]:
     """
     前夜バッチで保存された JP の trade_signal_log を取得して
-    朝通知用の形式で返す。
+    朝通知用の形式で返す。daily_signals のスコアも結合する。
     """
     today_str = _TODAY.strftime("%Y-%m-%d")
     with get_connection() as conn:
         rows = fetch_all(
             conn,
-            "SELECT * FROM trade_signal_log "
-            "WHERE signal_date = ? AND market = 'JP' "
-            "ORDER BY id DESC LIMIT 3",
+            "SELECT t.*, "
+            "  d.final_score, d.recommend_rank, d.recommend_reason "
+            "FROM trade_signal_log t "
+            "LEFT JOIN daily_signals d "
+            "  ON t.ticker = d.ticker AND t.signal_date = d.date "
+            "WHERE t.signal_date = ? AND t.market = 'JP' "
+            "ORDER BY d.final_score DESC, t.id DESC LIMIT 3",
             (today_str,),
         )
     return [dict(r) for r in rows]

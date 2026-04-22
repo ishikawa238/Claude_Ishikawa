@@ -2,7 +2,7 @@
 name: idea-screener
 description: アイディアの実現可能性、スコープ、主要な障害、MVP案、代替案を評価する壁打ち専用エージェント。実装前の相談や軌道修正で use proactively
 tools: Read, Glob, Grep
-model: sonnet
+model: opus
 color: yellow
 ---
 

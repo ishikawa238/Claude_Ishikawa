@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 
@@ -29,7 +30,8 @@ def main() -> None:
         percent = 0
 
     percent = max(0, min(100, percent))
-    print(f"[{model}] {render_bar(percent)} {percent}%")
+    cwd = os.getcwd()
+    print(f"{cwd}  [{model}]  {render_bar(percent)}  {percent}%")
 
 
 if __name__ == "__main__":

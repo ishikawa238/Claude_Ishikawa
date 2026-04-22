@@ -219,8 +219,8 @@ def print_summary() -> None:
     p(f"  テクニカル指標   : {tech_rows:>8} 件")
     p("=" * 60)
     p("  次のステップ: Windowsタスクスケジューラに以下を登録してください")
-    p("    平日 20:00 → python -m scripts.batch_evening_jp")
-    p("    平日 07:00 → python -m scripts.batch_morning_all")
+    p("    毎日 20:30 → python -m scripts.batch_evening_jp")
+    p("    毎日 07:30 → python -m scripts.batch_morning_all")
     p("=" * 60 + "\n")
 
 

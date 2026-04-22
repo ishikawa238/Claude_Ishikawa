@@ -4,7 +4,7 @@
 実行方法（investment_support/ から）:
     python -m scripts.batch_evening_jp
 
-実行タイミング: 毎平日 20:00（Windowsタスクスケジューラで登録）
+実行タイミング: 毎日 20:30（Windowsタスクスケジューラで登録）
 
 処理順序:
 1. 日本株 + インデックス（N225/TOPIX）の価格データ取得
@@ -27,9 +27,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.config import CONFIG
-from src.data_fetcher import (
-    fetch_bulk_eod, fetch_index_history,
-)
+from src.data_fetcher import fetch_index_history
+from src.yfinance_fetcher import fetch_daily_yf
 from src.data_store import (
     backup_database, fetch_all, get_connection,
     insert_one, log_error, upsert,
@@ -84,11 +83,11 @@ def main() -> int:
         tickers_with_market = [(r["ticker"], "JP") for r in jp_tickers]
         logger.info(f"対象銘柄: JP {len(tickers_with_market)} 件")
 
-        # 価格データ取得（Bulk EOD: 1リクエストで取引所全銘柄）
-        all_rows = fetch_bulk_eod("JP", _TODAY)
+        # 価格データ取得（yfinance: EODHD JP Bulk が利用不可のため代替）
+        all_rows = fetch_daily_yf(tickers_with_market, _TODAY)
         failed_count = 0
         if not all_rows:
-            logger.warning("JP Bulk EOD 取得失敗。price_history の更新をスキップします。")
+            logger.warning("JP 価格取得失敗。price_history の更新をスキップします。")
             failed_count = len(tickers_with_market)
         else:
             _save_in_chunks(all_rows, "price_history")
@@ -111,19 +110,15 @@ def main() -> int:
         # ────────────────────────────────────────
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
         # ────────────────────────────────────────
-        entry_sets = []
-        if mode == "normal":
-            logger.info("STEP 4: 流動性フィルタ")
-            screened = get_screened_tickers(_TODAY, "JP")
+        logger.info("STEP 4: 流動性フィルタ")
+        screened = get_screened_tickers(_TODAY, "JP")
 
-            logger.info("STEP 5: シグナル検出")
-            candidates = detect_and_save_signals(screened, _TODAY, mode)
-            signals_count = len(candidates)
+        logger.info("STEP 5: シグナル検出")
+        candidates = detect_and_save_signals(screened, _TODAY, mode)
+        signals_count = len(candidates)
 
-            logger.info("STEP 6: エントリーセット計算")
-            entry_sets = save_entry_sets(candidates, mode)
-        else:
-            logger.info(f"市場環境 [{mode}]: STEP 4-6 スキップ")
+        logger.info("STEP 6: エントリーセット計算")
+        entry_sets = save_entry_sets(candidates, mode)
 
         # ────────────────────────────────────────
         # STEP 7: 保有銘柄判定

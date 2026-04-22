@@ -22,8 +22,8 @@
   "signal": {
     "pattern_a_rsi_min": 50,
     "pattern_a_rsi_max": 70,
-    "pattern_a_volume_ratio_min": 1.5,
-    "pattern_a_52w_high_pct": 0.95,
+    "pattern_a_volume_ratio_min": 1.2,
+    "pattern_a_52w_high_pct": 0.92,
     "pattern_b_rsi_min": 40,
     "pattern_b_rsi_max": 60,
     "pattern_b_ma25_touch_pct": 0.98,
@@ -65,17 +65,9 @@
     "history_years": 3
   },
 
-  "moomoo": {
+  "report_server": {
     "host": "127.0.0.1",
-    "port": 11111,
-    "security_firm": "FUTUJP",
-    "trade_password_md5": ""
-  },
-
-  "order_server": {
-    "host": "127.0.0.1",
-    "port": 5100,
-    "secret": "YOUR_RANDOM_SECRET_HEX"
+    "port": 5100
   },
 
   "jquants": {

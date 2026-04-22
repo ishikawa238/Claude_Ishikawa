@@ -184,3 +184,26 @@ def fetch_history_bulk_yf(
         f"失敗 {len(failed)} 件 / 総行数 {len(all_rows)}"
     )
     return all_rows, failed
+
+
+def fetch_daily_yf(
+    tickers_with_market: list[tuple[str, str]],
+    target_date: date,
+) -> list[dict]:
+    """
+    yfinance で指定日の価格データを一括取得する。
+    fetch_bulk_eod("JP") の代替（JP 市場の EODHD Bulk が利用不可の場合に使用）。
+
+    引数:
+        tickers_with_market: [(ticker, market), ...] のリスト
+        target_date: 取得対象日
+
+    返り値: price_history テーブルへの INSERT 用辞書リスト（target_date のデータのみ）
+    """
+    from_date = target_date - timedelta(days=5)
+    all_rows, _ = fetch_history_bulk_yf(tickers_with_market, from_date, target_date)
+
+    target_str = target_date.strftime("%Y-%m-%d")
+    daily_rows = [r for r in all_rows if r["date"] == target_str]
+    logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
+    return daily_rows

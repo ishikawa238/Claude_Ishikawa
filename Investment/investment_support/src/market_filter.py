@@ -168,7 +168,7 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
             t.return_5d, t.return_20d,
             t.rsi14, t.atr14, t.volatility_20d,
             t.est_turnover, t.est_market_cap,
-            p.adj_close AS close, p.volume
+            p.open, p.adj_close AS close, p.volume
         FROM technical_snapshot t
         JOIN universe_master u ON t.ticker = u.ticker
         JOIN price_history p   ON t.ticker = p.ticker AND t.date = p.date

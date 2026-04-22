@@ -47,18 +47,18 @@ function Register-InvestmentTask {
     Write-Host "Registered: $TaskName" -ForegroundColor Green
 }
 
-# Evening batch (JP stocks) - weekdays 20:30
+# Evening batch (JP stocks) - daily 20:30
 Register-InvestmentTask `
     -TaskName "Investment_EveningBatch_JP" `
     -Script   "-m scripts.batch_evening_jp" `
-    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "20:30") `
+    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday -At "18:30") `
     -Desc     "Investment Support - Evening batch (JP stocks)"
 
-# Morning batch (all markets) - weekdays 07:30
+# Morning batch (all markets) - daily 07:30
 Register-InvestmentTask `
     -TaskName "Investment_MorningBatch_ALL" `
     -Script   "-m scripts.batch_morning_all" `
-    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "07:30") `
+    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday -At "07:30") `
     -Desc     "Investment Support - Morning batch (all markets)"
 
 # Monthly batch - 1st of each month 08:00
@@ -84,8 +84,8 @@ Write-Host "  All tasks registered successfully." -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Schedule summary:"
-Write-Host "  Weekdays 07:30  ->  Investment_MorningBatch_ALL"
-Write-Host "  Weekdays 20:30  ->  Investment_EveningBatch_JP"
+Write-Host "  Daily 07:30  ->  Investment_MorningBatch_ALL"
+Write-Host "  Daily 18:30  ->  Investment_EveningBatch_JP"
 Write-Host "  1st of month    ->  Investment_MonthlyBatch"
 Write-Host ""
 Write-Host "To verify: run 'taskschd.msc'"

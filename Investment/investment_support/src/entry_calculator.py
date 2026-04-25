@@ -95,6 +95,18 @@ def calc_entry_set(signal: dict) -> dict:
         "_final_score":      signal.get("final_score"),
         "_recommend_rank":   signal.get("recommend_rank"),
         "_recommend_reason": signal.get("recommend_reason"),
+        # サブスコア内訳（DB保存対象外・notifier で使用）
+        "_trend_score":      signal.get("trend_score"),
+        "_pattern_a_score":  signal.get("pattern_a_score"),
+        "_pattern_b_score":  signal.get("pattern_b_score"),
+        "_liquidity_score":  signal.get("liquidity_score"),
+        # テクニカル指標（DB保存対象外・notifier で使用）
+        "_high_52w": signal.get("high_52w"),
+        "_close":    signal.get("close"),
+        "_ma5":      signal.get("ma5"),
+        "_ma25":     signal.get("ma25"),
+        "_ma75":     signal.get("ma75"),
+        "_ma200":    signal.get("ma200"),
     }
     return result
 

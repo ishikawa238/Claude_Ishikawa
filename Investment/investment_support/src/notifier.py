@@ -202,6 +202,13 @@ def send_evening_report(
             blocks.append(_earnings_alert_block(h))
         blocks.append(_divider())
 
+    # ポートフォリオサマリー
+    if holdings:
+        summary_str = _portfolio_summary(holdings)
+        if summary_str:
+            blocks.append(_section(summary_str))
+            blocks.append(_divider())
+
     # 保有銘柄全件
     if holdings:
         blocks.append(_section(f"📋 *保有銘柄全件チェック（{len(holdings)}件）*"))
@@ -329,15 +336,27 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
         if recommend_reason:
             score_str += f"\n💡 {recommend_reason}"
 
+    # サブスコア内訳
+    sub_score_str = _sub_score_line(es)
+
+    # 52週高値との距離
+    high_52w_str = _high_52w_line(es)
+
+    # MA整列の視覚表示
+    ma_align_str = _ma_alignment_line(es)
+
     text = (
         f"*[{pattern}] {ticker} {name} ({market}){rank_str}*\n"
         f"パターン：{p_name}"
-        f"{score_str}\n"
+        f"{score_str}"
+        f"{sub_score_str}\n"
         f"エントリー目安：{entry:,.2f}\n"
         f"損切りライン：{stop:,.2f}（-{sl_pct:.1f}%）→ 利確目安：{target:,.2f}（+{tg_pct:.1f}%）  リスクリワード2:1"
         f"{warn_str}\n"
         f"推奨投入額：{amount_str} {currency}"
         f"{metrics_str}"
+        f"{high_52w_str}"
+        f"{ma_align_str}"
     )
 
     if show_conditions:
@@ -397,7 +416,79 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     if detail and reasons:
         text += "\n理由: " + " / ".join(reasons)
 
+    # テクニカルスナップショット（detail のみ）
+    if detail:
+        tech_str = _holding_tech_line(h, current)
+        text += tech_str
+
     return _section(text)
+
+
+def _holding_tech_line(h: dict, current_price: float) -> str:
+    """保有銘柄のテクニカル情報を1〜2行で返す。データがなければ空文字。"""
+    ma5 = h.get("tech_ma5")
+    ma25 = h.get("tech_ma25")
+    rsi14 = h.get("tech_rsi14")
+
+    parts = []
+    # MA25 との位置関係
+    if ma25 is not None and current_price > 0:
+        ma25_diff_pct = (current_price - ma25) / ma25 * 100
+        direction = "上方" if ma25_diff_pct >= 0 else "下方"
+        rsi_part = f" ｜ RSI: {rsi14:.0f}" if rsi14 is not None else ""
+        parts.append(f"📊 MA25: {ma25:,.2f}（{ma25_diff_pct:+.1f}%{direction}）{rsi_part}")
+
+    # MA5 vs MA25 のトレンド状態
+    if ma5 is not None and ma25 is not None:
+        if ma5 >= ma25:
+            parts.append("MA5↑MA25（上昇中）")
+        else:
+            parts.append("MA5↓MA25（下降中）")
+
+    if not parts:
+        return ""
+    return "\n" + "\n".join(parts)
+
+
+def _portfolio_summary(holdings: list[dict]) -> str:
+    """ポートフォリオ全体のサマリー（含み損益合計・平均保有日数）を1行で返す。"""
+    if not holdings:
+        return ""
+
+    # 含み損益合計（JP/US 別）
+    pnl_jpy = 0.0
+    pnl_usd = 0.0
+    has_jpy = False
+    has_usd = False
+    days_list = []
+
+    for h in holdings:
+        amt = h.get("pnl_amount")
+        market = h.get("market", "")
+        if amt is not None:
+            if market == "JP":
+                pnl_jpy += amt
+                has_jpy = True
+            else:
+                pnl_usd += amt
+                has_usd = True
+        d = h.get("holding_days")
+        if d is not None:
+            days_list.append(d)
+
+    pnl_parts = []
+    if has_jpy:
+        pnl_parts.append(f"{pnl_jpy:+,.0f}円")
+    if has_usd:
+        pnl_parts.append(f"{pnl_usd:+,.0f}USD")
+    pnl_str = " / ".join(pnl_parts) if pnl_parts else "算出不可"
+
+    avg_days_str = ""
+    if days_list:
+        avg_days = sum(days_list) / len(days_list)
+        avg_days_str = f" ｜ 平均保有日数: {avg_days:.0f}日"
+
+    return f"💰 *ポートフォリオ: 含み損益合計 {pnl_str}{avg_days_str}*"
 
 
 def _get_earnings_alerts(holdings: list[dict]) -> list[dict]:
@@ -432,6 +523,65 @@ def _earnings_alert_block(h: dict) -> dict:
 
     text = f"{emoji} *{ticker} {name}* — {days_str}に決算発表予定（{ann_date}）{pnl_str}"
     return _section(text)
+
+
+def _sub_score_line(es: dict) -> str:
+    """サブスコア内訳を1行で返す。データがなければ空文字。"""
+    t = es.get("_trend_score")
+    a = es.get("_pattern_a_score")
+    b = es.get("_pattern_b_score")
+    l = es.get("_liquidity_score")
+    if t is None and a is None and b is None and l is None:
+        return ""
+    parts = []
+    if t is not None:
+        parts.append(f"T:{t}")
+    if a is not None:
+        parts.append(f"A:{a}")
+    if b is not None:
+        parts.append(f"B:{b}")
+    if l is not None:
+        parts.append(f"L:{l}")
+    return "\n📈 " + " / ".join(parts)
+
+
+def _high_52w_line(es: dict) -> str:
+    """52週高値との距離を表示する。データがなければ空文字。"""
+    close = es.get("_close")
+    high_52w = es.get("_high_52w")
+    if not close or not high_52w or high_52w <= 0:
+        return ""
+    distance_pct = (high_52w - close) / close * 100
+    if distance_pct <= 0:
+        return "\n📍 52w高値: 更新中"
+    return f"\n📍 52w高値まで: {distance_pct:.1f}%"
+
+
+def _ma_alignment_line(es: dict) -> str:
+    """MA整列の視覚表示を返す。データがなければ空文字。"""
+    ma5 = es.get("_ma5")
+    ma25 = es.get("_ma25")
+    ma75 = es.get("_ma75")
+    ma200 = es.get("_ma200")
+    if ma25 is None or ma75 is None or ma200 is None:
+        return ""
+    # MA5 は None の場合がありうる
+    parts = []
+    if ma5 is not None:
+        arrow_5_25 = "↑" if ma5 >= ma25 else "↓"
+        parts.append(f"5{arrow_5_25}")
+    arrow_25_75 = "↑" if ma25 >= ma75 else "↓"
+    arrow_75_200 = "↑" if ma75 >= ma200 else "↓"
+    parts.append(f"25{arrow_25_75}75{arrow_75_200}200")
+    ma_str = "".join(parts)
+    # 完全整列判定
+    is_aligned = (
+        (ma5 is None or ma5 >= ma25) and
+        ma25 >= ma75 and
+        ma75 >= ma200
+    )
+    label = "完全整列" if is_aligned else "部分整列"
+    return f"\n📐 MA: {ma_str} ({label})"
 
 
 def _build_tomorrow_notes(holdings: list[dict]) -> list[str]:

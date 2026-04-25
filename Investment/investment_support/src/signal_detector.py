@@ -96,6 +96,11 @@ def detect_and_save_signals(
         best["recommend_reason"] = scores["recommend_reason"]
         best["market_mode"]      = market_mode
 
+        # 通知用テクニカルフィールドを tk から補完（entry_calculator 経由で notifier へ渡す）
+        for _fld in ("ma5", "ma25", "ma75", "ma200", "high_52w"):
+            if _fld not in best or best[_fld] is None:
+                best[_fld] = tk.get(_fld)
+
         all_rows.append(best)
         if best["label"] == "candidate":
             candidates.append(best)

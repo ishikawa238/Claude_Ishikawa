@@ -45,6 +45,18 @@ def _make_entry_set(**kwargs):
         "_rsi14": 55.0,
         "_vol_ratio": 2.3,
         "_rs_rank": 1,
+        # サブスコア
+        "_trend_score": 82,
+        "_pattern_a_score": 75,
+        "_pattern_b_score": 40,
+        "_liquidity_score": 100,
+        # テクニカル指標
+        "_high_52w": 155.0,
+        "_close": 150.0,
+        "_ma5": 148.0,
+        "_ma25": 145.0,
+        "_ma75": 140.0,
+        "_ma200": 130.0,
     }
     base.update(kwargs)
     return base
@@ -68,6 +80,11 @@ def _make_holding(**kwargs):
         "earnings_days": None,
         "holding_days": 15,
         "target_price": 210.00,
+        # テクニカル指標
+        "tech_ma5": 183.0,
+        "tech_ma25": 180.0,
+        "tech_ma200": 160.0,
+        "tech_rsi14": 55.0,
     }
     base.update(kwargs)
     return base
@@ -123,6 +140,62 @@ class EntrySetBlockTests(unittest.TestCase):
         self.assertNotIn("RSI", text)
         self.assertNotIn("出来高", text)
 
+    # --- サブスコア内訳テスト ---
+    def test_sub_scores_shown(self):
+        text = self._get_text(_make_entry_set(
+            _trend_score=82, _pattern_a_score=75,
+            _pattern_b_score=40, _liquidity_score=100,
+        ))
+        self.assertIn("T:82", text)
+        self.assertIn("A:75", text)
+        self.assertIn("B:40", text)
+        self.assertIn("L:100", text)
+
+    def test_sub_scores_absent_when_none(self):
+        text = self._get_text(_make_entry_set(
+            _trend_score=None, _pattern_a_score=None,
+            _pattern_b_score=None, _liquidity_score=None,
+        ))
+        # サブスコア行（📈 T: で始まる）が出力されないことを確認
+        self.assertNotIn("T:", text)
+        self.assertNotIn("L:", text)
+
+    # --- 52週高値テスト ---
+    def test_52w_high_distance_shown(self):
+        text = self._get_text(_make_entry_set(_close=150.0, _high_52w=155.0))
+        self.assertIn("52w高値まで:", text)
+        self.assertIn("3.3%", text)
+
+    def test_52w_high_at_new_high(self):
+        text = self._get_text(_make_entry_set(_close=160.0, _high_52w=155.0))
+        self.assertIn("52w高値: 更新中", text)
+
+    def test_52w_high_absent_when_none(self):
+        text = self._get_text(_make_entry_set(_close=None, _high_52w=None))
+        self.assertNotIn("52w高値", text)
+
+    # --- MA整列テスト ---
+    def test_ma_alignment_full(self):
+        text = self._get_text(_make_entry_set(
+            _ma5=148.0, _ma25=145.0, _ma75=140.0, _ma200=130.0,
+        ))
+        self.assertIn("MA:", text)
+        self.assertIn("完全整列", text)
+        self.assertIn("5↑", text)
+
+    def test_ma_alignment_partial(self):
+        text = self._get_text(_make_entry_set(
+            _ma5=140.0, _ma25=145.0, _ma75=140.0, _ma200=130.0,
+        ))
+        self.assertIn("部分整列", text)
+        self.assertIn("5↓", text)
+
+    def test_ma_alignment_absent_when_none(self):
+        text = self._get_text(_make_entry_set(
+            _ma5=None, _ma25=None, _ma75=None, _ma200=None,
+        ))
+        self.assertNotIn("MA:", text)
+
 
 class HoldingBlockTests(unittest.TestCase):
 
@@ -155,6 +228,85 @@ class HoldingBlockTests(unittest.TestCase):
     def test_reasons_hidden_without_detail(self):
         text = self._get_text(_make_holding(), detail=False)
         self.assertNotIn("理由:", text)
+
+    # --- テクニカルスナップショットテスト ---
+    def test_tech_ma25_shown_in_detail(self):
+        text = self._get_text(_make_holding(
+            tech_ma25=180.0, tech_rsi14=55.0, current_price=185.0,
+        ), detail=True)
+        self.assertIn("MA25: 180.00", text)
+        self.assertIn("上方", text)
+        self.assertIn("RSI: 55", text)
+
+    def test_tech_trend_up_shown_in_detail(self):
+        text = self._get_text(_make_holding(
+            tech_ma5=183.0, tech_ma25=180.0,
+        ), detail=True)
+        self.assertIn("MA5↑MA25", text)
+        self.assertIn("上昇中", text)
+
+    def test_tech_trend_down_shown_in_detail(self):
+        text = self._get_text(_make_holding(
+            tech_ma5=178.0, tech_ma25=180.0,
+        ), detail=True)
+        self.assertIn("MA5↓MA25", text)
+        self.assertIn("下降中", text)
+
+    def test_tech_hidden_without_detail(self):
+        text = self._get_text(_make_holding(
+            tech_ma25=180.0, tech_rsi14=55.0,
+        ), detail=False)
+        self.assertNotIn("MA25:", text)
+        self.assertNotIn("RSI:", text)
+
+    def test_tech_absent_when_none(self):
+        text = self._get_text(_make_holding(
+            tech_ma5=None, tech_ma25=None, tech_rsi14=None,
+        ), detail=True)
+        self.assertNotIn("MA25:", text)
+        self.assertNotIn("MA5", text)
+
+
+class PortfolioSummaryTests(unittest.TestCase):
+
+    def test_jpy_only(self):
+        holdings = [
+            _make_holding(market="JP", pnl_amount=5000.0, holding_days=10),
+            _make_holding(market="JP", pnl_amount=7500.0, holding_days=30),
+        ]
+        result = notifier._portfolio_summary(holdings)
+        self.assertIn("+12,500円", result)
+        self.assertIn("平均保有日数: 20日", result)
+
+    def test_usd_only(self):
+        holdings = [
+            _make_holding(market="US", pnl_amount=100.0, holding_days=5),
+            _make_holding(market="US", pnl_amount=-50.0, holding_days=15),
+        ]
+        result = notifier._portfolio_summary(holdings)
+        self.assertIn("+50USD", result)
+        self.assertIn("平均保有日数: 10日", result)
+
+    def test_mixed_markets(self):
+        holdings = [
+            _make_holding(market="JP", pnl_amount=5000.0, holding_days=10),
+            _make_holding(market="US", pnl_amount=200.0, holding_days=20),
+        ]
+        result = notifier._portfolio_summary(holdings)
+        self.assertIn("+5,000円", result)
+        self.assertIn("+200USD", result)
+
+    def test_empty_holdings(self):
+        result = notifier._portfolio_summary([])
+        self.assertEqual(result, "")
+
+    def test_no_pnl_amount(self):
+        holdings = [
+            _make_holding(pnl_amount=None, holding_days=10),
+        ]
+        result = notifier._portfolio_summary(holdings)
+        self.assertIn("算出不可", result)
+        self.assertIn("平均保有日数: 10日", result)
 
 
 if __name__ == "__main__":

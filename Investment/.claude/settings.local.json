@@ -23,7 +23,13 @@
       "Bash(python3)",
       "Bash(python -m unittest tests.test_notifier -v)",
       "Bash(python -m unittest tests.test_signal_detector -v)",
-      "Bash(python -m unittest tests.test_scoring -v)"
+      "Bash(python -m unittest tests.test_scoring -v)",
+      "Bash(python -c \"import shared.slack; print\\(shared.slack.__file__\\)\")",
+      "Bash(PYTHONPATH=\"C:\\\\Users\\\\bun22\\\\Desktop\\\\Ishikawa238\" python -m unittest discover -s tests -v)",
+      "Bash(python -m unittest discover -s tests)",
+      "Bash(ls /c/Users/bun22/Desktop/Ishikawa238/Investment/investment_support/*.pth)",
+      "Bash(python:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ],
     "defaultMode": "plan"
   },

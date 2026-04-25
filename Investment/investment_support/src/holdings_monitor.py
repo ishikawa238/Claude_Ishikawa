@@ -239,6 +239,9 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             except ValueError:
                 pass
 
+        # テクニカルスナップショット（通知の詳細表示用）
+        snap = _get_technical(ticker, target_str)
+
         results.append({
             "ticker":          ticker,
             "name":            h["name"] or ticker,
@@ -257,6 +260,11 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "earnings_days":   next_earnings["days"] if next_earnings else None,
             "holding_days":    holding_days,
             "target_price":    _get_target_price(ticker),
+            # テクニカル指標（notifier で使用）
+            "tech_ma5":   snap.get("ma5")   if snap else None,
+            "tech_ma25":  snap.get("ma25")  if snap else None,
+            "tech_ma200": snap.get("ma200") if snap else None,
+            "tech_rsi14": snap.get("rsi14") if snap else None,
         })
 
     forced = sum(1 for r in results if r["label"] == "forced_stop")
@@ -451,7 +459,7 @@ def _get_technical(ticker: str, target_str: str) -> Optional[dict]:
     with get_connection() as conn:
         row = fetch_one(
             conn,
-            "SELECT ma5, ma25 FROM technical_snapshot WHERE ticker = ? AND date = ?",
+            "SELECT ma5, ma25, ma200, rsi14 FROM technical_snapshot WHERE ticker = ? AND date = ?",
             (ticker, target_str),
         )
     return dict(row) if row else None

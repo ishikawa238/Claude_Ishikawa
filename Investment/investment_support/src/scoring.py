@@ -187,7 +187,7 @@ def fetch_recent_lows(
     return {
         r["ticker"]: float(r["recent_low"])
         for r in rows
-        if r.get("recent_low") is not None
+        if r["recent_low"] is not None
     }
 
 

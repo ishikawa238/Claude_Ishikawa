@@ -62,21 +62,24 @@ Register-InvestmentTask `
     -Desc     "Investment Support - Morning batch (all markets)"
 
 # Monthly batch - 1st of each month 08:00
-# New-ScheduledTaskTrigger has no -Monthly parameter, so build CIM trigger directly
-$monthlyTrigger = New-CimInstance -CimClass (
-    Get-CimClass -Namespace "Root/Microsoft/Windows/TaskScheduler" -ClassName "MSFT_TaskMonthlyTrigger"
-) -ClientOnly -Property @{
-    DaysOfMonth = [uint16]1
-    MonthOfYear = [uint16]4095   # all 12 months (bitmask 0x0FFF)
-    StartBoundary = (Get-Date -Hour 8 -Minute 0 -Second 0).ToString("yyyy-MM-ddTHH:mm:ss")
-    Enabled = $true
+# New-ScheduledTaskTrigger has no -Monthly parameter.
+# Use schtasks.exe /create with monthly schedule instead of CIM trigger.
+$monthlyTaskName = "Investment_MonthlyBatch"
+if (Get-ScheduledTask -TaskName $monthlyTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $monthlyTaskName -Confirm:$false
+    Write-Host "Removed existing task: $monthlyTaskName"
 }
-
-Register-InvestmentTask `
-    -TaskName "Investment_MonthlyBatch" `
-    -Script   "-m scripts.batch_monthly" `
-    -Trigger  $monthlyTrigger `
-    -Desc     "Investment Support - Monthly batch (universe update + report)"
+schtasks.exe /create `
+    /tn $monthlyTaskName `
+    /tr "$PythonExe -m scripts.batch_monthly" `
+    /sc monthly /d 1 /st 08:00 `
+    /rl HIGHEST `
+    /f | Out-Null
+# Set working directory via XML update (schtasks /create doesn't support it directly)
+$task = Get-ScheduledTask -TaskName $monthlyTaskName
+$task.Actions[0].WorkingDirectory = $ProjectDir
+$task | Set-ScheduledTask | Out-Null
+Write-Host "Registered: $monthlyTaskName" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan

@@ -96,13 +96,13 @@ def detect_and_save_signals(
         best["recommend_reason"] = scores["recommend_reason"]
         best["market_mode"]      = market_mode
 
-        # 通知用テクニカルフィールドを tk から補完（entry_calculator 経由で notifier へ渡す）
-        for _fld in ("ma5", "ma25", "ma75", "ma200", "high_52w"):
-            if _fld not in best or best[_fld] is None:
-                best[_fld] = tk.get(_fld)
-
         all_rows.append(best)
         if best["label"] == "candidate":
+            # 通知用テクニカルフィールドを tk から補完（entry_calculator 経由で notifier へ渡す）
+            # daily_signals テーブルに存在しないため candidate のみに付与し、DB 保存後に追加する
+            best["_notify_extras"] = {
+                fld: tk.get(fld) for fld in ("ma5", "ma25", "ma75", "ma200", "high_52w")
+            }
             candidates.append(best)
 
     # final_score 降順でランク付け
@@ -115,11 +115,19 @@ def detect_and_save_signals(
     for row in all_rows:
         row["rs_rank"] = rank_map.get(row["ticker"])
 
-    # DB 保存（500件ずつ）
+    # DB 保存（500件ずつ）— _notify_extras は daily_signals に無いため除外
     chunk = 500
     for i in range(0, len(all_rows), chunk):
+        save_rows = [{k: v for k, v in r.items() if k != "_notify_extras"} for r in all_rows[i:i + chunk]]
         with get_connection() as conn:
-            upsert(conn, "daily_signals", all_rows[i:i + chunk])
+            upsert(conn, "daily_signals", save_rows)
+
+    # 通知用テクニカルフィールドを candidates に展開
+    for c in candidates:
+        extras = c.pop("_notify_extras", {})
+        for fld, val in extras.items():
+            if fld not in c or c[fld] is None:
+                c[fld] = val
 
     candidate_count = len(candidates)
     logger.info(

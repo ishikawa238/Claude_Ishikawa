@@ -1,0 +1,21 @@
+{
+  "spotify": {
+    "playlist_id": "your_playlist_id_here",
+    "target_minutes": 90,
+    "device_name": "Echo",
+    "shows": [
+      {"name": "NPR Up First", "id": "2mTUnDkuKUkhiueKcVWoP0"},
+      {"name": "BBC Global News Podcast", "id": "3wBfqov60qDZbEVjPHo0a8"},
+      {"name": "TED Radio Hour", "id": "1vfOw64nKjQ8LzZDPCfRaO"},
+      {"name": "6 Minute English", "id": "3CF9ANEicXGxEROA3cOryE"},
+      {"name": "All Ears English", "id": "6qXldSz1Ulq1Nvj2JK5kSR"}
+    ]
+  },
+  "slack": {
+    "webhook_url": "XXXXX"
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_dir": "./logs"
+  }
+}

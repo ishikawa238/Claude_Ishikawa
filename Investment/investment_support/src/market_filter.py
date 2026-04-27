@@ -191,6 +191,9 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
             (target_str, market, min_price, min_turnover, min_market_cap),
         )
 
+    # sqlite3.Row → dict に変換（scoring.py 等で .get() を使うため）
+    rows = [dict(r) for r in rows]
+
     # 非アクティブ（30日中20日未満取引）フィルタ
     filtered = _filter_inactive(rows, target_date)
 

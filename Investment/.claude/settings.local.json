@@ -29,7 +29,16 @@
       "Bash(python -m unittest discover -s tests)",
       "Bash(ls /c/Users/bun22/Desktop/Ishikawa238/Investment/investment_support/*.pth)",
       "Bash(python:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(find \"C:\\\\Users\\\\bun22\\\\Desktop\\\\Ishikawa238\\\\Investment\\\\investment_support\\\\logs\" -name \"batch_*.log\" -type f -exec ls -lt {} +)",
+      "Bash(grep:*)",
+      "Bash(schtasks /query /fo TABLE)",
+      "Bash(PYTHONPATH=\"C:/Users/bun22/Desktop/Ishikawa238\" .venv/Scripts/python.exe -m scripts.batch_evening_jp)",
+      "Bash(schtasks /query /fo LIST)",
+      "Bash(schtasks /query /tn \"Investment_EveningBatch_JP\" /fo LIST)",
+      "Bash(schtasks /query /tn \"Investment_MorningBatch_ALL\" /fo LIST)",
+      "Bash(schtasks /query /tn \"Investment_MonthlyBatch\" /fo LIST)",
+      "Bash(powershell:*)"
     ],
     "defaultMode": "plan"
   },

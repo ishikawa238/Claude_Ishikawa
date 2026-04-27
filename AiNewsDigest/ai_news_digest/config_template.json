@@ -1,0 +1,44 @@
+{
+  "_comment": "このファイルをコピーして config.json を作成してください。config.json は Git にコミットしないでください。",
+
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ"
+  },
+
+  "rss": {
+    "feeds": [
+      {
+        "name": "MIT Technology Review - AI",
+        "url": "https://www.technologyreview.com/feed/",
+        "language": "en"
+      },
+      {
+        "name": "The Verge - AI",
+        "url": "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
+        "language": "en"
+      },
+      {
+        "name": "ITmedia AI+",
+        "url": "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml",
+        "language": "ja"
+      }
+    ],
+    "request_timeout_sec": 15,
+    "request_interval_sec": 2.0
+  },
+
+  "filter": {
+    "max_age_hours": 24,
+    "max_articles_per_feed": 10,
+    "max_notify_total": 20
+  },
+
+  "database": {
+    "db_path": "./data/ai_news_digest.db"
+  },
+
+  "logging": {
+    "log_dir": "./logs",
+    "log_level": "INFO"
+  }
+}

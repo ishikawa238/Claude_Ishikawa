@@ -8,6 +8,12 @@ Investment/investment_support/moomoo_OpenD_10.2.6208_Windows/
 
 # API キー・シークレット
 Investment/investment_support/config.json
+PaperWatch/paper_watch/config.json
+FreelanceScout/freelance_scout/config.json
+AiNewsDigest/ai_news_digest/config.json
+EnglishDaily/english_daily/config.json
+MorningPlaylist/morning_playlist/config.json
+watchdog/config.json
 
 # Python キャッシュ
 __pycache__/

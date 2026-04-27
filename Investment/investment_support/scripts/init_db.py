@@ -22,6 +22,8 @@ from pathlib import Path
 
 # プロジェクトルートを sys.path に追加（モジュールの import のため）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PROJECT_ROOT.parent.parent  # Ishikawa238/ — shared パッケージの検索に必要
+sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.config import CONFIG

@@ -1,0 +1,39 @@
+{
+  "_comment": "このファイルをコピーして config.json を作成してください。config.json は Git にコミットしないでください。",
+
+  "arxiv": {
+    "categories": ["cs.CR", "q-fin.RM", "q-fin.GN", "q-fin.CP"],
+    "request_interval_sec": 3.0
+  },
+
+  "scoring": {
+    "primary_keywords": [
+      "AML", "anti-money laundering", "money laundering",
+      "blockchain", "stablecoin", "CBDC"
+    ],
+    "secondary_keywords": [
+      "cryptocurrency", "DeFi", "KYC", "financial crime",
+      "transaction monitoring", "compliance", "FATF",
+      "sanctions", "illicit finance", "virtual asset",
+      "travel rule"
+    ],
+    "primary_weight": 15,
+    "secondary_weight": 5,
+    "title_multiplier": 3,
+    "score_threshold": 30,
+    "max_notify": 10
+  },
+
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ"
+  },
+
+  "database": {
+    "db_path": "./data/paper_watch.db"
+  },
+
+  "logging": {
+    "log_dir": "./logs",
+    "log_level": "INFO"
+  }
+}

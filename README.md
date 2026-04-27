@@ -1,0 +1,55 @@
+# Ishikawa238
+
+個人プロジェクト群のモノレポ。情報収集・投資支援・学習習慣づくりなど、日常を自動化する Python システムをまとめている。各システムは Windows タスクスケジューラで定期実行し、結果を Slack に通知する共通アーキテクチャを持つ。
+
+## フォルダ構成
+
+| フォルダ | 概要 |
+|----------|------|
+| `Investment/` | 日米株式の投資判断支援システム。テクニカル指標の算出、売買シグナル検知、保有銘柄の監視を行い Slack に通知する。 |
+| `AiNewsDigest/` | AI 関連ニュース自動収集システム。複数の RSS フィードから AI/ML/LLM ニュースを取得し、重複排除の上 Slack に通知する。 |
+| `PaperWatch/` | 新着論文監視システム。arXiv RSS から指定カテゴリの論文を取得し、キーワードスコアリングで関連度の高い論文を Slack に通知する。 |
+| `FreelanceScout/` | フリーランス案件自動収集システム。CrowdWorks・Coconala から IT/AI 系案件をスクレイプし、キーワードフィルタ後に Slack 通知する。 |
+| `EnglishDaily/` | 英語学習習慣化システム。曜日別カリキュラムを毎朝 Slack に配信し、連続学習日数（ストリーク）を管理する。 |
+| `watchdog/` | 横断監視スクリプト。全システムの SQLite DB を巡回し、バッチ未実行や致命的エラーを検知して Slack に通知する。 |
+| `shared/` | 共通モジュール（config, db, slack, logger）。各システムから `pip install -e "../../[slack]"` で利用する。 |
+| `claude-study/` | Claude Code の練習用プロジェクト。CLI 電卓と CSV 集計ツール。 |
+
+## Slack 通知スケジュール
+
+| 時刻 | システム | 通知内容 |
+|------|----------|----------|
+| 毎日 07:00 | AiNewsDigest | AI/ML/LLM 関連ニュースの新着ダイジェスト |
+| 毎日 07:00 | FreelanceScout | CrowdWorks・Coconala の新着フリーランス案件 |
+| 毎日 07:30 | Investment | 米国株シグナル + 前夜の日本株シグナル統合 + 保有銘柄アラート（朝レポート） |
+| 毎日 18:30 | Investment | 日本株のテクニカル分析・売買シグナル検知結果（夕方レポート） |
+| 毎月 1日 08:00 | Investment | 月次レポート（銘柄マスタ更新 + ファンダメンタルズ取得） |
+| 毎日 07:00 | PaperWatch | arXiv 新着論文のキーワードマッチレポート |
+| 毎日 07:00 | EnglishDaily | 曜日別英語学習カリキュラム + ストリーク通知 |
+| 毎日 17:30 / 19:30 / 21:30 / 23:30 | EnglishDaily | 未完了タスクのリマインド通知 |
+| 随時（異常時のみ） | watchdog | バッチ未実行・致命的エラーの検知アラート |
+
+## 共通アーキテクチャ
+
+- **言語**: Python 3.10+
+- **データベース**: SQLite（WAL モード）
+- **通知**: Slack Incoming Webhook
+- **スケジューリング**: Windows タスクスケジューラ
+- **共通基盤**: `shared/` パッケージ（`pyproject.toml` で管理）
+
+## セットアップ（共通手順）
+
+```bash
+# 1. shared パッケージをインストール（リポジトリルートで）
+pip install -e ".[slack]"
+
+# 2. 各プロジェクトへ移動してセットアップ
+cd <project>/<inner_dir>
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -e "../../[slack]" -r requirements.txt
+copy config_template.json config.json   # API キー等を設定
+python -m scripts.init_db
+```
+
+詳細は各フォルダの `CLAUDE.md` または `README.md` を参照。

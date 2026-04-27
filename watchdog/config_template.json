@@ -1,0 +1,46 @@
+{
+  "_comment": "このファイルをコピーして config.json を作成してください。config.json は Git にコミットしないでください。",
+
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ"
+  },
+
+  "logging": {
+    "log_dir": "./logs",
+    "log_level": "INFO"
+  },
+
+  "projects": {
+    "investment": {
+      "label": "Investment",
+      "db_path": "../Investment/investment_support/data/investment.db",
+      "log_dir": "../Investment/investment_support/logs",
+      "batches": [
+        {"batch_type": "evening_jp",  "schedule": "daily"},
+        {"batch_type": "morning_all", "schedule": "daily"},
+        {"batch_type": "monthly",     "schedule": "monthly"}
+      ]
+    },
+    "freelance_scout": {
+      "label": "FreelanceScout",
+      "db_path": "../FreelanceScout/freelance_scout/data/freelance_scout.db",
+      "log_dir": "../FreelanceScout/freelance_scout/logs",
+      "batches": [
+        {"batch_type": "morning", "schedule": "daily"}
+      ]
+    },
+    "ai_news_digest": {
+      "label": "AiNewsDigest",
+      "db_path": "../AiNewsDigest/ai_news_digest/data/ai_news_digest.db",
+      "log_dir": "../AiNewsDigest/ai_news_digest/logs",
+      "batches": [
+        {"batch_type": "morning", "schedule": "daily"}
+      ]
+    }
+  },
+
+  "watchdog": {
+    "check_window_hours": 26,
+    "fatal_error_lookback_hours": 26
+  }
+}

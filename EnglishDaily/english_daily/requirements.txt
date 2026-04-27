@@ -1,0 +1,3 @@
+# EnglishDaily には プロジェクト固有の依存パッケージはありません。
+# requests は shared パッケージの [slack] extra 経由でインストールされます。
+# pip install -e "../../[slack]"

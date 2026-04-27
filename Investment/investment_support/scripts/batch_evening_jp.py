@@ -24,14 +24,17 @@ from datetime import date, timedelta
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PROJECT_ROOT.parent.parent  # Ishikawa238/ — shared パッケージの検索に必要
+sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from shared.batch import start_batch_log, finish_batch_log
 from src.config import CONFIG
 from src.data_fetcher import fetch_index_history
 from src.yfinance_fetcher import fetch_daily_yf
 from src.data_store import (
     backup_database, fetch_all, get_connection,
-    insert_one, log_error, upsert,
+    log_error, upsert,
 )
 from src.entry_calculator import save_entry_sets
 from src.holdings_monitor import ensure_holding_prices, evaluate_holdings, sync_holdings_from_csv
@@ -53,8 +56,9 @@ def main() -> int:
     夜バッチ全体を実行する。
     返り値: 0=成功 / 1=部分失敗 / 2=致命的エラー
     """
-    start_time = _now_str()
-    batch_id = _start_batch_log(start_time)
+    with get_connection() as conn:
+        batch_id = start_batch_log(conn, _BATCH_TYPE, _TODAY.strftime("%Y-%m-%d"),
+                                   {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
     failed_count = 0
     signals_count = 0
 
@@ -145,14 +149,18 @@ def main() -> int:
         # STEP 10: バッチログ更新
         # ────────────────────────────────────────
         status = "partial_failure" if failed_count > 0 else "success"
-        _finish_batch_log(batch_id, status, len(tickers_with_market), failed_count, signals_count)
+        with get_connection() as conn:
+            finish_batch_log(conn, batch_id, status,
+                             {"total_tickers": len(tickers_with_market), "failed_tickers": failed_count, "signals_generated": signals_count})
         logger.info(f"[夜バッチ] 完了: {status}")
         return 0 if status == "success" else 1
 
     except Exception as e:
         logger.error(f"[夜バッチ] 致命的エラー: {e}", exc_info=True)
         log_error(_BATCH_TYPE, "batch_evening_jp", type(e).__name__, str(e), is_fatal=True)
-        _finish_batch_log(batch_id, "failed", 0, 0, 0)
+        with get_connection() as conn:
+            finish_batch_log(conn, batch_id, "failed",
+                             {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
         return 2
 
 
@@ -181,35 +189,6 @@ def _save_in_chunks(rows: list, table: str, chunk: int = 5000) -> None:
             upsert(conn, table, rows[i:i + chunk])
 
 
-def _now_str() -> str:
-    from datetime import datetime
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _start_batch_log(start_time: str) -> int:
-    with get_connection() as conn:
-        return insert_one(conn, "batch_run_log", {
-            "run_date":          _TODAY.strftime("%Y-%m-%d"),
-            "batch_type":        _BATCH_TYPE,
-            "start_time":        start_time,
-            "status":            "running",
-            "total_tickers":     0,
-            "failed_tickers":    0,
-            "signals_generated": 0,
-        })
-
-
-def _finish_batch_log(
-    batch_id: int, status: str,
-    total: int, failed: int, signals: int,
-) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE batch_run_log SET status=?, end_time=?, "
-            "total_tickers=?, failed_tickers=?, signals_generated=? "
-            "WHERE id=?",
-            (status, _now_str(), total, failed, signals, batch_id),
-        )
 
 
 if __name__ == "__main__":

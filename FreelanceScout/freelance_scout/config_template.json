@@ -1,0 +1,45 @@
+{
+  "_comment": "このファイルをコピーして config.json を作成してください。config.json は Git にコミットしないでください。",
+
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ"
+  },
+
+  "scraping": {
+    "request_interval_sec": 3.0,
+    "request_timeout_sec": 15,
+    "max_pages_per_category": 3,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  },
+
+  "crowdworks": {
+    "enabled": true,
+    "base_url": "https://crowdworks.jp/public/jobs/search",
+    "category_ids": [2, 83, 8, 12, 282, 173, 242, 13],
+    "keywords": ["Python", "スクレイピング", "AI", "機械学習", "データ分析",
+                 "自動化", "API", "AWS", "GCP", "ChatGPT", "LLM"]
+  },
+
+  "coconala": {
+    "enabled": true,
+    "base_url": "https://coconala.com/requests/categories",
+    "category_ids": [11, 230],
+    "keywords": ["Python", "スクレイピング", "AI", "機械学習", "データ分析",
+                 "自動化", "API", "AWS", "GCP", "ChatGPT", "LLM"]
+  },
+
+  "filter": {
+    "exclude_keywords": [],
+    "min_title_length": 5,
+    "max_notify_per_site": 10
+  },
+
+  "database": {
+    "db_path": "./data/freelance_scout.db"
+  },
+
+  "logging": {
+    "log_dir": "./logs",
+    "log_level": "INFO"
+  }
+}

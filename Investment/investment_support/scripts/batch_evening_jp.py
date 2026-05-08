@@ -20,6 +20,9 @@
 """
 
 import sys
+import os
+import signal
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -49,13 +52,78 @@ from src.technical_calculator import (
 logger = get_logger(__name__)
 _TODAY = date.today()
 _BATCH_TYPE = "evening_jp"
+_LOCK_DIR = _PROJECT_ROOT / "data"
+_LOCK_FILE = _LOCK_DIR / "batch_evening_jp.lock"
+_BATCH_TIMEOUT_SEC = 30 * 60  # 30分
+
+
+def _acquire_lock() -> "open | None":
+    """ファイルロックを取得する。取得できなければ None を返す。"""
+    _LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        fp = open(_LOCK_FILE, "w")
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fp.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fp.write(str(os.getpid()))
+        fp.flush()
+        return fp
+    except (OSError, IOError):
+        return None
+
+
+def _release_lock(fp) -> None:
+    """ファイルロックを解放する。"""
+    if fp is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fp.seek(0)
+            msvcrt.locking(fp.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fp, fcntl.LOCK_UN)
+        fp.close()
+    except (OSError, IOError):
+        pass
 
 
 def main() -> int:
     """
     夜バッチ全体を実行する。
-    返り値: 0=成功 / 1=部分失敗 / 2=致命的エラー
+    返り値: 0=成功 / 1=部分失敗 / 2=致命的エラー / 3=二重起動スキップ / 4=タイムアウト
     """
+    # 二重起動防止
+    lock_fp = _acquire_lock()
+    if lock_fp is None:
+        logger.warning("[夜バッチ] 既に別プロセスが実行中のためスキップします")
+        return 3
+
+    # バッチ全体タイムアウト
+    timeout_event = threading.Event()
+
+    def _on_timeout():
+        timeout_event.set()
+        logger.error(f"[夜バッチ] タイムアウト（{_BATCH_TIMEOUT_SEC}秒）に到達しました")
+        os._exit(4)
+
+    timer = threading.Timer(_BATCH_TIMEOUT_SEC, _on_timeout)
+    timer.daemon = True
+    timer.start()
+
+    try:
+        return _run_batch()
+    finally:
+        timer.cancel()
+        _release_lock(lock_fp)
+
+
+def _run_batch() -> int:
+    """夜バッチの本体処理。"""
     with get_connection() as conn:
         batch_id = start_batch_log(conn, _BATCH_TYPE, _TODAY.strftime("%Y-%m-%d"),
                                    {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
@@ -97,10 +165,9 @@ def main() -> int:
             _save_in_chunks(all_rows, "price_history")
 
         # ────────────────────────────────────────
-        # STEP 2: テクニカル指標計算
+        # STEP 2: テクニカル指標計算（インデックスMA）
         # ────────────────────────────────────────
         logger.info("STEP 2: テクニカル指標計算")
-        calculate_and_save_snapshots(tickers_with_market, _TODAY)
         calculate_and_save_index_mas("N225", _TODAY)
         calculate_and_save_index_mas("TOPIX", _TODAY)
 
@@ -114,22 +181,37 @@ def main() -> int:
         # ────────────────────────────────────────
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
         # ────────────────────────────────────────
-        logger.info("STEP 4: 流動性フィルタ")
-        screened = get_screened_tickers(_TODAY, "JP")
+        if failed_count == len(tickers_with_market):
+            # 全銘柄の価格取得に失敗 → 古いデータでの誤シグナルを防ぐ
+            logger.warning(
+                "全銘柄の価格取得に失敗したため、テクニカル計算・シグナル検出をスキップします。"
+            )
+            screened = []
+            entry_sets = []
+            near_misses = []
+            signals_count = 0
+        else:
+            calculate_and_save_snapshots(tickers_with_market, _TODAY)
 
-        logger.info("STEP 5: シグナル検出")
-        candidates = detect_and_save_signals(screened, _TODAY, mode)
-        signals_count = len(candidates)
+            logger.info("STEP 4: 流動性フィルタ")
+            screened = get_screened_tickers(_TODAY, "JP")
 
-        logger.info("STEP 6: エントリーセット計算")
-        entry_sets = save_entry_sets(candidates, mode)
+            logger.info("STEP 5: シグナル検出")
+            candidates = detect_and_save_signals(screened, _TODAY, mode)
+            signals_count = len(candidates)
 
-        # ペーパートレード: 仮想エントリー記録 + 日次更新
-        from src.paper_trading import is_paper_mode_enabled, record_paper_entries, update_paper_trades
-        if is_paper_mode_enabled():
-            logger.info("STEP 6.5: ペーパートレード更新")
-            record_paper_entries(entry_sets)
-            update_paper_trades(_TODAY)
+            logger.info("STEP 6: エントリーセット計算")
+            entry_sets = save_entry_sets(candidates, mode)
+
+            from src.signal_detector import fetch_near_misses
+            near_misses = fetch_near_misses(_TODAY, market="JP", limit=5)
+
+            # ペーパートレード: 仮想エントリー記録 + 日次更新
+            from src.paper_trading import is_paper_mode_enabled, record_paper_entries, update_paper_trades
+            if is_paper_mode_enabled():
+                logger.info("STEP 6.5: ペーパートレード更新")
+                record_paper_entries(entry_sets)
+                update_paper_trades(_TODAY)
 
         # ────────────────────────────────────────
         # STEP 7: 保有銘柄判定
@@ -146,10 +228,39 @@ def main() -> int:
         holdings = evaluate_holdings(_TODAY)
 
         # ────────────────────────────────────────
+        # STEP 7.5: ニュース取得 + LLM アドバイザー（有効時のみ）
+        # ────────────────────────────────────────
+        news = []
+        try:
+            from src.news_fetcher import fetch_market_news, fetch_ticker_news
+            news = fetch_market_news(market="JP", limit=5)
+            # 買い候補 + 保有銘柄の銘柄別ニュースも追加
+            tickers_names = [(es["ticker"], es.get("name", "")) for es in entry_sets]
+            tickers_names += [(h["ticker"], h.get("name", "")) for h in holdings]
+            if tickers_names:
+                news += fetch_ticker_news(tickers_names, limit_per_ticker=1)
+        except Exception as e:
+            logger.warning(f"ニュース取得をスキップ: {e}")
+
+        llm_feedback = []
+        try:
+            from src.llm_advisor import get_llm_feedback
+            llm_feedback = get_llm_feedback(entry_sets, holdings, market_env, "evening", news=news)
+        except Exception as e:
+            logger.warning(f"LLMアドバイザーをスキップ: {e}")
+
+        # ────────────────────────────────────────
         # STEP 8: 夜通知送信
         # ────────────────────────────────────────
         logger.info("STEP 8: 夜通知送信")
-        send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count)
+        screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(entry_sets)}
+        try:
+            send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count,
+                                llm_feedback=llm_feedback, near_misses=near_misses,
+                                screening_stats=screening_stats)
+        except Exception as e:
+            logger.error(f"Slack通知送信失敗: {e}", exc_info=True)
+            log_error(_BATCH_TYPE, "send_evening_report", type(e).__name__, str(e))
 
         # ────────────────────────────────────────
         # STEP 9: DBバックアップ

@@ -150,6 +150,12 @@ def _init_test_db(conn):
             updated_at TEXT DEFAULT (datetime('now')),
             PRIMARY KEY (ticker, calc_date)
         );
+        CREATE TABLE IF NOT EXISTS llm_feedback_log (
+            id INTEGER PRIMARY KEY, feedback_date DATE, provider TEXT,
+            model TEXT, batch_type TEXT, prompt_tokens INTEGER,
+            completion_tokens INTEGER, response_text TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     today = date.today()

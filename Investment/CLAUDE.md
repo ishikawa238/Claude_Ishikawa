@@ -77,13 +77,15 @@ External APIs → price_history / index_snapshot (SQLite)
 | `entry_calculator.py` | Computes entry price, stop-loss, target, recommended amount → `trade_signal_log` |
 | `holdings_monitor.py` | Evaluates stop-loss hits and earnings alerts for open positions |
 | `notifier.py` | Builds and sends Slack messages (morning and evening reports) |
+| `llm_advisor.py` | Sends stock data + news to OpenAI/Anthropic/Gemini APIs and returns feedback for Slack notifications (config: `llm` section) |
+| `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
 | `report_generator.py` | Monthly Slack report |
 | `logger.py` | Logging setup — use `get_logger(__name__)` in every module; outputs to console + `logs/batch_YYYYMMDD.log` |
 
 ### Batch Scripts (`scripts/`)
 
-- `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → Slack → DB backup
-- `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → Slack
+- `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → LLM advisor → Slack → DB backup
+- `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → LLM advisor → Slack
 - `batch_monthly.py` — Universe master refresh + J-Quants fundamentals + monthly Slack report
 - `order_server.py` — Flask server that serves the daily report page (`/report`)
 
@@ -101,6 +103,7 @@ SQLite with WAL mode. Tables:
 - `trade_result_log` — manually recorded trade outcomes
 - `earnings_schedule` — JP earnings announcement dates from J-Quants
 - `fundamentals_snapshot` — JP financial data from J-Quants
+- `llm_feedback_log` — LLM advisor responses (date, provider, model, tokens, response text)
 - `batch_run_log`, `report_log`, `error_log` — operational logs
 
 `init_db.py` is idempotent (uses `IF NOT EXISTS`). Schema migrations are in `MIGRATION_STATEMENTS` using `try/except` for idempotency.
@@ -110,6 +113,8 @@ SQLite with WAL mode. Tables:
 - **EODHD** (`config.json > eodhd.api_key`) — daily EOD price data. Free plan allows ~20 calls/day; the bulk endpoint covers all exchange tickers in 1 call.
 - **J-Quants** (`config.json > jquants.api_key`) — JP fundamentals and earnings; uses refresh token.
 - **Slack** (`config.json > slack.webhook_url`) — Incoming Webhook for all notifications.
+- **OpenAI** (`config.json > llm.openai.api_key`, optional) — LLM advisor feedback via Chat Completions API. Disabled by default (`llm.enabled: false`).
+- **Anthropic** (`config.json > llm.anthropic.api_key`, optional) — LLM advisor feedback via Messages API. Disabled by default.
 
 ### Holdings CSV
 

@@ -392,6 +392,25 @@ DDL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(status)",
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(ticker, status)",
+
+    # ----------------------------------------------------------
+    # LLM フィードバックログ
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS llm_feedback_log (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        feedback_date DATE    NOT NULL,
+        batch_type    TEXT    NOT NULL,
+        provider      TEXT    NOT NULL,
+        model         TEXT    NOT NULL,
+        prompt_tokens INTEGER,
+        output_tokens INTEGER,
+        response_text TEXT    NOT NULL,
+        latency_ms    INTEGER,
+        created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_llm_feedback_date ON llm_feedback_log(feedback_date)",
 ]
 
 # 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）

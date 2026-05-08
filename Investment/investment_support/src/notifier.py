@@ -45,6 +45,24 @@ _HOLDING_EMOJI = {
     "sell_watch":  "🟡",
     "hold":        "🟢",
 }
+_NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
+    "A": {
+        "cond_a_ma200_rising":  "MA200上昇中",
+        "cond_a_ma_aligned":    "短期〜長期MA整列",
+        "cond_a_52w_high_near": "52週高値更新圏",
+        "cond_a_volume_surge":  "出来高急増",
+        "cond_a_rsi_ok":        "RSI適正範囲",
+        "cond_a_above_ma25":    "終値がMA25の上",
+    },
+    "B": {
+        "cond_b_ma200_rising":  "MA200上昇中",
+        "cond_b_ma_aligned":    "中期〜長期MA整列",
+        "cond_b_pullback_touched": "MA25へのタッチ",
+        "cond_b_bounced":       "MA25からの反発",
+        "cond_b_ma25_rising":   "MA25上昇中",
+        "cond_b_rsi_ok":        "RSI適正範囲",
+    },
+}
 
 
 # ============================================================
@@ -56,15 +74,22 @@ def send_morning_report(
     market_env: dict,
     candidates: list[dict],
     holdings: list[dict],
+    *,
+    llm_feedback: list[dict] | None = None,
+    near_misses: list[dict] | None = None,
+    screening_stats: dict | None = None,
 ) -> bool:
     """
     朝通知を生成して Slack に送信する。
 
     引数:
-        target_date: 対象日
-        market_env:  market_environment テーブルの行
-        candidates:  エントリーセット付き買い候補（最大2件）
-        holdings:    evaluate_holdings() の返り値
+        target_date:      対象日
+        market_env:       market_environment テーブルの行
+        candidates:       エントリーセット付き買い候補（最大2件）
+        holdings:         evaluate_holdings() の返り値
+        llm_feedback:     LLM アドバイザーからのフィードバック（任意）
+        near_misses:      惜しかった銘柄（任意）
+        screening_stats:  スクリーニング統計（screened, candidates, entry_sets 件数）
     """
     mode = market_env.get("mode", "caution")
     today_str = target_date.strftime("%Y-%m-%d (%a)")
@@ -77,7 +102,10 @@ def send_morning_report(
     # 強制損切り（最優先）
     forced = [h for h in holdings if h["label"] == "forced_stop"]
     if forced:
-        blocks.append(_section(f"🚨 *【要即時対応】損切り対象（{len(forced)}件）*"))
+        blocks.append(_section(
+            f"🚨 *【要即時対応】損切り対象（{len(forced)}件）*\n"
+            "損切りラインを割り込んでいます。*成行売りでの手仕舞いを検討してください。*"
+        ))
         for h in forced:
             blocks.append(_holding_block(h, color="danger"))
         blocks.append(_divider())
@@ -115,12 +143,24 @@ def send_morning_report(
         ))
         for es in morning_candidates:
             blocks.append(_entry_set_block(es))
+        blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
     elif mode != "normal":
+        reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
             f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
             "保有銘柄の損切り判定は通常通り実施しています。"
+            + (f"\n\n{reason}" if reason else "")
         ))
+        blocks.extend(_near_miss_section(near_misses))
+        blocks.append(_divider())
+    else:
+        reason = _no_candidates_reason(screening_stats, near_misses, mode)
+        blocks.append(_section(
+            "本日はスコア基準を満たす買い候補が検出されませんでした。"
+            + (f"\n\n{reason}" if reason else "")
+        ))
+        blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
 
     # 保有銘柄サマリー
@@ -131,6 +171,9 @@ def send_morning_report(
         f"継続保有: {len(hold_n)}件 ｜ 売り検討: {len(sell_w)}件 ｜ "
         f"SL接近: {len(sl_near)}件 ｜ 強制損切り: {len(forced)}件"
     ))
+
+    # LLM アドバイザー意見
+    blocks.extend(_llm_feedback_blocks(llm_feedback))
 
     # フッター：詳細レポートリンク
     blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
@@ -149,6 +192,10 @@ def send_evening_report(
     entry_sets: list[dict],
     holdings: list[dict],
     failed_tickers_count: int = 0,
+    *,
+    llm_feedback: list[dict] | None = None,
+    near_misses: list[dict] | None = None,
+    screening_stats: dict | None = None,
 ) -> bool:
     """
     夜通知を生成して Slack に送信する。
@@ -159,6 +206,9 @@ def send_evening_report(
         entry_sets:           エントリーセット付き候補（最大3件）
         holdings:             evaluate_holdings() の返り値
         failed_tickers_count: データ取得失敗銘柄数
+        llm_feedback:         LLM アドバイザーからのフィードバック（任意）
+        near_misses:          惜しかった銘柄（任意）
+        screening_stats:      スクリーニング統計（screened, candidates, entry_sets 件数）
     """
     mode = market_env.get("mode", "caution")
     today_str = target_date.strftime("%Y-%m-%d (%a)")
@@ -184,16 +234,25 @@ def send_evening_report(
         for i, es in enumerate(evening_sets, start=1):
             blocks.append(_section(f"━ No.{i} ━━━━━━━━━━━━━━━━━━━━━━━━"))
             blocks.append(_entry_set_block(es, show_conditions=True))
+        blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
     elif mode != "normal":
+        reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
             f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
             "保有銘柄の損切り判定は通常通り実施しています。\n"
             + _mode_detail(market_env)
+            + (f"\n\n{reason}" if reason else "")
         ))
+        blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
     else:
-        blocks.append(_section("本日はスコア基準を満たす買い候補が検出されませんでした。"))
+        reason = _no_candidates_reason(screening_stats, near_misses, mode)
+        blocks.append(_section(
+            "本日はスコア基準を満たす買い候補が検出されませんでした。"
+            + (f"\n\n{reason}" if reason else "")
+        ))
+        blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
 
     # 決算アラート
@@ -231,6 +290,9 @@ def send_evening_report(
             f"⚠️ データ取得失敗: {failed_tickers_count}件（logs/を確認してください）"
         ))
 
+    # LLM アドバイザー意見
+    blocks.extend(_llm_feedback_blocks(llm_feedback))
+
     # フッター：詳細レポートリンク
     blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
 
@@ -243,6 +305,35 @@ def send_evening_report(
 # ============================================================
 
 # _section, _divider, _print_blocks は shared.slack から import 済み
+
+_PROVIDER_DISPLAY = {"openai": "ChatGPT", "anthropic": "Claude", "gemini": "Gemini"}
+
+
+def _llm_feedback_blocks(feedback: list[dict] | None) -> list[dict]:
+    """LLM フィードバックを Slack Block Kit セクションに変換する。"""
+    if not feedback:
+        return []
+
+    valid = [fb for fb in feedback if not fb.get("error") and fb.get("text")]
+    if not valid:
+        return []
+
+    blocks: list[dict] = []
+    blocks.append(_divider())
+    blocks.append(_section("🤖 *AIアドバイザー意見*"))
+
+    for fb in valid:
+        name = _PROVIDER_DISPLAY.get(fb["provider"], fb["provider"])
+        model = fb.get("model", "")
+        # 要約: 先頭3行のみ表示し、全文はダッシュボードに誘導
+        full_text = fb["text"]
+        lines = full_text.strip().split("\n")
+        summary = "\n".join(lines[:3])
+        if len(lines) > 3:
+            summary += f"\n_… 続きは <{_REPORT_URL}|詳細レポート> で確認_"
+        blocks.append(_section(f"*💬 {name}（{model}）:*\n{summary}"))
+
+    return blocks
 
 
 def _market_env_block(env: dict, detail: bool = False) -> dict:
@@ -306,6 +397,12 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
         warn_str = "\n⚠️ 損切り幅が広めです（高ボラティリティ銘柄）"
     if es.get("_warn_earnings"):
         warn_str += f"\n📅 {es['_warn_earnings']} — エントリー判断に注意"
+    if es.get("_warn_at_capacity"):
+        remaining = es.get("_remaining_slots", 0)
+        if remaining <= 0:
+            warn_str += "\n🈵 保有枠が満杯です — 新規エントリーは既存ポジション整理後に検討してください"
+        else:
+            warn_str += f"\n📦 保有枠残り{remaining}枠"
 
     entry  = es["entry_price"]
     stop   = es["stop_loss_price"]
@@ -592,13 +689,127 @@ def _ma_alignment_line(es: dict) -> str:
     return f"\n📐 MA: {ma_str} ({label})"
 
 
+def _no_candidates_reason(
+    screening_stats: dict | None,
+    near_misses: list[dict] | None,
+    mode: str,
+) -> str:
+    """買い候補が0件だった理由を診断して返す。"""
+    lines: list[str] = []
+
+    if mode != "normal":
+        lines.append(f"→ {_MODE_LABEL[mode]}のため新規買い候補を停止中")
+    elif screening_stats:
+        screened = screening_stats.get("screened", 0)
+        cand = screening_stats.get("candidates", 0)
+        entry = screening_stats.get("entry_sets", 0)
+
+        lines.append(f"📊 スクリーニング通過: {screened:,}銘柄 → candidate: {cand}銘柄 → 通知: {entry}銘柄")
+
+        if cand == 0:
+            lines.append("→ スコア50点以上の銘柄がありませんでした")
+        elif entry == 0:
+            lines.append(f"→ {cand}銘柄がcandidate判定されましたが、損切り幅・資金条件で全て見送り")
+
+    # near_misses から最高スコアを抽出
+    if near_misses:
+        top = near_misses[0]
+        top_score = int(top.get("final_score") or 0)
+        top_ticker = top.get("ticker", "")
+        top_name = top.get("name") or top_ticker
+        lines.append(f"🏅 最高スコア: {top_score}点（{top_ticker} {top_name}）")
+
+    return "\n".join(lines)
+
+
+_NEAR_MISS_TYPE_LABEL = {
+    "filtered":    "🚫 スコアは十分ですが損切り幅・資金条件で見送り",
+    "demoted":     "⚠️ 警戒モードのためスコア減点で降格",
+    "score_short": None,  # スコア不足は gap 表示で代替
+}
+
+
+def _near_miss_section(near_misses: list[dict] | None) -> list[dict]:
+    """通知対象にならなかった注目銘柄を Slack Block Kit セクションのリストで返す。"""
+    if not near_misses:
+        return []
+
+    blocks: list[dict] = []
+    blocks.append(_section("👀 *惜しかった銘柄*"))
+
+    for i, nm in enumerate(near_misses[:2], start=1):
+        ticker = nm.get("ticker", "")
+        name = nm.get("name") or ticker
+        market = nm.get("market", "")
+        pattern = nm.get("pattern") or "A"
+        final_score = int(nm.get("final_score") or 0)
+        nm_type = nm.get("near_miss_type", "score_short")
+
+        # 見送り理由
+        type_label = _NEAR_MISS_TYPE_LABEL.get(nm_type)
+        if nm_type == "score_short":
+            gap = 50 - final_score
+            status_str = f"スコア: *{final_score}点*（あと{gap}点で候補入り）"
+        else:
+            status_str = f"スコア: *{final_score}点*"
+            if type_label:
+                status_str += f"\n{type_label}"
+
+        # サブスコア
+        sub_parts = []
+        t = nm.get("trend_score")
+        a = nm.get("pattern_a_score")
+        b = nm.get("pattern_b_score")
+        lq = nm.get("liquidity_score")
+        if t is not None:
+            sub_parts.append(f"トレンド:{int(t)}")
+        if a is not None:
+            sub_parts.append(f"ブレイクアウト:{int(a)}")
+        if b is not None:
+            sub_parts.append(f"押し目:{int(b)}")
+        if lq is not None:
+            sub_parts.append(f"流動性:{int(lq)}")
+        sub_str = "📈 " + " / ".join(sub_parts) if sub_parts else ""
+
+        # 条件チェックリスト
+        cond_labels = _NEAR_MISS_COND_LABELS.get(pattern, {})
+        cond_lines = []
+        for col, desc in cond_labels.items():
+            val = nm.get(col)
+            if val == 1:
+                cond_lines.append(f"  ✅ {desc}")
+            elif val == 0:
+                cond_lines.append(f"  ❌ {desc} ← 未達")
+        cond_str = "\n".join(cond_lines)
+
+        reason = nm.get("recommend_reason") or ""
+        reason_str = f"\n💡 {reason}" if reason else ""
+
+        p_name = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
+        text = (
+            f"━ {i}. [{pattern}] {ticker} {name} ({market}) ━━━━━━━━━\n"
+            f"パターン：{p_name}\n"
+            f"{status_str}\n"
+            f"{sub_str}\n"
+            f"{cond_str}"
+            f"{reason_str}"
+        )
+        blocks.append(_section(text))
+
+    blocks.append(_section(
+        "📋 <http://127.0.0.1:5100/screening?filter=watch|Screeningで監視銘柄の全件を見る>"
+    ))
+    blocks.append(_divider())
+    return blocks
+
+
 def _build_tomorrow_notes(holdings: list[dict]) -> list[str]:
     notes = []
     for h in holdings:
         if h["label"] == "forced_stop":
-            notes.append(f"・{h['ticker']} {h.get('name','')}：損切りライン割込み → 本日寄付での手仕舞い推奨")
+            notes.append(f"・{h['ticker']} {h.get('name','')}：損切りライン割込み → *翌営業日の成行売りを検討してください*")
         elif h["label"] == "sl_near":
-            notes.append(f"・{h['ticker']} {h.get('name','')}：損切りライン接近 → 引き続き注視")
+            notes.append(f"・{h['ticker']} {h.get('name','')}：損切りライン接近 → 引き続き注視（割込み時は即手仕舞い）")
         elif h["label"] == "sell_watch":
             notes.append(f"・{h['ticker']} {h.get('name','')}：売り検討シグナル → 判断要")
     return notes

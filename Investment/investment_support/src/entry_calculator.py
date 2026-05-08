@@ -7,12 +7,11 @@
 - 損切り幅（%）
 - 利確目安（リスクリワード 2:1）
 - 推奨投入額（総資金 × 2% / 損切り幅）
-- 投入額の上限制御（総資金・同時保有上限・取引単位）
+- 投入額の上限制御（総資金・同時保有上限）
 - 警告フラグ（損切り幅が狭すぎ / 広すぎ）
 """
 
 import json
-import math
 from datetime import date, datetime
 
 from src.config import CONFIG
@@ -39,7 +38,7 @@ _EARNINGS_WARN  = int(CONFIG.get("jquants", {}).get("earnings_alert_days_warning
 # エントリーセット計算
 # ============================================================
 
-def calc_entry_set(signal: dict) -> dict:
+def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     """
     シグナル1件のエントリーセットを計算して返す。
 
@@ -81,19 +80,10 @@ def calc_entry_set(signal: dict) -> dict:
     if recommended_amount is not None:
         # (1) 総資金を超えない
         recommended_amount = min(recommended_amount, capital)
-        # (2) 同時保有上限を考慮（1ポジションあたりの上限）
-        max_per_position = capital / _MAX_HOLDINGS
+        # (2) 既存保有数を考慮した1ポジションあたりの上限
+        effective_slots = max(_MAX_HOLDINGS, open_holdings_count + 1)
+        max_per_position = capital / effective_slots
         recommended_amount = min(recommended_amount, max_per_position)
-
-    # --- 日本株: 100株単位チェック ---
-    skip_reason = None
-    if market == "JP" and recommended_amount is not None and entry_price > 0:
-        purchasable_shares = math.floor(recommended_amount / entry_price / 100) * 100
-        if purchasable_shares <= 0:
-            skip_reason = "資金不足のため見送り"
-            logger.info(f"日本株100株単位で購入不可: {ticker}（必要額 {entry_price * 100:,.0f}円 > 投入上限 {recommended_amount:,.0f}円）")
-        else:
-            recommended_amount = purchasable_shares * entry_price
 
     # --- 決算近接チェック ---
     warn_earnings = _check_earnings_near(ticker, signal["date"])
@@ -114,12 +104,12 @@ def calc_entry_set(signal: dict) -> dict:
         "recommended_amount": round(recommended_amount, 0) if recommended_amount else None,
         "market_mode":        signal.get("market_mode", "normal"),
         "conditions_met":     json.dumps(conditions_met, ensure_ascii=False),
-        # 見送り理由（通知側で使用・DB保存対象外）
-        "_skip_reason": skip_reason,
         # 警告フラグ（通知側で使用・DB保存対象外）
         "_warn_narrow":  False,  # 1%未満は上流で除外済み
         "_warn_wide":    stop_loss_pct > _WARN_MAX_PCT,
         "_warn_earnings": warn_earnings,
+        "_warn_at_capacity": open_holdings_count >= _MAX_HOLDINGS,
+        "_remaining_slots": max(_MAX_HOLDINGS - open_holdings_count, 0),
         # 通知の根拠数値（DB保存対象外・notifier で使用）
         "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
         "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
@@ -150,10 +140,11 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
 
     返り値: 保存したエントリーセットのリスト（通知生成に使用）
     """
+    open_count = _count_open_holdings()
     saved = []
     for sig in candidates:
         sig["market_mode"] = market_mode
-        entry_set = calc_entry_set(sig)
+        entry_set = calc_entry_set(sig, open_holdings_count=open_count)
         if not entry_set:
             continue
 
@@ -172,6 +163,13 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
 # ============================================================
 # ヘルパー
 # ============================================================
+
+def _count_open_holdings() -> int:
+    """保有中（未決済）のポジション数を返す。"""
+    with get_connection() as conn:
+        row = fetch_one(conn, "SELECT COUNT(*) AS cnt FROM holdings WHERE is_closed = 0")
+    return row["cnt"] if row else 0
+
 
 def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
     """充足した条件の説明文リストを返す（Slack通知の理由欄に使用）。"""

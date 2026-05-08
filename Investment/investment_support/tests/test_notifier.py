@@ -5,6 +5,14 @@ _entry_set_block() と _holding_block() の出力文字列に
 期待するフィールドが含まれるか検証する。
 """
 
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PROJECT_ROOT.parent.parent  # Ishikawa238/
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT))
+
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -23,8 +31,9 @@ _CONFIG_MOCK = {
                 "max_risk_per_trade_pct": "2", "default_stop_loss_pct": "8"},
 }
 
-with patch("src.config.CONFIG", _CONFIG_MOCK):
-    from src import notifier
+import src.config as _src_config
+_src_config.CONFIG = _CONFIG_MOCK
+from src import notifier
 
 
 def _make_entry_set(**kwargs):
@@ -307,6 +316,150 @@ class PortfolioSummaryTests(unittest.TestCase):
         result = notifier._portfolio_summary(holdings)
         self.assertIn("算出不可", result)
         self.assertIn("平均保有日数: 10日", result)
+
+
+def _make_near_miss(**kwargs):
+    base = {
+        "ticker": "6758",
+        "name": "ソニーグループ",
+        "market": "JP",
+        "pattern": "A",
+        "label": "watch",
+        "final_score": 43,
+        "recommend_rank": "Watch",
+        "recommend_reason": "条件の充足が限定的",
+        "trend_score": 72,
+        "pattern_a_score": 35,
+        "pattern_b_score": 50,
+        "liquidity_score": 80,
+        "cond_a_ma200_rising": 1,
+        "cond_a_ma_aligned": 1,
+        "cond_a_52w_high_near": 0,
+        "cond_a_volume_surge": 1,
+        "cond_a_rsi_ok": 0,
+        "cond_a_above_ma25": 1,
+        "cond_b_ma200_rising": None,
+        "cond_b_ma_aligned": None,
+        "cond_b_pullback_touched": None,
+        "cond_b_bounced": None,
+        "cond_b_ma25_rising": None,
+        "cond_b_rsi_ok": None,
+    }
+    base.update(kwargs)
+    return base
+
+
+class NearMissSectionTests(unittest.TestCase):
+
+    def _get_texts(self, near_misses):
+        blocks = notifier._near_miss_section(near_misses)
+        return [b["text"]["text"] for b in blocks if b.get("type") == "section"]
+
+    def test_empty_returns_no_blocks(self):
+        self.assertEqual(notifier._near_miss_section(None), [])
+        self.assertEqual(notifier._near_miss_section([]), [])
+
+    def test_header_shown(self):
+        texts = self._get_texts([_make_near_miss()])
+        self.assertTrue(any("惜しかった銘柄" in t for t in texts))
+
+    def test_score_gap_shown_for_score_short(self):
+        texts = self._get_texts([_make_near_miss(final_score=43, near_miss_type="score_short")])
+        combined = "\n".join(texts)
+        self.assertIn("43点", combined)
+        self.assertIn("あと7点", combined)
+
+    def test_filtered_type_shows_reason(self):
+        texts = self._get_texts([_make_near_miss(
+            final_score=72, near_miss_type="filtered", label="candidate",
+        )])
+        combined = "\n".join(texts)
+        self.assertIn("72点", combined)
+        self.assertIn("損切り幅・資金条件で見送り", combined)
+        self.assertNotIn("あと", combined)
+
+    def test_demoted_type_shows_reason(self):
+        texts = self._get_texts([_make_near_miss(
+            final_score=65, near_miss_type="demoted",
+        )])
+        combined = "\n".join(texts)
+        self.assertIn("65点", combined)
+        self.assertIn("警戒モード", combined)
+
+    def test_sub_scores_shown(self):
+        texts = self._get_texts([_make_near_miss(
+            trend_score=72, pattern_a_score=35,
+            pattern_b_score=50, liquidity_score=80,
+        )])
+        combined = "\n".join(texts)
+        self.assertIn("トレンド:72", combined)
+        self.assertIn("ブレイクアウト:35", combined)
+
+    def test_conditions_pass_fail_shown(self):
+        texts = self._get_texts([_make_near_miss(
+            cond_a_ma200_rising=1, cond_a_52w_high_near=0,
+        )])
+        combined = "\n".join(texts)
+        self.assertIn("✅ MA200上昇中", combined)
+        self.assertIn("❌ 52週高値更新圏 ← 未達", combined)
+
+    def test_pattern_b_conditions_shown(self):
+        nm = _make_near_miss(
+            pattern="B",
+            cond_a_ma200_rising=None, cond_a_ma_aligned=None,
+            cond_a_52w_high_near=None, cond_a_volume_surge=None,
+            cond_a_rsi_ok=None, cond_a_above_ma25=None,
+            cond_b_ma200_rising=1, cond_b_ma_aligned=1,
+            cond_b_pullback_touched=0, cond_b_bounced=0,
+            cond_b_ma25_rising=1, cond_b_rsi_ok=1,
+        )
+        texts = self._get_texts([nm])
+        combined = "\n".join(texts)
+        self.assertIn("✅ MA200上昇中", combined)
+        self.assertIn("❌ MA25へのタッチ ← 未達", combined)
+
+    def test_reason_shown(self):
+        texts = self._get_texts([_make_near_miss(recommend_reason="トレンドは良好")])
+        combined = "\n".join(texts)
+        self.assertIn("トレンドは良好", combined)
+
+    def test_max_three_shown(self):
+        nms = [_make_near_miss(ticker=f"T{i}") for i in range(5)]
+        texts = self._get_texts(nms)
+        combined = "\n".join(texts)
+        self.assertIn("T0", combined)
+        self.assertIn("T2", combined)
+        self.assertNotIn("T3", combined)
+
+
+class NoCandidatesReasonTests(unittest.TestCase):
+
+    def test_no_stats_no_near_misses(self):
+        result = notifier._no_candidates_reason(None, None, "normal")
+        self.assertEqual(result, "")
+
+    def test_no_candidates_scored_high_enough(self):
+        stats = {"screened": 1200, "candidates": 0, "entry_sets": 0}
+        result = notifier._no_candidates_reason(stats, None, "normal")
+        self.assertIn("1,200銘柄", result)
+        self.assertIn("candidate: 0銘柄", result)
+        self.assertIn("スコア50点以上の銘柄がありません", result)
+
+    def test_candidates_filtered_by_entry_calc(self):
+        stats = {"screened": 1200, "candidates": 3, "entry_sets": 0}
+        result = notifier._no_candidates_reason(stats, None, "normal")
+        self.assertIn("3銘柄がcandidate判定されました", result)
+        self.assertIn("損切り幅・資金条件で全て見送り", result)
+
+    def test_caution_mode_shows_mode_reason(self):
+        result = notifier._no_candidates_reason(None, None, "caution")
+        self.assertIn("警戒モード", result)
+
+    def test_top_score_from_near_misses(self):
+        nms = [_make_near_miss(ticker="6758", name="ソニー", final_score=47)]
+        result = notifier._no_candidates_reason(None, nms, "normal")
+        self.assertIn("47点", result)
+        self.assertIn("6758", result)
 
 
 if __name__ == "__main__":

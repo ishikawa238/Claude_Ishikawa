@@ -13,6 +13,8 @@
 - 市場全体のトレンドを判定し、警戒時は新規買いを自動停止
 - 朝（07:30）と夜（20:30）の2回、Slackで通知
 - Webダッシュボード（`http://127.0.0.1:5100/report`）で保有状況・シグナル履歴・チャートを確認
+- スクリーニングファネルで全銘柄→最終候補への絞り込み過程・各条件の充足率を可視化
+- LLMアドバイザー（任意）：買い候補・保有銘柄のデータに加え、直近の市場ニュースをChatGPT・Claude・Geminiに自動送信し、フィードバックをSlack通知に表示
 
 ## セットアップ
 
@@ -37,6 +39,9 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 | EODHD | 日次価格データ（US）・インデックス | `eodhd.api_key` | $19.99/月 |
 | Slack Incoming Webhook | 通知送信 | `slack.webhook_url` | 無料 |
 | J-Quants（任意） | JP財務データ・決算予定 | `jquants.api_key` | 無料プランあり |
+| OpenAI（任意） | LLMアドバイザー（ChatGPT） | `llm.openai.api_key` | 従量制（月額約$0.15） |
+| Anthropic（任意） | LLMアドバイザー（Claude） | `llm.anthropic.api_key` | 従量制（月額約$1.50） |
+| Google Gemini（任意） | LLMアドバイザー（Gemini） | `llm.gemini.api_key` | 無料枠あり（月額約$0.05） |
 
 ## 日常の使い方
 
@@ -157,6 +162,8 @@ investment_support/
 │   ├── backtester.py         # バックテスト（過去シグナルの期待値検証）
 │   ├── paper_trading.py      # ペーパートレード（仮想売買記録・日次更新）
 │   ├── notifier.py           # Slack通知生成・送信
+│   ├── llm_advisor.py        # LLMアドバイザー（ChatGPT/Claude/Gemini自動フィードバック）
+│   ├── news_fetcher.py       # ニュース取得（Google News RSS）
 │   └── report_generator.py   # 月次レポート生成（運用統計付き）
 │
 ├── scripts/
@@ -193,6 +200,7 @@ investment_support/
 | `trade_result_log` | トレード実績（手動記録） |
 | `fundamentals_snapshot` | JP財務データ（J-Quants） |
 | `earnings_schedule` | JP決算発表予定日 |
+| `llm_feedback_log` | LLMアドバイザーの応答ログ |
 
 `init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [detailed_design.md](detailed_design.md) セクション2を参照。
 

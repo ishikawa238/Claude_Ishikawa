@@ -86,5 +86,34 @@
   "moomoo": {
     "host": "127.0.0.1",
     "port": 11111
+  },
+
+  "_llm_comment": "llm セクションは任意。有効にすると、バッチ実行時に買い候補・保有銘柄のデータを LLM に送り、フィードバックを Slack 通知に含める。enabled を true にし、使用するプロバイダーの api_key を設定する。",
+  "llm": {
+    "enabled": false,
+    "openai": {
+      "enabled": true,
+      "api_key": "YOUR_OPENAI_API_KEY",
+      "model": "gpt-4.1",
+      "max_tokens": 1600,
+      "temperature": 0.3,
+      "timeout_sec": 60
+    },
+    "anthropic": {
+      "enabled": true,
+      "api_key": "YOUR_ANTHROPIC_API_KEY",
+      "model": "claude-opus-4-6",
+      "max_tokens": 1600,
+      "temperature": 0.3,
+      "timeout_sec": 60
+    },
+    "gemini": {
+      "enabled": true,
+      "api_key": "YOUR_GEMINI_API_KEY",
+      "model": "gemini-2.5-pro",
+      "max_tokens": 1600,
+      "temperature": 0.3,
+      "timeout_sec": 60
+    }
   }
 }

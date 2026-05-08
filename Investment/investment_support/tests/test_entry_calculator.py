@@ -84,32 +84,23 @@ class CalcEntrySetCapTests(unittest.TestCase):
         self.assertLessEqual(result["recommended_amount"], 200000 / 3 + 1)
 
 
-class CalcEntrySetJPUnitTests(unittest.TestCase):
-    """日本株の100株単位チェックテスト"""
+class CalcEntrySetNoShareUnitSkipTests(unittest.TestCase):
+    """端株対応: 株数チェックによる見送りが発生しないことを確認"""
 
-    def test_jp_stock_100_share_unit(self):
-        """日本株は100株単位で丸められる"""
-        sig = _make_signal(close=500.0, atr14=20.0)  # SL幅 = 8%
+    def test_jp_expensive_stock_not_skipped(self):
+        """高額JP株でも端株取引可能なため見送りにならない"""
+        # close=100000, capital/3=約6.7万円 → 旧ロジックでは見送りだった
+        sig = _make_signal(close=100000.0, atr14=4000.0)
         result = calc_entry_set(sig)
+        self.assertNotEqual(result, {})
         self.assertIsNotNone(result.get("recommended_amount"))
-        # recommended_amount / close が100の倍数になる
-        shares = result["recommended_amount"] / 500.0
-        self.assertEqual(shares % 100, 0)
 
-    def test_jp_stock_skip_when_unit_too_expensive(self):
-        """100株の購入に必要な金額が投入上限を超える場合は見送り"""
-        # close=1000 → 100株=10万円、capital/3=約6.7万円 → 購入不可
-        sig = _make_signal(close=1000.0, atr14=40.0)
-        result = calc_entry_set(sig)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.get("_skip_reason"), "資金不足のため見送り")
-
-    def test_us_stock_no_100_share_rounding(self):
-        """米国株は100株単位の制約がない"""
+    def test_us_stock_not_skipped(self):
+        """米国株も見送りにならない"""
         sig = _make_signal(market="US", ticker="AAPL", close=150.0, atr14=6.0)
         result = calc_entry_set(sig)
+        self.assertNotEqual(result, {})
         self.assertIsNotNone(result.get("recommended_amount"))
-        self.assertIsNone(result.get("_skip_reason"))
 
 
 class CalcEntrySetStopLossFilterTests(unittest.TestCase):
@@ -136,6 +127,42 @@ class CalcEntrySetStopLossFilterTests(unittest.TestCase):
         self.assertNotEqual(result, {})
         self.assertFalse(result.get("_warn_narrow"))
         self.assertFalse(result.get("_warn_wide"))
+
+
+class CalcEntrySetHoldingsCapacityTests(unittest.TestCase):
+    """既存保有数を考慮した投入額・警告テスト"""
+
+    def test_no_holdings_uses_default_cap(self):
+        """保有0件のとき従来どおり capital / max_holdings が上限"""
+        sig = _make_signal(close=2500.0, atr14=50.0)  # SL幅 = 4%
+        result = calc_entry_set(sig, open_holdings_count=0)
+        self.assertLessEqual(result["recommended_amount"], 200000 / 3 + 1)
+        self.assertFalse(result["_warn_at_capacity"])
+        self.assertEqual(result["_remaining_slots"], 3)
+
+    def test_at_capacity_warns(self):
+        """保有数が max_holdings に達したら警告フラグが立つ"""
+        sig = _make_signal(close=2500.0, atr14=100.0)
+        result = calc_entry_set(sig, open_holdings_count=3)
+        self.assertTrue(result["_warn_at_capacity"])
+        self.assertEqual(result["_remaining_slots"], 0)
+
+    def test_over_capacity_reduces_amount(self):
+        """保有数が max_holdings を超えると1ポジションあたりの上限が下がる"""
+        sig = _make_signal(close=2500.0, atr14=50.0)  # SL幅 = 4%
+        result_0 = calc_entry_set(sig, open_holdings_count=0)
+        result_4 = calc_entry_set(sig, open_holdings_count=4)
+        # open=4 → effective_slots = max(3, 5) = 5 → cap = 200000/5 = 40000
+        # open=0 → effective_slots = max(3, 1) = 3 → cap = 200000/3 ≈ 66667
+        self.assertLess(result_4["recommended_amount"], result_0["recommended_amount"])
+        self.assertLessEqual(result_4["recommended_amount"], 200000 / 5 + 1)
+
+    def test_within_capacity_no_warning(self):
+        """保有数が max_holdings 未満なら警告なし"""
+        sig = _make_signal(close=2500.0, atr14=100.0)
+        result = calc_entry_set(sig, open_holdings_count=2)
+        self.assertFalse(result["_warn_at_capacity"])
+        self.assertEqual(result["_remaining_slots"], 1)
 
 
 if __name__ == "__main__":

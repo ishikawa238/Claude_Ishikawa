@@ -6,6 +6,7 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
 エンドポイント:
   /health              - ヘルスチェック
   /report              - メインダッシュボード
+  /screening           - スクリーニング銘柄一覧
   /stock/<ticker>      - 個別銘柄詳細ページ
   /performance         - トレード成績分析ページ
   /api/portfolio-pnl   - ポートフォリオ損益推移 JSON
@@ -15,12 +16,14 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
   /api/perf-monthly    - 月別損益 JSON
   /api/perf-cumulative - 累積損益 JSON
   /api/sector-alloc    - セクター配分 JSON
+  /api/screening-funnel - スクリーニングファネル統計 JSON
 
 実行方法（investment_support/ から）:
     python -m scripts.order_server
 """
 
 import json
+import math
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -43,6 +46,16 @@ _SERVER_CFG = CONFIG.get("report_server", {})
 _HOST = _SERVER_CFG.get("host", "127.0.0.1")
 _PORT = int(_SERVER_CFG.get("port", 5100))
 
+# 見送り条件の閾値（entry_calculator と同じ設定を参照）
+_SIG_CFG = CONFIG.get("signal", {})
+_CAP_CFG = CONFIG.get("capital", {})
+_SKIP_SL_MIN_PCT = float(_SIG_CFG.get("stop_loss_warning_min_pct", 1.0))
+_SKIP_ATR_MULT = float(_SIG_CFG.get("atr_stop_multiplier", 2.0))
+_SKIP_CAPITAL_JPY = float(_CAP_CFG.get("total_capital_jpy", 200000))
+_SKIP_CAPITAL_USD = float(_CAP_CFG.get("total_capital_usd", 1500))
+_SKIP_RISK_PCT = float(_CAP_CFG.get("max_risk_per_trade_pct", 2.0)) / 100
+_SKIP_MAX_HOLDINGS = int(_CAP_CFG.get("max_concurrent_holdings", 3))
+
 app = Flask(__name__)
 
 # ============================================================
@@ -53,6 +66,24 @@ _MODE_LABEL = {"normal": "通常モード", "caution": "警戒モード", "full_
 _MODE_COLOR = {"normal": "#4CAF50", "caution": "#FF9800", "full_caution": "#D32F2F"}
 _PATTERN_NAME = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
 _RANK_COLOR = {"S": "#D32F2F", "A": "#FF5722", "B": "#FF9800", "C": "#2196F3", "Watch": "#9E9E9E"}
+_LABEL_COLOR = {"candidate": "#4CAF50", "watch": "#FF9800", "skip": "#9E9E9E"}
+_LABEL_DISPLAY = {"candidate": "候補", "watch": "監視", "skip": "スキップ"}
+_COND_A_LABELS = [
+    ("cond_a_ma200_rising",  "MA200上昇"),
+    ("cond_a_ma_aligned",    "MA整列"),
+    ("cond_a_52w_high_near", "52週高値近傍"),
+    ("cond_a_volume_surge",  "出来高急増"),
+    ("cond_a_rsi_ok",        "RSI適正"),
+    ("cond_a_above_ma25",    "MA25上方"),
+]
+_COND_B_LABELS = [
+    ("cond_b_ma200_rising",     "MA200上昇"),
+    ("cond_b_ma_aligned",       "MA整列"),
+    ("cond_b_pullback_touched", "押し目タッチ"),
+    ("cond_b_bounced",          "反発確認"),
+    ("cond_b_ma25_rising",      "MA25上昇"),
+    ("cond_b_rsi_ok",           "RSI適正"),
+]
 
 
 # ============================================================
@@ -105,6 +136,20 @@ def _common_head(title: str) -> str:
   .toggle-btn {{ font-size: 0.8rem; cursor: pointer; color: #1976D2; border: 1px solid #1976D2;
                  background: #fff; padding: 3px 12px; border-radius: 16px; }}
   .toggle-btn:hover {{ background: #E3F2FD; }}
+  .filter-group {{ display: inline-flex; gap: 4px; margin-right: 16px; }}
+  .filter-btn {{ font-size: 0.8rem; cursor: pointer; padding: 3px 12px; border-radius: 16px;
+                 border: 1px solid #ccc; background: #fff; color: #666; }}
+  .filter-btn:hover {{ background: #f5f5f5; }}
+  .filter-btn.active {{ background: #1976D2; color: #fff; border-color: #1976D2; }}
+  /* AI アドバイザーカード */
+  .llm-card {{ border-radius: 12px; padding: 16px; background: #fff;
+               box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-top: 3px solid #ccc; }}
+  .llm-card .llm-header {{ display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }}
+  .llm-card .llm-provider {{ font-weight: 700; font-size: 0.95rem; }}
+  .llm-card .llm-model {{ font-size: 0.75rem; color: #888; }}
+  .llm-card .llm-body {{ font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap;
+                         word-break: break-word; }}
+  .llm-card .llm-meta {{ font-size: 0.7rem; color: #aaa; margin-top: 8px; text-align: right; }}
 </style>
 </head>"""
 
@@ -117,6 +162,7 @@ def _navbar(active: str = "report") -> str:
   <a class="navbar-brand fw-bold" href="/report">Investment Dashboard</a>
   <div class="navbar-nav ms-auto">
     <a class="{_cls('report')}" href="/report">Dashboard</a>
+    <a class="{_cls('screening')}" href="/screening">Screening</a>
     <a class="{_cls('performance')}" href="/performance">Performance</a>
   </div>
 </nav>"""
@@ -183,6 +229,45 @@ def report():
             """,
             (today_str,),
         )
+        # 惜しかった銘柄（watch ラベル, スコア30以上）
+        _latest_sig_date = "(SELECT MAX(date) FROM daily_signals)"
+        near_misses = fetch_all(
+            conn,
+            f"""
+            SELECT d.ticker, u.name, d.market, d.pattern, d.label,
+                   d.cond_a_ma200_rising, d.cond_a_ma_aligned,
+                   d.cond_a_52w_high_near, d.cond_a_volume_surge,
+                   d.cond_a_rsi_ok, d.cond_a_above_ma25,
+                   d.cond_b_ma200_rising, d.cond_b_ma_aligned,
+                   d.cond_b_pullback_touched, d.cond_b_bounced,
+                   d.cond_b_ma25_rising, d.cond_b_rsi_ok,
+                   d.close, d.rsi14, d.atr14, d.vol_ratio,
+                   d.final_score, d.recommend_rank, d.recommend_reason,
+                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.liquidity_score,
+                   d.market_mode,
+                   CASE
+                     WHEN d.label = 'candidate' THEN 'filtered'
+                     WHEN d.market_mode IN ('caution', 'full_caution') AND d.final_score >= 50
+                          THEN 'demoted'
+                     ELSE 'score_short'
+                   END AS near_miss_type
+            FROM daily_signals d
+            LEFT JOIN universe_master u ON u.ticker = d.ticker
+            WHERE d.date = {_latest_sig_date}
+              AND (
+                (d.label = 'candidate'
+                 AND d.ticker NOT IN (
+                   SELECT ticker FROM trade_signal_log
+                   WHERE signal_date = {_latest_sig_date}
+                 ))
+                OR
+                (d.label = 'watch' AND d.final_score >= 30)
+              )
+            ORDER BY d.final_score DESC
+            LIMIT 5
+            """,
+        )
+
         # 市場環境タイムライン: 直近60日
         market_history = fetch_all(
             conn,
@@ -194,8 +279,21 @@ def report():
             """,
             (today_str,),
         )
+        # LLM アドバイザーフィードバック: 最新日付分
+        llm_feedback = fetch_all(
+            conn,
+            """
+            SELECT provider, model, response_text, batch_type, feedback_date, created_at
+            FROM llm_feedback_log
+            WHERE feedback_date = (SELECT MAX(feedback_date) FROM llm_feedback_log)
+              AND response_text != ''
+            GROUP BY provider
+            HAVING created_at = MAX(created_at)
+            ORDER BY CASE provider WHEN 'openai' THEN 1 WHEN 'anthropic' THEN 2 WHEN 'gemini' THEN 3 END
+            """,
+        )
 
-    return _render_report(today_str, market_env, holdings, candidates, market_history)
+    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, near_misses)
 
 
 # ============================================================
@@ -348,6 +446,40 @@ def performance():
         )
 
     return _render_performance(summary, pattern_stats, all_trades)
+
+
+# ============================================================
+# ルーティング: /screening  (スクリーニング銘柄一覧)
+# ============================================================
+
+@app.route("/screening")
+def screening():
+    """スクリーニング銘柄一覧ページ"""
+    with get_connection() as conn:
+        latest = fetch_one(conn, "SELECT MAX(date) AS d FROM daily_signals")
+        target_date = dict(latest)["d"] if latest else None
+        if not target_date:
+            return "<h3>スクリーニングデータがありません</h3>", 404
+
+        rows = fetch_all(
+            conn,
+            """SELECT d.ticker, u.name, u.sector, d.market, d.pattern, d.label,
+                      d.cond_a_ma200_rising, d.cond_a_ma_aligned,
+                      d.cond_a_52w_high_near, d.cond_a_volume_surge,
+                      d.cond_a_rsi_ok, d.cond_a_above_ma25,
+                      d.cond_b_ma200_rising, d.cond_b_ma_aligned,
+                      d.cond_b_pullback_touched, d.cond_b_bounced,
+                      d.cond_b_ma25_rising, d.cond_b_rsi_ok,
+                      d.close, d.rsi14, d.atr14, d.vol_ratio, d.rs_rank,
+                      d.final_score, d.recommend_rank, d.recommend_reason
+               FROM daily_signals d
+               LEFT JOIN universe_master u ON u.ticker = d.ticker
+               WHERE d.date = ?
+               ORDER BY d.final_score DESC""",
+            (target_date,),
+        )
+
+    return _render_screening(target_date, [dict(r) for r in rows])
 
 
 # ============================================================
@@ -561,6 +693,136 @@ def api_sector_alloc():
     })
 
 
+@app.route("/api/screening-funnel")
+def api_screening_funnel():
+    """スクリーニングファネル統計（直近バッチ分）"""
+    target = request.args.get("date")
+
+    with get_connection() as conn:
+        if not target:
+            row = fetch_one(conn, "SELECT MAX(date) AS d FROM daily_signals")
+            target = dict(row)["d"] if row else None
+        if not target:
+            return jsonify({"error": "no data"}), 404
+
+        universe = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM universe_master "
+            "WHERE is_active = 1 AND is_excluded = 0",
+        )
+        universe_cnt = dict(universe)["cnt"] if universe else 0
+
+        screened = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM daily_signals WHERE date = ?",
+            (target,),
+        )
+        screened_cnt = dict(screened)["cnt"] if screened else 0
+
+        label_counts = fetch_all(
+            conn,
+            "SELECT label, COUNT(*) AS cnt FROM daily_signals "
+            "WHERE date = ? GROUP BY label",
+            (target,),
+        )
+        labels = {dict(r)["label"]: dict(r)["cnt"] for r in label_counts}
+
+        notified = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM trade_signal_log WHERE signal_date = ?",
+            (target,),
+        )
+        notified_cnt = dict(notified)["cnt"] if notified else 0
+
+        by_market_rows = fetch_all(
+            conn,
+            "SELECT market, label, COUNT(*) AS cnt FROM daily_signals "
+            "WHERE date = ? GROUP BY market, label",
+            (target,),
+        )
+        by_market: dict = {}
+        for r in by_market_rows:
+            r = dict(r)
+            mk = r["market"]
+            if mk not in by_market:
+                by_market[mk] = {"screened": 0, "candidate": 0, "watch": 0, "skip": 0}
+            by_market[mk]["screened"] += r["cnt"]
+            by_market[mk][r["label"]] += r["cnt"]
+
+        cond_a = fetch_one(
+            conn,
+            """SELECT COUNT(*) AS total,
+                      SUM(cond_a_ma200_rising)  AS c1, SUM(cond_a_ma_aligned)    AS c2,
+                      SUM(cond_a_52w_high_near) AS c3, SUM(cond_a_volume_surge)  AS c4,
+                      SUM(cond_a_rsi_ok)        AS c5, SUM(cond_a_above_ma25)    AS c6
+               FROM daily_signals
+               WHERE date = ? AND cond_a_ma200_rising IS NOT NULL""",
+            (target,),
+        )
+        cond_a = dict(cond_a) if cond_a else {}
+
+        cond_b = fetch_one(
+            conn,
+            """SELECT COUNT(*) AS total,
+                      SUM(cond_b_ma200_rising)     AS c1, SUM(cond_b_ma_aligned)       AS c2,
+                      SUM(cond_b_pullback_touched) AS c3, SUM(cond_b_bounced)          AS c4,
+                      SUM(cond_b_ma25_rising)      AS c5, SUM(cond_b_rsi_ok)           AS c6
+               FROM daily_signals
+               WHERE date = ? AND cond_b_ma200_rising IS NOT NULL""",
+            (target,),
+        )
+        cond_b = dict(cond_b) if cond_b else {}
+
+        score_dist = fetch_all(
+            conn,
+            """SELECT
+                 CASE WHEN final_score >= 80 THEN '80-100'
+                      WHEN final_score >= 60 THEN '60-79'
+                      WHEN final_score >= 40 THEN '40-59'
+                      WHEN final_score >= 20 THEN '20-39'
+                      ELSE '0-19' END AS bucket,
+                 COUNT(*) AS cnt
+               FROM daily_signals WHERE date = ? AND final_score IS NOT NULL
+               GROUP BY bucket ORDER BY bucket DESC""",
+            (target,),
+        )
+        score_buckets = {dict(r)["bucket"]: dict(r)["cnt"] for r in score_dist}
+
+    a_total = cond_a.get("total") or 1
+    b_total = cond_b.get("total") or 1
+    return jsonify({
+        "date": target,
+        "funnel": {
+            "universe": universe_cnt,
+            "screened": screened_cnt,
+            "candidate": labels.get("candidate", 0),
+            "watch": labels.get("watch", 0),
+            "skip": labels.get("skip", 0),
+            "notified": notified_cnt,
+        },
+        "by_market": by_market,
+        "pattern_a": {
+            "total": a_total,
+            "ma200_rising": cond_a.get("c1") or 0,
+            "ma_aligned": cond_a.get("c2") or 0,
+            "high_52w_near": cond_a.get("c3") or 0,
+            "volume_surge": cond_a.get("c4") or 0,
+            "rsi_ok": cond_a.get("c5") or 0,
+            "above_ma25": cond_a.get("c6") or 0,
+        },
+        "pattern_b": {
+            "total": b_total,
+            "ma200_rising": cond_b.get("c1") or 0,
+            "ma_aligned": cond_b.get("c2") or 0,
+            "pullback_touched": cond_b.get("c3") or 0,
+            "bounced": cond_b.get("c4") or 0,
+            "ma25_rising": cond_b.get("c5") or 0,
+            "rsi_ok": cond_b.get("c6") or 0,
+        },
+        "score_distribution": score_buckets,
+    })
+
+
 # ============================================================
 # リスク指標取得 / 計算 (Phase 3)
 # ============================================================
@@ -622,11 +884,12 @@ def _get_or_calc_risk(conn, ticker: str, today_str: str, market: str) -> dict:
 # HTML レンダリング: /report
 # ============================================================
 
-def _render_report(today_str, market_env, holdings, candidates, market_history):
+def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, near_misses=None):
     market_env = dict(market_env) if market_env else {}
     holdings = [dict(h) for h in holdings]
     candidates = [dict(c) for c in candidates]
     market_history = [dict(m) for m in market_history]
+    llm_feedback = [dict(f) for f in llm_feedback] if llm_feedback else []
 
     mode = market_env.get("mode", "unknown")
     mode_label = _MODE_LABEL.get(mode, mode)
@@ -719,6 +982,42 @@ def _render_report(today_str, market_env, holdings, candidates, market_history):
         else:
             bg = "#E8F5E9"
         action_html += f'<div style="padding:8px 12px;border-radius:8px;background:{bg};margin-bottom:6px;font-size:0.9rem">{msg}</div>'
+
+    # --- LLM アドバイザーセクション構築 ---
+    _LLM_DISPLAY = {
+        "openai": ("ChatGPT", "#10a37f", "💬"),
+        "anthropic": ("Claude", "#d97706", "🧠"),
+        "gemini": ("Gemini", "#4285F4", "✨"),
+    }
+    llm_cards_html = ""
+    if llm_feedback:
+        fb_date = llm_feedback[0].get("feedback_date", "")
+        fb_cards = ""
+        for fb in llm_feedback:
+            prov = fb.get("provider", "")
+            display_name, color, icon = _LLM_DISPLAY.get(prov, (prov, "#999", "💬"))
+            model = fb.get("model", "")
+            text = escape(fb.get("response_text", ""))
+            batch = "夜バッチ" if fb.get("batch_type") == "evening" else "朝バッチ"
+            created = fb.get("created_at", "")
+            fb_cards += f"""
+      <div class="col-md-4">
+        <div class="llm-card" style="border-top-color:{color}">
+          <div class="llm-header">
+            <span style="font-size:1.2rem">{icon}</span>
+            <span class="llm-provider" style="color:{color}">{display_name}</span>
+            <span class="llm-model">{escape(model)}</span>
+          </div>
+          <div class="llm-body">{text}</div>
+          <div class="llm-meta">{batch} · {created}</div>
+        </div>
+      </div>"""
+        llm_cards_html = f"""
+<div class="section">
+  <h2>🤖 AIアドバイザー意見 <span class="text-muted fs-6">({fb_date})</span></h2>
+  <div class="row g-3">{fb_cards}
+  </div>
+</div>"""
 
     # セクター配分用データ（holdings から）
     sector_map = {}
@@ -864,6 +1163,108 @@ def _render_report(today_str, market_env, holdings, candidates, market_history):
     holding_empty = "<tr><td colspan='8' style='text-align:center;color:#999'>保有銘柄なし</td></tr>" if not holdings else ""
     signal_empty = "<tr><td colspan='9' style='text-align:center;color:#999'>直近7日間のシグナルなし</td></tr>" if not candidates else ""
 
+    # 惜しかった銘柄カード生成
+    near_misses = [dict(nm) for nm in near_misses] if near_misses else []
+    _NM_TYPE_BADGE = {
+        "filtered": ("🚫 見送り", "#D32F2F"),
+        "demoted":  ("⚠️ 警戒モードで降格", "#FF5722"),
+        "score_short": ("", "#FF9800"),
+    }
+    near_miss_cards = ""
+    for nm in near_misses:
+        nm_ticker = escape(nm.get("ticker") or "")
+        nm_name = escape(nm.get("name") or str(nm_ticker))
+        nm_market = escape(nm.get("market") or "")
+        nm_pattern = nm.get("pattern") or "A"
+        nm_p_name = escape(_PATTERN_NAME.get(nm_pattern, nm_pattern))
+        nm_score = int(nm.get("final_score") or 0)
+        nm_type = nm.get("near_miss_type", "score_short")
+        _, nm_border_color = _NM_TYPE_BADGE.get(nm_type, ("", "#FF9800"))
+
+        # --- filtered タイプ: 具体的な見送り理由を再計算 ---
+        skip_detail_html = ""
+        if nm_type == "filtered":
+            _nm_close = float(nm.get("close") or 0)
+            _nm_atr = float(nm.get("atr14") or 0)
+            _nm_mkt = nm.get("market") or ""
+            if _nm_close > 0 and _nm_atr > 0:
+                _nm_sl = _nm_close - _nm_atr * _SKIP_ATR_MULT
+                _nm_sl_pct = (_nm_close - _nm_sl) / _nm_close * 100
+                # filtered の見送り理由は「損切り幅が狭すぎる」のみ
+                skip_detail_html = (
+                    f'<div style="background:#FFEBEE;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:0.8rem">'
+                    f'<strong>🚫 見送り理由: 損切り幅が狭すぎる</strong><br>'
+                    f'損切り幅 <strong>{_nm_sl_pct:.2f}%</strong> ＜ 最低ライン <strong>{_SKIP_SL_MIN_PCT}%</strong><br>'
+                    f'<span style="color:#888">終値 {_nm_close:,.0f} / ATR14 {_nm_atr:,.1f} / '
+                    f'SL計算値 {_nm_sl:,.0f}（ATR×{_SKIP_ATR_MULT:.0f}）</span>'
+                    f'</div>'
+                )
+
+        # スコア表示: typeに応じて変更
+        if nm_type == "score_short":
+            nm_gap = 50 - nm_score
+            nm_gap_str = f"あと{nm_gap}点"
+        elif nm_type == "filtered":
+            nm_gap_str = "🚫 見送り"
+        else:
+            nm_gap_str = _NM_TYPE_BADGE.get(nm_type, ("", "#FF9800"))[0]
+
+        nm_pct = min(nm_score, 100)  # 0-100 でバー表示
+        nm_reason = escape(nm.get("recommend_reason") or "")
+
+        # サブスコアミニバー
+        sub_bars = ""
+        for sub_key, sub_label in [("trend_score", "トレンド"), ("pattern_a_score", "ブレイクアウト"),
+                                    ("pattern_b_score", "押し目"), ("liquidity_score", "流動性")]:
+            sv = int(nm.get(sub_key) or 0)
+            sc = "#4CAF50" if sv >= 60 else "#FF9800" if sv >= 30 else "#E0E0E0"
+            sub_bars += f"""<div class="col-3">
+              <div style="font-size:0.7rem;color:#666">{sub_label}</div>
+              <div style="background:#f0f0f0;border-radius:4px;height:8px">
+                <div style="background:{sc};width:{sv}%;height:100%;border-radius:4px"></div>
+              </div>
+              <span style="font-size:0.7rem">{sv}点</span>
+            </div>"""
+
+        # 条件チェックリスト
+        cond_labels = _COND_A_LABELS if nm_pattern == "A" else _COND_B_LABELS
+        cond_rows = ""
+        for col, desc in cond_labels:
+            val = nm.get(col)
+            if val == 1:
+                dot = "#4CAF50"
+                hint = ""
+            elif val == 0:
+                dot = "#D32F2F"
+                hint = "<span style='color:#D32F2F;font-size:0.7rem;margin-left:4px'>← 未達</span>"
+            else:
+                dot = "#E0E0E0"
+                hint = ""
+            cond_rows += f"""<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
+              <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:{dot}"></span>
+              <span style="font-size:0.8rem">{escape(desc)}</span>{hint}
+            </div>"""
+
+        near_miss_cards += f"""
+        <div class="summary-card" style="border-left:4px solid {nm_border_color};margin-bottom:12px">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <a class="ticker-link" href="/stock/{nm_ticker}">{nm_ticker}</a>
+            <span>{nm_name}</span>
+            <span style="font-size:0.75rem;color:#999">{nm_market}</span>
+            <span class="rank-badge" style="background:#FF9800">{nm_p_name}</span>
+            <span style="margin-left:auto;font-weight:700;font-size:1.1rem">{nm_score}点</span>
+            <span style="color:{nm_border_color};font-size:0.8rem">{nm_gap_str}</span>
+          </div>
+          {skip_detail_html}
+          <div style="background:#f0f0f0;border-radius:8px;height:20px;margin-bottom:8px;position:relative">
+            <div style="background:linear-gradient(90deg,#FF9800,#FFC107);width:{nm_pct}%;height:100%;border-radius:8px"></div>
+            <span style="position:absolute;right:8px;top:2px;font-size:0.7rem;color:#666">50点ライン</span>
+          </div>
+          <div class="row g-2 mb-2">{sub_bars}</div>
+          <div style="margin-bottom:4px">{cond_rows}</div>
+          <div style="font-size:0.8rem;color:#666">💡 {nm_reason}</div>
+        </div>"""
+
     # 市場環境タイムラインの JSON データ
     mh_dates = json.dumps([m["date"] for m in market_history])
     mh_n225 = json.dumps([m["n225_close"] for m in market_history])
@@ -921,6 +1322,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history):
   <h2>📋 今日の行動</h2>
   {action_html}
 </div>
+
+{llm_cards_html}
 
 <!-- チャート行 -->
 <div class="row g-3 mb-4">
@@ -994,6 +1397,102 @@ def _render_report(today_str, market_env, holdings, candidates, market_history):
       </thead>
       <tbody>{signal_rows}{signal_empty}</tbody>
     </table>
+  </div>
+</div>
+
+{"" if not near_misses else f"""
+<!-- 惜しかった銘柄 -->
+<div class="section">
+  <h2>👀 惜しかった銘柄（{len(near_misses)}件）</h2>
+  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
+    通知対象にならなかった注目銘柄です。スコア不足・損切り条件・警戒モード降格などの理由が確認できます。
+    <a href="/screening?filter=watch" style="margin-left:8px">📋 Screeningで全件を見る →</a>
+  </p>
+  {near_miss_cards}
+</div>
+"""}
+
+<!-- 見送り条件リファレンス -->
+<div class="section">
+  <h2>📏 見送り条件リファレンス</h2>
+  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
+    パターン検出で候補（candidate）になっても、以下の条件に該当するとシグナル通知から除外されます。
+  </p>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="summary-card" style="border-left:4px solid #D32F2F">
+        <div style="font-weight:700;margin-bottom:8px">🚫 損切り幅が狭すぎる</div>
+        <table style="font-size:0.8rem;width:100%">
+          <tr><td style="color:#666;width:40%">判定</td>
+              <td>損切り幅(%) ＜ <strong>{_SKIP_SL_MIN_PCT}%</strong></td></tr>
+          <tr><td style="color:#666">損切り幅の計算</td>
+              <td>(終値 − SL) ÷ 終値 × 100</td></tr>
+          <tr><td style="color:#666">SLの計算</td>
+              <td>終値 − ATR14 × <strong>{_SKIP_ATR_MULT:.0f}</strong></td></tr>
+          <tr><td style="color:#666">該当しやすい銘柄</td>
+              <td>値動きが小さい（ATRが低い）銘柄</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="summary-card" style="border-left:4px solid #1976D2">
+        <div style="font-weight:700;margin-bottom:8px">💰 推奨投入額の計算</div>
+        <table style="font-size:0.8rem;width:100%">
+          <tr><td style="color:#666;width:40%">計算式</td>
+              <td>総資金 × リスク{_SKIP_RISK_PCT*100:.0f}% ÷ 損切り幅(%)</td></tr>
+          <tr><td style="color:#666">投入額の上限</td>
+              <td>min(総資金, 総資金÷最大保有数)</td></tr>
+          <tr><td style="color:#666">現在の設定値</td>
+              <td>JP: <strong>{_SKIP_CAPITAL_JPY:,.0f}円</strong> / US: <strong>${_SKIP_CAPITAL_USD:,.0f}</strong> / 最大<strong>{_SKIP_MAX_HOLDINGS}</strong>銘柄<br>
+                  → JP 1銘柄上限 <strong>{_SKIP_CAPITAL_JPY/_SKIP_MAX_HOLDINGS:,.0f}円</strong> / US <strong>${_SKIP_CAPITAL_USD/_SKIP_MAX_HOLDINGS:,.0f}</strong></td></tr>
+          <tr><td style="color:#666">取引単位</td>
+              <td>端株対応（moomoo証券）— 1株未満でも購入可能</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- スクリーニングファネル -->
+<div class="section">
+  <h2>スクリーニングファネル <span class="text-muted fs-6" id="funnelDate"></span></h2>
+  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
+    全銘柄がどの段階で絞り込まれたかを示します。
+    <span class="tip" data-tip="ユニバース→流動性フィルタ→シグナル検出→最終候補の順に絞り込まれます">詳細</span>
+  </p>
+  <div class="row g-3">
+    <div class="col-md-6">
+      <div class="summary-card">
+        <div class="label">絞り込みファネル</div>
+        <div class="chart-container" style="height:260px">
+          <canvas id="funnelChart"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="row g-3">
+        <div class="col-6">
+          <div class="summary-card">
+            <div class="label">パターンA 条件充足率</div>
+            <div id="condATable" style="font-size:0.8rem">読み込み中...</div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="summary-card">
+            <div class="label">パターンB 条件充足率</div>
+            <div id="condBTable" style="font-size:0.8rem">読み込み中...</div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="summary-card">
+            <div class="label">スコア分布</div>
+            <div class="chart-container" style="height:120px">
+              <canvas id="scoreDistChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1122,6 +1621,103 @@ loadRadar();
   makeIndexChart('n225Chart', {mh_n225}, {mh_n225_ma}, '日経平均', '#D32F2F');
   makeIndexChart('sp500Chart', {mh_sp500}, {mh_sp500_ma}, 'S&P500', '#1976D2');
 }})();
+
+// --- スクリーニングファネル ---
+fetch('/api/screening-funnel').then(r=>r.json()).then(data=>{{
+  if(data.error) return;
+  const f = data.funnel;
+  document.getElementById('funnelDate').textContent = '(' + data.date + ')';
+
+  // ファネル横棒チャート
+  new Chart(document.getElementById('funnelChart'),{{
+    type:'bar',
+    data:{{
+      labels:['ユニバース','流動性フィルタ通過','candidate','watch','最終通知'],
+      datasets:[{{
+        data:[f.universe, f.screened, f.candidate, f.watch, f.notified],
+        backgroundColor:['#90CAF9','#42A5F5','#4CAF50','#FF9800','#D32F2F'],
+        borderRadius:4
+      }}]
+    }},
+    options:{{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{{
+        legend:{{display:false}},
+        tooltip:{{callbacks:{{
+          label:function(ctx){{
+            const v=ctx.raw;
+            const pct=f.universe>0?(v/f.universe*100).toFixed(1):'0';
+            return v.toLocaleString()+' 件 ('+pct+'%)';
+          }}
+        }}}}
+      }},
+      scales:{{
+        x:{{type:'logarithmic',ticks:{{font:{{size:10}}}}}},
+        y:{{ticks:{{font:{{size:11}}}}}}
+      }}
+    }}
+  }});
+
+  // パターンA 条件充足率テーブル
+  const pa = data.pattern_a;
+  const aLabels = [
+    ['MA200上昇','ma200_rising'],['MA整列','ma_aligned'],['52週高値近傍','high_52w_near'],
+    ['出来高急増','volume_surge'],['RSI適正','rsi_ok'],['MA25上方','above_ma25']
+  ];
+  let aHtml='<table class="table table-sm table-bordered mb-0" style="font-size:0.8rem"><tbody>';
+  aLabels.forEach(function(pair){{
+    const cnt=pa[pair[1]]; const pct=pa.total>0?(cnt/pa.total*100).toFixed(1):'0';
+    const w=pa.total>0?Math.round(cnt/pa.total*100):0;
+    aHtml+='<tr><td style="width:45%">'+pair[0]+'</td>'
+      +'<td><div style="background:#E3F2FD;border-radius:4px;overflow:hidden">'
+      +'<div style="width:'+w+'%;background:#42A5F5;height:16px;border-radius:4px"></div></div></td>'
+      +'<td style="width:25%;text-align:right">'+cnt+' <span style="color:#999">('+pct+'%)</span></td></tr>';
+  }});
+  aHtml+='</tbody></table><div style="color:#999;font-size:0.7rem;margin-top:4px">対象: '+pa.total.toLocaleString()+' 銘柄</div>';
+  document.getElementById('condATable').innerHTML=aHtml;
+
+  // パターンB 条件充足率テーブル
+  const pb = data.pattern_b;
+  const bLabels = [
+    ['MA200上昇','ma200_rising'],['MA整列','ma_aligned'],['押し目タッチ','pullback_touched'],
+    ['反発確認','bounced'],['MA25上昇','ma25_rising'],['RSI適正','rsi_ok']
+  ];
+  let bHtml='<table class="table table-sm table-bordered mb-0" style="font-size:0.8rem"><tbody>';
+  bLabels.forEach(function(pair){{
+    const cnt=pb[pair[1]]; const pct=pb.total>0?(cnt/pb.total*100).toFixed(1):'0';
+    const w=pb.total>0?Math.round(cnt/pb.total*100):0;
+    bHtml+='<tr><td style="width:45%">'+pair[0]+'</td>'
+      +'<td><div style="background:#FFF3E0;border-radius:4px;overflow:hidden">'
+      +'<div style="width:'+w+'%;background:#FF9800;height:16px;border-radius:4px"></div></div></td>'
+      +'<td style="width:25%;text-align:right">'+cnt+' <span style="color:#999">('+pct+'%)</span></td></tr>';
+  }});
+  bHtml+='</tbody></table><div style="color:#999;font-size:0.7rem;margin-top:4px">対象: '+pb.total.toLocaleString()+' 銘柄</div>';
+  document.getElementById('condBTable').innerHTML=bHtml;
+
+  // スコア分布チャート
+  const sd = data.score_distribution;
+  const buckets = ['0-19','20-39','40-59','60-79','80-100'];
+  const bucketColors = ['#BDBDBD','#90CAF9','#42A5F5','#FF9800','#4CAF50'];
+  new Chart(document.getElementById('scoreDistChart'),{{
+    type:'bar',
+    data:{{
+      labels: buckets,
+      datasets:[{{
+        data: buckets.map(function(b){{ return sd[b]||0; }}),
+        backgroundColor: bucketColors,
+        borderRadius:4
+      }}]
+    }},
+    options:{{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{{legend:{{display:false}}}},
+      scales:{{
+        x:{{ticks:{{font:{{size:10}}}}}},
+        y:{{ticks:{{font:{{size:10}},stepSize:1}}}}
+      }}
+    }}
+  }});
+}});
 </script>
 
 </body>
@@ -1570,12 +2166,277 @@ fetch('/api/perf-monthly').then(r=>r.json()).then(data=>{{
 
 
 # ============================================================
+# HTML レンダリング: /screening
+# ============================================================
+
+def _cond_dot(value: int | None, label: str) -> str:
+    """条件フラグを色付きドットで描画する。"""
+    color = "#4CAF50" if value else "#E0E0E0"
+    return (
+        f'<span class="tip" data-tip="{label}" '
+        f'style="display:inline-block;width:14px;height:14px;'
+        f'border-radius:50%;background:{color};margin:0 1px"></span>'
+    )
+
+
+def _render_screening(target_date: str, rows: list[dict]) -> str:
+    total = len(rows)
+    cand_cnt = sum(1 for r in rows if r["label"] == "candidate")
+    watch_cnt = sum(1 for r in rows if r["label"] == "watch")
+    skip_cnt = sum(1 for r in rows if r["label"] == "skip")
+
+    # --- テーブル行 ---
+    table_rows = ""
+    for r in rows:
+        ticker = r["ticker"] or ""
+        name = r.get("name") or ""
+        market = r.get("market") or ""
+        pattern = r.get("pattern") or ""
+        label = r.get("label") or "skip"
+        close = r.get("close")
+        rsi = r.get("rsi14")
+        vol_ratio = r.get("vol_ratio")
+        fscore = r.get("final_score")
+        frank = r.get("recommend_rank") or "—"
+        sector = r.get("sector") or "—"
+
+        # ラベルバッジ
+        lbl_color = _LABEL_COLOR.get(label, "#9E9E9E")
+        lbl_text = _LABEL_DISPLAY.get(label, label)
+
+        # ランクバッジ
+        rank_color = _RANK_COLOR.get(frank, "#999")
+
+        # 条件フラグドット
+        conds_html = ""
+        cond_labels = _COND_A_LABELS if pattern == "A" else _COND_B_LABELS
+        for col, tip in cond_labels:
+            conds_html += _cond_dot(r.get(col), tip)
+
+        # パターン表示
+        pat_name = _PATTERN_NAME.get(pattern, "—")
+        pat_html = f'<span class="tip" data-tip="{escape(pat_name)}">{escape(pattern)}</span>' if pattern else "—"
+
+        # Score 表示
+        score_str = f"{fscore:.0f}" if fscore is not None else "—"
+
+        # 買い判定 — 条件フラグから未達の条件名を列挙
+        reason_text = r.get("recommend_reason") or ""
+        met_count = sum(1 for col, _ in cond_labels if r.get(col) == 1)
+        total_conds = len(cond_labels)
+        failed_names = [tip for col, tip in cond_labels if r.get(col) == 0]
+        if label == "candidate":
+            verdict_html = '<span style="color:#4CAF50;font-weight:600">買い候補</span>'
+        elif label == "watch":
+            verdict_html = '<span style="color:#FF9800;font-weight:600">監視</span>'
+        else:
+            verdict_html = '<span style="color:#9E9E9E">対象外</span>'
+        # 未達条件を赤で表示
+        if failed_names:
+            failed_html = ", ".join(
+                f'<span style="color:#D32F2F">{escape(n)}</span>' for n in failed_names
+            )
+            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})<br><span style="font-size:0.75rem">未達: {failed_html}</span>'
+        else:
+            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})'
+        # 理由
+        reason_html = f'<span style="font-size:0.75rem;color:#666">{escape(reason_text)}</span>' if reason_text else "—"
+
+        # 詳細列
+        close_str = f"{close:,.2f}" if close else "—"
+        rsi_str = f"{rsi:.0f}" if rsi is not None else "—"
+        rsi_color = ""
+        if rsi is not None:
+            if rsi >= 70:
+                rsi_color = "color:#D32F2F"
+            elif rsi <= 30:
+                rsi_color = "color:#4CAF50"
+        vr_str = f"{vol_ratio:.1f}x" if vol_ratio is not None else "—"
+
+        table_rows += f"""
+        <tr data-label="{escape(label)}" data-market="{escape(market)}"
+            data-pattern="{escape(pattern)}" data-score="{fscore or 0}">
+          <td><a class="ticker-link" href="/stock/{escape(ticker)}">{escape(ticker)}</a></td>
+          <td>{escape(name)}</td>
+          <td>{escape(market)}</td>
+          <td>{pat_html}</td>
+          <td><span class="rank-badge" style="background:{lbl_color}">{lbl_text}</span></td>
+          <td style="white-space:nowrap">{conds_html}</td>
+          <td>{score_str}</td>
+          <td><span class="rank-badge" style="background:{rank_color}">{escape(frank)}</span></td>
+          <td>{verdict_detail}</td>
+          <td>{reason_html}</td>
+          <td class="detail-col">{close_str}</td>
+          <td class="detail-col" style="{rsi_color}">{rsi_str}</td>
+          <td class="detail-col">{vr_str}</td>
+          <td class="detail-col">{escape(sector)}</td>
+        </tr>"""
+
+    return f"""{_common_head(f'Screening {target_date}')}
+<body>
+{_navbar('screening')}
+
+<h1 class="h4 mb-4">Screening List <span class="text-muted fs-6">{target_date}</span></h1>
+
+<!-- サマリーカード -->
+<div class="row g-3 mb-4">
+  <div class="col">
+    <div class="summary-card">
+      <div class="label">スクリーニング通過</div>
+      <div class="value">{total}</div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="summary-card">
+      <div class="label">候補 (candidate)</div>
+      <div class="value" style="color:#4CAF50">{cand_cnt}</div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="summary-card">
+      <div class="label">監視 (watch)</div>
+      <div class="value" style="color:#FF9800">{watch_cnt}</div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="summary-card">
+      <div class="label">スキップ (skip)</div>
+      <div class="value" style="color:#9E9E9E">{skip_cnt}</div>
+    </div>
+  </div>
+</div>
+
+<!-- フィルタ -->
+<div class="summary-card mb-4">
+  <div class="d-flex flex-wrap align-items-center gap-2">
+    <span style="font-size:0.8rem;font-weight:600;color:#666">ラベル:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('label','candidate',this)">候補</button>
+      <button class="filter-btn" onclick="setFilter('label','watch',this)">監視</button>
+      <button class="filter-btn" onclick="setFilter('label','skip',this)">スキップ</button>
+      <button class="filter-btn" onclick="setFilter('label','all',this)">すべて</button>
+    </div>
+    <span style="font-size:0.8rem;font-weight:600;color:#666">市場:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('market','all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('market','JP',this)">JP</button>
+      <button class="filter-btn" onclick="setFilter('market','US',this)">US</button>
+    </div>
+    <span style="font-size:0.8rem;font-weight:600;color:#666">パターン:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('pattern','all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('pattern','A',this)">A</button>
+      <button class="filter-btn" onclick="setFilter('pattern','B',this)">B</button>
+    </div>
+    <span id="filterCount" style="font-size:0.8rem;color:#999;margin-left:auto"></span>
+    <button class="toggle-btn" onclick="document.querySelector('#screeningTable').classList.toggle('show-detail');this.textContent=this.textContent==='詳細を表示'?'詳細を隠す':'詳細を表示'">詳細を表示</button>
+  </div>
+</div>
+
+<!-- テーブル -->
+<div class="section">
+  <div class="table-responsive">
+    <table id="screeningTable" class="table table-bordered table-sm table-hover bg-white">
+      <thead class="table-light">
+        <tr>
+          <th>Ticker</th><th>銘柄名</th><th>市場</th>
+          <th><span class="tip" data-tip="A=モメンタムブレイクアウト B=押し目買い">PT</span></th>
+          <th>ラベル</th>
+          <th><span class="tip" data-tip="緑=条件充足 灰=未充足。ホバーで条件名を表示">条件 (6項目)</span></th>
+          <th id="sortScore" style="cursor:pointer"><span class="tip" data-tip="クリックで並び替え">Score ⇅</span></th>
+          <th>Rank</th>
+          <th><span class="tip" data-tip="買い候補/監視/対象外の判定と未達条件">買い判定</span></th>
+          <th><span class="tip" data-tip="スコアリングの理由（主要な加点・減点要因）">理由</span></th>
+          <th class="detail-col">終値</th>
+          <th class="detail-col"><span class="tip" data-tip="70以上=買われすぎ 30以下=売られすぎ">RSI</span></th>
+          <th class="detail-col"><span class="tip" data-tip="出来高 ÷ 20日平均出来高">出来高比</span></th>
+          <th class="detail-col">セクター</th>
+        </tr>
+      </thead>
+      <tbody>{table_rows}</tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// URL パラメータから初期フィルタを取得（例: /screening?filter=watch）
+const _urlFilter = new URLSearchParams(window.location.search).get('filter');
+const _validLabels = ['candidate', 'watch', 'skip', 'all'];
+let filterLabel = (_urlFilter && _validLabels.includes(_urlFilter)) ? _urlFilter : 'candidate';
+let filterMarket = 'all';
+let filterPattern = 'all';
+let sortAsc = false;
+
+// URL パラメータで初期フィルタが指定された場合、ボタンのアクティブ状態を同期
+if (_urlFilter && _validLabels.includes(_urlFilter)) {{
+  document.querySelectorAll('.filter-group')[0].querySelectorAll('.filter-btn').forEach(function(b) {{
+    b.classList.remove('active');
+    if ((_urlFilter === 'candidate' && b.textContent === '候補') ||
+        (_urlFilter === 'watch' && b.textContent === '監視') ||
+        (_urlFilter === 'skip' && b.textContent === 'スキップ') ||
+        (_urlFilter === 'all' && b.textContent === 'すべて')) {{
+      b.classList.add('active');
+    }}
+  }});
+}}
+
+function setFilter(type, value, btn) {{
+  if (type === 'label') filterLabel = value;
+  else if (type === 'market') filterMarket = value;
+  else if (type === 'pattern') filterPattern = value;
+  // ボタンのアクティブ状態を切り替え
+  btn.parentElement.querySelectorAll('.filter-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  applyFilters();
+}}
+
+function applyFilters() {{
+  const rows = document.querySelectorAll('#screeningTable tbody tr');
+  let shown = 0;
+  rows.forEach(function(tr) {{
+    const matchLabel = (filterLabel === 'all' || tr.dataset.label === filterLabel);
+    const matchMarket = (filterMarket === 'all' || tr.dataset.market === filterMarket);
+    const matchPattern = (filterPattern === 'all' || tr.dataset.pattern === filterPattern);
+    if (matchLabel && matchMarket && matchPattern) {{
+      tr.style.display = '';
+      shown++;
+    }} else {{
+      tr.style.display = 'none';
+    }}
+  }});
+  document.getElementById('filterCount').textContent = shown + ' / ' + rows.length + ' 件表示中';
+}}
+
+// Score ソート
+document.getElementById('sortScore').addEventListener('click', function() {{
+  const tbody = document.querySelector('#screeningTable tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  sortAsc = !sortAsc;
+  rows.sort(function(a, b) {{
+    const va = parseFloat(a.dataset.score) || 0;
+    const vb = parseFloat(b.dataset.score) || 0;
+    return sortAsc ? va - vb : vb - va;
+  }});
+  rows.forEach(function(r) {{ tbody.appendChild(r); }});
+  applyFilters();
+}});
+
+// 初期表示
+applyFilters();
+</script>
+
+</body>
+</html>"""
+
+
+# ============================================================
 # エントリーポイント
 # ============================================================
 
 def main():
     logger.info(f"レポートサーバーを起動します: http://{_HOST}:{_PORT}/report")
     logger.info("  /report       - メインダッシュボード")
+    logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
     logger.info("  /stock/<ticker> - 個別銘柄詳細")
     logger.info("  Ctrl+C で停止")

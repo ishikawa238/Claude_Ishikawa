@@ -169,6 +169,21 @@ def _eval_pattern_a(tk: dict, target_str: str, market: str) -> dict:
     rsi       = tk.get("rsi14")
 
     # 各条件評価（None は「データ不足」として 0 扱い）
+    # データ不足の条件を記録する
+    missing = []
+    if ma200 is None or ma200_5d is None:
+        missing.append("MA200")
+    if ma75 is None or ma25 is None:
+        missing.append("MA整列")
+    if high_52w is None:
+        missing.append("52週高値")
+    if vol is None or vol_avg is None:
+        missing.append("出来高")
+    if rsi is None:
+        missing.append("RSI")
+    if missing:
+        logger.debug(f"{tk['ticker']}: データ不足のため判定保留 — {', '.join(missing)}")
+
     c1 = _flag(ma200 and ma200_5d and ma200 > ma200_5d)         # MA200上昇中
     c2 = _flag(ma75 and ma200 and ma25 and ma75 and
                ma75 >= ma200 and ma25 >= ma75 and
@@ -326,6 +341,53 @@ def _check_pullback(
 # ============================================================
 # ユーティリティ
 # ============================================================
+
+def fetch_near_misses(
+    target_date: date,
+    market: str | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """
+    通知対象にならなかった注目銘柄を取得する。
+
+    以下の2種類を含む（final_score 降順）:
+    1. candidate だが entry_calculator で除外された銘柄（損切り幅不足・資金不足等）
+    2. watch ラベルの銘柄（スコア不足 or 警戒モード降格）
+    """
+    date_str = target_date.strftime("%Y-%m-%d")
+    market_clause = " AND d.market = ?" if market else ""
+    base_params: list = [date_str, market] if market else [date_str]
+
+    sql = f"""
+        SELECT d.*, u.name,
+               CASE
+                 WHEN d.label = 'candidate' THEN 'filtered'
+                 WHEN d.market_mode IN ('caution', 'full_caution') AND d.final_score >= 50
+                      THEN 'demoted'
+                 ELSE 'score_short'
+               END AS near_miss_type
+        FROM daily_signals d
+        LEFT JOIN universe_master u ON u.ticker = d.ticker
+        WHERE d.date = ?{market_clause}
+          AND (
+            (d.label = 'candidate'
+             AND d.ticker NOT IN (
+               SELECT ticker FROM trade_signal_log WHERE signal_date = ?
+             ))
+            OR
+            (d.label = 'watch' AND d.final_score >= 30)
+          )
+        ORDER BY d.final_score DESC
+        LIMIT ?
+    """
+    params = base_params + [date_str, limit]
+    with get_connection() as conn:
+        return fetch_all(conn, sql, tuple(params))
+
+
+# 後方互換: 旧名でも呼び出し可能
+fetch_watch_stocks = fetch_near_misses
+
 
 def _flag(condition) -> int:
     """bool → 0 / 1 に変換する。None は 0 扱い。"""

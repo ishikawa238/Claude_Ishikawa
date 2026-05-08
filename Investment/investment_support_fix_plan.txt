@@ -1,244 +1,361 @@
-投資判断支援システム 修正計画
-作成日: 2026-04-30
+投資判断支援システム 修正計画（更新版）
+更新日: 2026-05-08
+前回: 2026-04-30
 
 目的
 ====
 現状の投資判断支援システムを、初心者が誤解なく使える「実行規律補助システム」に近づける。
 特に以下を重視する。
 
-1. 警戒相場で不用意な新規買いを出さないこと
-2. 推奨投入額が過大にならないこと
-3. シグナルの期待値を検証できること
-4. README・要件定義・詳細設計・実装の食い違いをなくすこと
-5. テストが通る状態に戻すこと
+1. 誤ったシグナルや過大な推奨が出ないこと
+2. 初心者が重要情報を見落とさないこと
+3. Slack通知が読みやすく、行動に直結すること
+4. ダッシュボードが「今日何をすべきか」を即座に伝えること
+5. 文書と実装の食い違いをなくすこと
 
 
-優先度A: すぐ直すべき安全性・整合性
-====================================
+完了済み（参考）
+================
+- 警戒モード時の candidate → watch 自動降格（signal_detector.py L88）
+- 推奨投入額の上限制御: 総資金キャップ・同時保有上限キャップ・損切り幅フィルタ
+- 推奨投入額に既存保有数を考慮（entry_calculator.py: _count_open_holdings）
+- 価格取得全件失敗時にテクニカル計算・シグナル検出をスキップ（B1）
+- Slack通知失敗でバッチ全体がfailedになるのを防止（B2）
+- テスト全件パス（216テスト OK / 2026-05-08時点）
+- バックテスト機能（backtester.py / test_backtester.py）
+- ペーパートレード機能（paper_trading.py / バッチ統合済み）
+- 端株対応（moomoo証券の端株取引を前提に100株単位制約を除去）
 
-1. 警戒モード時の新規買い停止を実装と文書で統一する
---------------------------------------------------
+
+優先度A: 安全性・信頼性
+========================
+
+A-1. Slack通知の長さ制御
+------------------------
+影響度: 高
+
 現状:
-- README/要件では「警戒時は新規買いシグナル停止」と説明している。
-- しかし src/signal_detector.py は市場環境に関わらず candidate を生成する。
-- batch_evening_jp.py / batch_morning_all.py は、その candidate をそのまま save_entry_sets に渡す。
+- 候補3件 + Near-miss 3件 + 保有5件 + LLM 3プロバイダで通知が非常に長くなる。
+- 長すぎると読み飛ばされ、損切り警告を見逃すリスクがある。
 
 修正方針:
-- market_mode が caution / full_caution の場合は、新規買い候補を通知・trade_signal_log 保存しない。
-- daily_signals には分析ログとして保存してよいが、label は candidate ではなく watch または skip に落とす。
-- Slack通知には「警戒モード中のため新規買い候補は停止」と明示する。
+- 損切り警告・アクション項目を冒頭に固定し、詳細はダッシュボードリンクに誘導する。
+- LLMフィードバックは要約（2-3行）のみ掲載し、全文はダッシュボードに移す。
+- Near-miss は最大2件に削減するか折りたたみ扱いにする。
 
 対象ファイル:
-- Investment/investment_support/src/signal_detector.py
-- Investment/investment_support/scripts/batch_evening_jp.py
-- Investment/investment_support/scripts/batch_morning_all.py
-- Investment/investment_support/src/notifier.py
-- Investment/README.md
+- src/notifier.py
+- scripts/order_server.py
 
 確認観点:
-- normal のときだけ entry_set が作られる。
-- caution / full_caution のときは trade_signal_log に新規買い候補が保存されない。
-- 保有銘柄の損切り判定は警戒モードでも必ず実行される。
+- 損切り警告が通知の先頭3ブロック以内に必ず表示される。
+- Slackモバイルで1スクロール以内にアクション項目が収まる。
 
 
-2. 推奨投入額に上限と取引単位チェックを入れる
---------------------------------------------
+A-2. 損切り到達時のアクション導線
+---------------------------------
+影響度: 中
+
 現状:
-- 推奨投入額は「総資金 × 2% ÷ 損切り幅」で算出している。
-- 損切り幅が小さい場合、総資金を超える投入額になる可能性がある。
-- 要件にある「同時保有3銘柄」「日本株100株単位」「最低取引単位不足」の制御が弱い。
+- 🚨で警告するが「何をすべきか」の具体的ガイダンスがない。
+- 初心者は警告を見ても行動に移れない可能性がある。
 
 修正方針:
-- 推奨投入額は少なくとも以下で制限する。
-  - 総資金を超えない
-  - 同時保有上限を考慮する
-  - 日本株は100株単位で購入可能株数を算出する
-  - 購入可能株数が0なら「資金不足のため見送り」扱いにする
-- 損切り幅が1%未満の場合は、警告だけでなくエントリー候補から除外する。
-- 損切り幅が15%超の場合は候補には残してよいが、強い警告を表示する。
+- 損切り到達通知に「成行売りを検討してください」等の一言を添える。
+- 保有枠満杯の警告（_warn_at_capacity）も通知に反映する。
 
 対象ファイル:
-- Investment/investment_support/src/entry_calculator.py
-- Investment/investment_support/src/notifier.py
-- Investment/investment_support/scripts/order_server.py
-- Investment/README.md
-
-確認観点:
-- recommended_amount が総資金を超えない。
-- 日本株で100株未満しか買えない場合は見送り表示になる。
-- 米国株は小数株対応の可否を設定で切り替えられると望ましい。
+- src/notifier.py
 
 
-3. 落ちているテストを修正する
-----------------------------
+A-3. バッチ並行実行の保護
+-------------------------
+影響度: 中
+
 現状:
-- .venv\Scripts\python.exe -m unittest discover -s tests で 106 tests 中、8 errors / 1 failure。
-- holdings_monitor.py が import 時に CONFIG["capital"] を直接読むため、テスト用設定で KeyError になる。
-- test_notifier.py はサブスコア表記として T:82 等を期待しているが、実装は「トレンド:82」形式。
+- 夜バッチと朝バッチが重なった場合のDB書き込み競合保護がない。
+- WALモードで読み取りは安全だが、upsert の競合リスクが残る。
 
 修正方針:
-- import 時に設定値へ強く依存しないよう、CONFIG 読み込みにデフォルト値を持たせる。
-- テスト期待値と実装の表示方針を統一する。
-- 日本語ログの文字化けも確認する。
+- ファイルロック（fcntl / msvcrt）またはDB内ロックテーブルで排他制御する。
+- 既にバッチ実行中なら2重起動をスキップしてログに記録する。
 
 対象ファイル:
-- Investment/investment_support/src/holdings_monitor.py
-- Investment/investment_support/src/notifier.py
-- Investment/investment_support/tests/test_holdings_monitor.py
-- Investment/investment_support/tests/test_notifier.py
-
-確認コマンド:
-  cd Investment/investment_support
-  .venv\Scripts\python.exe -m unittest discover -s tests
+- scripts/batch_evening_jp.py
+- scripts/batch_morning_all.py
 
 
-優先度B: 初心者向けの誤解防止
-============================
+A-4. バッチタイムアウト
+-----------------------
+影響度: 中
 
-4. READMEに「これは買い指示ではない」と明記する
-----------------------------------------------
 現状:
-- READMEには「実行規律補助システム」とあるが、初心者には candidate や推奨投入額が買い指示に見えやすい。
+- 外部API（EODHD, yfinance, J-Quants）の応答が返らない場合、バッチが無期限にハングする。
 
 修正方針:
-- README冒頭に、以下を明記する。
-  - 投資助言・利益保証ではない
-  - 最終判断はユーザーが行う
-  - 候補は「検討対象」であり、注文指示ではない
-  - 損失が出る可能性がある
-- 通知文にも「買い候補」ではなく「検討候補」などの表現を検討する。
+- バッチ全体にタイムアウト（例: 30分）を設ける。
+- 個別API呼び出しにも適切なタイムアウトを確認する。
 
 対象ファイル:
-- Investment/README.md
-- Investment/investment_support/src/notifier.py
+- scripts/batch_evening_jp.py
+- scripts/batch_morning_all.py
 
 
-5. シグナルの「見送り理由」を表示する
-------------------------------------
+A-5. signal_detector の None 値の明示処理
+-----------------------------------------
+影響度: 中
+
 現状:
-- 条件を満たした理由はある程度表示されるが、初心者に重要な「なぜ見送るべきか」が弱い。
+- テクニカル値が None の場合、暗黙的に条件不成立になる。
+- 「データ不足で判定不能」と「条件未達」の区別がつかない。
+
+修正方針:
+- None 値の条件にはログで「データ不足」と明示する。
+- 通知にも「データ不足のため一部条件は判定保留」と表示する。
+
+対象ファイル:
+- src/signal_detector.py
+- src/notifier.py
+
+
+優先度B: UX改善（初心者向け）
+==============================
+
+B-1. ダッシュボードのアクション優先表示
+---------------------------------------
+影響度: 高
+
+現状:
+- /report が1画面に全情報を詰め込みすぎて、初心者には「今すぐ見るべきこと」が埋もれる。
+
+修正方針:
+- /report の最上部に「今日の行動」セクションを固定表示する。
+  - 損切り対象あり → 最優先で確認
+  - 警戒モード → 新規買い停止中
+  - 通常モード → 検討候補あり/なし
+  - 保有枠の状況（残りN枠）
+- 詳細は折りたたみにして、初期表示をシンプルに保つ。
+
+対象ファイル:
+- scripts/order_server.py
+
+
+B-2. 見送り理由の表示
+---------------------
+影響度: 中
+
+現状:
+- 条件を満たした理由はある程度表示されるが「なぜ見送るべきか」が弱い。
 
 修正方針:
 - 以下の理由を通知・ダッシュボードに出す。
   - 警戒モードのため新規買い停止
-  - 損切り幅が狭すぎる
-  - 損切り幅が広すぎる
+  - 損切り幅が広すぎる（高ボラティリティ）
   - 推奨投入額が資金に対して過大
-  - 日本株の単元未満で購入不可
+  - 保有枠が満杯（_warn_at_capacity）
   - 決算発表が近い
   - データ不足で判定保留
 
 対象ファイル:
-- Investment/investment_support/src/entry_calculator.py
-- Investment/investment_support/src/notifier.py
-- Investment/investment_support/scripts/order_server.py
+- src/notifier.py
+- scripts/order_server.py
 
 
-6. 初心者向けダッシュボード表示を追加する
-----------------------------------------
+B-3. データ鮮度の表示
+---------------------
+影響度: 中
+
 現状:
-- ダッシュボードは高機能だが、初心者が「今日何をすべきか」を一目で判断する導線が弱い。
+- ダッシュボードにデータ取得時刻の表示がない。
+- バッチがいつ走ったか分からず、表示価格が古い可能性に気づけない。
 
 修正方針:
-- /report の上部に「今日の行動」を表示する。
-  - 損切り対象あり: 最優先で確認
-  - 警戒モード: 新規買い停止
-  - 通常モード: 検討候補あり/なし
-  - 保有銘柄の注意点
-- 専門用語には短い説明を添える。
+- ダッシュボード・Slack通知の両方に「データ取得時刻」を表示する。
+- batch_run_log の最新レコードを参照する。
 
 対象ファイル:
-- Investment/investment_support/scripts/order_server.py
+- scripts/order_server.py
+- src/notifier.py
 
 
-優先度C: 儲けにつながるかを検証する仕組み
-======================================
+B-4. 推奨投入額の通貨合算・株数表示
+------------------------------------
+影響度: 中
 
-7. バックテストを追加する
-------------------------
 現状:
-- 要件には「1年間で期待値を検証」とあるが、運用前に過去データでの妥当性確認が不足している。
+- JP銘柄は円、US銘柄はドルで表示されるが、総投入額の合算表示がない。
+- 推奨投入額→株数への換算表示がない（moomoo証券は端株対応）。
 
 修正方針:
-- 過去3年データを使って、以下を検証する。
-  - パターンA/B別の勝率
-  - 平均利益、平均損失
-  - 期待値
-  - 最大ドローダウン
-  - 連敗数
-  - 市場環境別の成績
-  - 手数料・スプレッド・スリッページ込みの成績
-- 未来の価格を使わないよう、日次ごとの時点情報だけで判定する。
+- 通知・ダッシュボードに「約XX株」の換算を追加する。
+- ポートフォリオ全体のリスク配分サマリを追加する。
 
-新規候補ファイル:
-- Investment/investment_support/scripts/backtest_signals.py
-- Investment/investment_support/src/backtester.py
-- Investment/investment_support/tests/test_backtester.py
+対象ファイル:
+- src/notifier.py
+- scripts/order_server.py
 
 
-8. フォワードテスト運用モードを作る
+B-5. READMEに免責事項を明記する
+-------------------------------
+影響度: 中
+
+現状:
+- READMEには「実行規律補助システム」とあるが、初心者には候補や推奨投入額が買い指示に見える。
+
+修正方針:
+- README冒頭に以下を明記する。
+  - 投資助言・利益保証ではない
+  - 最終判断はユーザーが行う
+  - 候補は「検討対象」であり注文指示ではない
+  - 損失が出る可能性がある
+- 通知文にも「買い候補」ではなく「検討候補」の表現を検討する。
+
+対象ファイル:
+- README.md
+- src/notifier.py
+
+
+B-6. API失敗時のフォールバック表示
 ----------------------------------
+影響度: 中
+
 現状:
-- 実績入力はあるが、実売買しない検証モードが明確ではない。
+- ダッシュボードのAPIエンドポイントが失敗した場合、チャート部分が空白のまま表示される。
 
 修正方針:
-- シグナルを実売買せず、仮想エントリー・仮想決済として記録する paper mode を追加する。
-- 実売買ログと仮想売買ログを分ける。
-- まず1〜3か月は paper mode で期待値を確認する。
+- 各チャート・データセクションに「データ取得失敗」のフォールバック表示を追加する。
 
-新規候補ファイル:
-- Investment/investment_support/src/paper_trading.py
-- Investment/investment_support/scripts/update_paper_trades.py
+対象ファイル:
+- scripts/order_server.py
 
 
-9. 月次レポートを「改善判断」に使える内容にする
-----------------------------------------------
+優先度C: 品質・保守性
+======================
+
+C-1. order_server.py の HTML/CSS/JS 分離
+-----------------------------------------
+影響度: 高
+
 現状:
-- 月次レポート機能はあるが、システム改善の判断基準がREADME上では弱い。
+- HTML/CSS/JS がすべて Python f-string 内にインライン（約1,500行）。
+- 変更・レビューが困難で、テンプレートの見通しが悪い。
 
 修正方針:
-- 月次レポートに以下を必ず出す。
-  - パターン別期待値
+- Jinja2 テンプレートに分離する。
+- CSS/JS は static ファイルに切り出す。
+- Flask の標準テンプレート構成（templates/ + static/）を使う。
+
+対象ファイル:
+- scripts/order_server.py（分割元）
+- templates/（新規）
+- static/（新規）
+
+
+C-2. モバイル対応の改善
+-----------------------
+影響度: 中
+
+現状:
+- テーブルは table-responsive（横スクロール）だが、カラム数が多く小画面では実質使いにくい。
+
+修正方針:
+- カード表示への切替やカラム省略を追加する。
+- 小画面ではテーブルの重要列のみ表示し、詳細は展開式にする。
+
+対象ファイル:
+- scripts/order_server.py（テンプレート分離後）
+
+
+C-3. 月次レポートの改善
+------------------------
+影響度: 中
+
+現状:
+- 月次レポート機能はあるが、システム改善の判断基準が弱い。
+
+修正方針:
+- 月次レポートに以下を追加する。
+  - パターン別期待値（バックテスト・ペーパートレード実績）
   - 警戒モード時に停止した候補数
-  - 実行した場合/見送った場合の比較
   - 損切り通知に従った場合の損失削減額
   - 資金サイズに対する月額コストの比率
 
 対象ファイル:
-- Investment/investment_support/src/report_generator.py
-- Investment/investment_support/scripts/batch_monthly.py
-- Investment/investment_support/scripts/order_server.py
+- src/report_generator.py
+- scripts/batch_monthly.py
 
 
-優先度D: 文書と実装のズレをなくす
-==============================
+C-4. LLM プロンプト肥大化ガード
+---------------------------------
+影響度: 中
 
-10. moomoo関連の記述を整理する
------------------------------
 現状:
-- detailed_design.md v1.5 では半自動注文機能を削除したとある。
-- READMEやconfig_template.jsonには moomoo 同期の記述が残っている。
+- エントリー3件 + 保有5件 + ニュース複数件で、入力トークンが大きくなりコストが跳ねる可能性。
+- トークン数はログに残るが上限ガードがない。
 
 修正方針:
-- 現在サポートする範囲を明確化する。
-  - 保有銘柄同期のみサポートするのか
-  - 注文補助は完全に削除したのか
-  - scripts/sync_holdings_from_moomoo.py と src/moomoo_sync.py は正式機能なのか
+- プロンプト構築時にトークン数を推計し、上限を超える場合は情報を削減する。
+- 同一日に複数回バッチを手動実行した場合のキャッシュも検討する。
+
+対象ファイル:
+- src/llm_advisor.py
+
+
+C-5. ニュース取得の精度改善
+----------------------------
+影響度: 低
+
+現状:
+- Google News RSS のみ。銘柄名の一般名詞衝突（例: Apple）の可能性。
+- 取得したニュースの日付チェックがなく、古いニュースが含まれる可能性。
+
+修正方針:
+- 銘柄名 + ティッカーの併用検索にする。
+- ニュースの日付をチェックし、一定期間以上古いものは除外する。
+
+対象ファイル:
+- src/news_fetcher.py
+
+
+C-6. アクセシビリティ改善
+--------------------------
+影響度: 低
+
+現状:
+- チャートの色依存（赤/緑）に対してパターンやラベルの代替手段がない。
+
+修正方針:
+- チャートにパターン（破線・点線等）やラベルの代替を追加する。
+
+対象ファイル:
+- scripts/order_server.py（テンプレート分離後）
+
+
+優先度D: 文書・設定の整合性
+============================
+
+D-1. moomoo 関連の記述を整理する
+---------------------------------
+現状:
+- detailed_design.md v1.5 では半自動注文機能を削除したとある。
+- READMEや config_template.json には moomoo 同期の記述が残っている。
+
+修正方針:
+- 現在サポートする範囲を明確化する（保有銘柄同期のみ or 完全削除）。
 - README、要件定義、詳細設計、config_template.json を同じ状態に揃える。
 
 対象ファイル:
-- Investment/README.md
-- Investment/low_cost_investment_support_requirements.md
-- Investment/detailed_design.md
-- Investment/investment_support/config_template.json
-- Investment/investment_support/src/moomoo_sync.py
-- Investment/investment_support/scripts/sync_holdings_from_moomoo.py
+- README.md
+- low_cost_investment_support_requirements.md
+- detailed_design.md
+- config_template.json
+- src/moomoo_sync.py
 
 
-11. J-Quants設定キー名を統一する
--------------------------------
+D-2. J-Quants 設定キー名を統一する
+-----------------------------------
 現状:
-- READMEでは jquants.refresh_token と書かれている。
+- README では jquants.refresh_token と書かれている。
 - config_template.json では jquants.api_key になっている。
 
 修正方針:
@@ -246,14 +363,14 @@
 - 未設定時の動作も明記する。
 
 対象ファイル:
-- Investment/README.md
-- Investment/investment_support/SETUP.md
-- Investment/investment_support/config_template.json
-- Investment/investment_support/src/jquants_fetcher.py
+- README.md
+- SETUP.md
+- config_template.json
+- src/jquants_fetcher.py
 
 
-12. READMEに「運用開始前チェックリスト」を追加する
------------------------------------------------
+D-3. README に「運用開始前チェックリスト」を追加する
+----------------------------------------------------
 追加する内容:
 - テストが全件通る
 - config.json に資金額が正しく入っている
@@ -261,33 +378,51 @@
 - Slack通知がテスト送信できる
 - 警戒モード時に新規買いが出ない
 - バックアップが作成される
-- paper mode または少額で最低1か月検証する
+- paper mode で最低1か月検証する
 
 対象ファイル:
-- Investment/README.md
-- Investment/investment_support/SETUP.md
+- README.md
+- SETUP.md
+
+
+テスト強化
+==========
+
+T-1. バッチレベルの API 失敗シナリオ
+- タイムアウト、429 エラー時の挙動テスト
+
+T-2. holdings.csv 同期のエッジケース
+- 重複行、空ファイル、不正フォーマットのテスト
+
+T-3. エンドツーエンドのバッチテスト
+- fetch → テクニカル計算 → シグナル → 通知 の統合テスト
+
+T-4. 市場環境モード遷移テスト
+- JP↑ US↓ など市場ごとに異なるモードの判定テスト
+
+T-5. 52週高値の計算ロジックテスト
+- ローリング最大値の正確性を検証
 
 
 実施順序
 ========
-1. 優先度A-1: 警戒モード時の新規買い停止
-2. 優先度A-3: テスト失敗の修正
-3. 優先度A-2: 推奨投入額の上限制御
-4. 優先度D-10/D-11: 文書と設定の不整合解消
-5. 優先度B-4/B-5: 初心者向けの注意・見送り理由の追加
-6. 優先度B-6: ダッシュボードの「今日の行動」追加
-7. 優先度C-7/C-8/C-9: バックテスト・フォワードテスト・月次検証の強化
-8. READMEとSETUPを最終更新
-9. 全テスト実行
-10. 実運用前に1か月以上の検証運用
+1. A-1/A-2: Slack通知の長さ制御 + 損切りアクション導線
+2. B-1/B-2: ダッシュボードのアクション優先 + 見送り理由表示
+3. A-3/A-4: バッチ並行実行保護 + タイムアウト
+4. B-3/B-4/B-5: データ鮮度・通貨合算・README免責
+5. C-1: order_server.py のテンプレート分離
+6. D-1/D-2/D-3: 文書・設定の整合性修正
+7. C-2/C-3/C-4: モバイル・月次レポート・LLMガード
+8. T-1〜T-5: テスト強化
+9. 全テスト実行・最終確認
 
 
 完了条件
 ========
 - 全テストが成功する。
-- caution / full_caution で新規買い候補が通知されない。
-- 推奨投入額が総資金・同時保有数・取引単位を超えない。
+- Slack通知が1スクロール以内で損切り警告・アクション項目を把握できる。
+- ダッシュボード上部に「今日の行動」が表示される。
+- 推奨投入額が既存保有数・総資金を考慮している。
+- バッチが外部API障害時にも安全にフォールバックする。
 - READMEだけを読んでも、初心者が「これは利益保証や買い指示ではない」と理解できる。
-- バックテストまたはフォワードテストで、パターンA/Bの期待値を確認できる。
 - 月次レポートで継続・停止・条件見直しの判断ができる。
-

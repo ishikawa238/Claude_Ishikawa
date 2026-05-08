@@ -1,0 +1,235 @@
+# 投資判断支援システム
+
+> **注意**: 本システムは投資助言や利益保証を行うものではありません。検出される候補はあくまで「検討対象」であり、注文指示ではありません。最終的な売買判断と発注操作はユーザー自身の責任で行ってください。投資には元本割れのリスクがあります。
+
+日本株・米国株を対象とした投資判断支援システム。日次の価格データからテクニカル指標を計算し、買いパターンの検出・保有銘柄の損切り判定・Slack通知を自動で行う。最終的な売買判断はユーザー自身が行う「実行規律補助システム」。
+
+## できること
+
+- 日本株約3,600銘柄・米国株約51,000銘柄の日次価格データを自動取得
+- 2種類の買いパターン（モメンタムブレイクアウト / 押し目買い）を自動検出
+- 検出銘柄にエントリー価格・損切りライン・利確目安・推奨投入額をセットで算出
+- 保有銘柄の損切りライン到達を最優先で通知
+- 市場全体のトレンドを判定し、警戒時は新規買いを自動停止
+- 朝（07:30）と夜（20:30）の2回、Slackで通知
+- Webダッシュボード（`http://127.0.0.1:5100/report`）で保有状況・シグナル履歴・チャートを確認
+
+## セットアップ
+
+詳細な手順は [investment_support/SETUP.md](investment_support/SETUP.md) を参照。
+
+```cmd
+cd investment_support
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+pip install yfinance            # 初回履歴取得に必要
+
+copy config_template.json config.json   # APIキー等を設定
+python -m scripts.init_db               # DB初期化
+python -m scripts.fetch_historical      # 過去3年分の価格データ取得（数時間）
+```
+
+### 必要なAPIキー
+
+| サービス | 用途 | config.json のキー | 費用 |
+|---------|------|-------------------|------|
+| EODHD | 日次価格データ（US）・インデックス | `eodhd.api_key` | $19.99/月 |
+| Slack Incoming Webhook | 通知送信 | `slack.webhook_url` | 無料 |
+| J-Quants（任意） | JP財務データ・決算予定 | `jquants.api_key` | 無料プランあり |
+
+## 日常の使い方
+
+すべてのコマンドは `investment_support/` ディレクトリから実行する。
+
+### 自動実行（Windowsタスクスケジューラ登録済み）
+
+| 時刻 | バッチ | 内容 |
+|------|-------|------|
+| ログオン時 | `python -m scripts.order_server` | Webダッシュボード自動起動（`127.0.0.1:5100`） |
+| 毎日 20:30 | `python -m scripts.batch_evening_jp` | JP株価取得 → テクニカル計算 → シグナル検出 → Slack夜通知 |
+| 毎日 07:30 | `python -m scripts.batch_morning_all` | US株価取得 → テクニカル計算 → JP+USシグナル統合 → Slack朝通知 |
+| 毎月1日 08:00 | `python -m scripts.batch_monthly` | 銘柄マスタ更新 → 月次レポート送信 |
+
+タスクスケジューラへの一括登録：
+```powershell
+# 管理者権限のPowerShellで実行
+.\setup_scheduler.ps1
+```
+
+### 手動実行
+
+```cmd
+python -m scripts.batch_evening_jp      # 夜バッチを今すぐ実行
+python -m scripts.batch_morning_all     # 朝バッチを今すぐ実行
+python -m scripts.batch_monthly         # 銘柄マスタ更新 + 月次レポート
+python -m scripts.order_server          # Webダッシュボード起動（127.0.0.1:5100）
+python -m scripts.add_trade_result      # トレード結果の手動記録
+python -m scripts.fetch_historical      # 履歴データの再取得（冪等）
+python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30  # バックテスト
+python -m scripts.update_paper_trades --summary  # ペーパートレードのサマリー表示
+```
+
+### 保有銘柄の管理
+
+`investment_support/holdings.csv` を直接編集する。moomoo OpenD が起動中の場合はバッチ実行時に保有銘柄が自動同期される（任意・未接続でも動作する）。
+
+```csv
+ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
+7203,トヨタ自動車,JP,3200,2025-01-15,10,,
+AAPL,Apple Inc,US,185.5,2025-01-10,5,170.0,
+```
+
+- `stop_loss_price` を省略すると `entry_price × 0.92`（-8%）が自動設定される
+- `quantity` を省略すると 1 として計算される
+
+## アーキテクチャ
+
+### データフロー
+
+```
+外部API（EODHD / yfinance / J-Quants）
+  ↓
+price_history / index_snapshot（SQLite）
+  ↓
+technical_snapshot（MA, RSI, ATR 等を計算）
+  ↓
+market_environment（通常 / 警戒 / 全面警戒を判定）
+  ↓
+daily_signals → trade_signal_log（パターンA/B検出 → エントリーセット算出）
+  ↓
+Slack通知 + Webダッシュボード（/report）
+```
+
+### 売買パターン
+
+| パターン | 名称 | 検出条件の要約 |
+|---------|------|--------------|
+| A | モメンタムブレイクアウト | MA200上昇中 + MA整列（MA5>MA25>MA75>MA200） + 52週高値更新 + 出来高急増 + RSI 50-70 |
+| B | 押し目買い | MA200上昇中 + MA整列 + 直近5日以内にMA25タッチ後反発 + MA25上昇中 + RSI 40-60 |
+
+いずれも全条件を満たした銘柄のみ `candidate`（実行候補）として通知される。
+
+### 市場環境モード
+
+| モード | 条件 | 新規買いシグナル |
+|-------|------|----------------|
+| 通常（normal） | 日経平均 ≥ MA25 かつ S&P500 ≥ MA25 | 発信する |
+| 警戒（caution） | いずれか一方が MA25 未満 | 停止 |
+| 全面警戒（full_caution） | 両方が MA25 未満 | 停止 |
+
+保有銘柄の損切り判定は、市場環境に関わらず常に実行される。
+
+### エントリーセット計算
+
+| 項目 | 計算方法 |
+|------|---------|
+| エントリー価格 | 当日終値（翌日寄付想定） |
+| 損切りライン | エントリー価格 - ATR14 × 2 |
+| 利確目安 | リスクリワード 2:1（損切り幅の2倍） |
+| 推奨投入額 | 総資金 × 2% ÷ 損切り幅(%) |
+
+### ディレクトリ構成
+
+```
+investment_support/
+├── config.json               # 設定ファイル（APIキー等）※Git管理外
+├── config_template.json      # 設定テンプレート
+├── holdings.csv              # 保有銘柄（手動 or moomoo同期）
+├── requirements.txt
+├── SETUP.md
+│
+├── src/
+│   ├── config.py             # CONFIG グローバル変数
+│   ├── logger.py             # ロギング（コンソール + logs/batch_YYYYMMDD.log）
+│   ├── data_fetcher.py       # EODHD API・JPX銘柄マスタ取得
+│   ├── yfinance_fetcher.py   # yfinance による価格取得（JP日次 + 初回一括）
+│   ├── jquants_fetcher.py    # J-Quants API（JP財務・決算予定）
+│   ├── data_store.py         # SQLite操作・バックアップ
+│   ├── technical_calculator.py  # テクニカル指標計算
+│   ├── market_filter.py      # 市場環境判定・流動性フィルタ
+│   ├── signal_detector.py    # パターンA/B検出
+│   ├── scoring.py            # 銘柄スコアリング（0-100点 → S/A/B/C/Watchランク）
+│   ├── entry_calculator.py   # エントリーセット算出
+│   ├── holdings_monitor.py   # 保有銘柄の損益計算・損切り判定
+│   ├── moomoo_sync.py        # moomoo OpenD からの保有銘柄同期
+│   ├── risk.py               # リスク指標（VaR, Beta, Sharpe Ratio）
+│   ├── backtester.py         # バックテスト（過去シグナルの期待値検証）
+│   ├── paper_trading.py      # ペーパートレード（仮想売買記録・日次更新）
+│   ├── notifier.py           # Slack通知生成・送信
+│   └── report_generator.py   # 月次レポート生成（運用統計付き）
+│
+├── scripts/
+│   ├── init_db.py            # DB初期化（冪等）
+│   ├── fetch_historical.py   # 初回3年分一括取得
+│   ├── batch_evening_jp.py   # 夜バッチ（20:30）
+│   ├── batch_morning_all.py  # 朝バッチ（07:30）
+│   ├── batch_monthly.py      # 月次バッチ
+│   ├── order_server.py       # Webダッシュボード（Flask, 127.0.0.1:5100）
+│   ├── backtest_signals.py   # バックテスト実行CLI
+│   ├── update_paper_trades.py # ペーパートレード更新・サマリー表示
+│   ├── add_trade_result.py   # トレード結果の手動記録
+│   └── sync_holdings_from_moomoo.py  # moomoo手動同期
+│
+├── tests/                    # unittest
+├── data/                     # SQLite DB + バックアップ
+└── logs/                     # 日次ログ
+```
+
+### データベース（SQLite）
+
+主要テーブル：
+
+| テーブル | 内容 |
+|---------|------|
+| `universe_master` | 銘柄マスタ（JP/US、約55,000銘柄） |
+| `price_history` | 日足OHLCV |
+| `technical_snapshot` | 日次テクニカル指標（MA, RSI, ATR等） |
+| `index_snapshot` | インデックス日次データ（N225, TOPIX, SP500, NASDAQ） |
+| `market_environment` | 日次の市場環境モード |
+| `holdings` | 保有銘柄（holdings.csv から同期） |
+| `daily_signals` | 日次判定結果 |
+| `trade_signal_log` | 通知済みエントリーセット |
+| `trade_result_log` | トレード実績（手動記録） |
+| `fundamentals_snapshot` | JP財務データ（J-Quants） |
+| `earnings_schedule` | JP決算発表予定日 |
+
+`init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [detailed_design.md](detailed_design.md) セクション2を参照。
+
+## テスト
+
+```cmd
+cd investment_support
+python -m unittest discover -s tests        # 全テスト実行
+python -m unittest tests.test_notifier      # 個別テスト
+```
+
+## 関連ドキュメント
+
+| ファイル | 内容 |
+|---------|------|
+| [SETUP.md](investment_support/SETUP.md) | セットアップ手順（スクリーンショット付き） |
+| [detailed_design.md](detailed_design.md) | 詳細設計書（DB定義・バッチフロー・Slack通知テンプレート） |
+| [low_cost_investment_support_requirements.md](low_cost_investment_support_requirements.md) | 要件定義書 |
+| [CLAUDE.md](CLAUDE.md) | Claude Code 向けガイド |
+
+## 運用開始前チェックリスト
+
+実際に資金を投じる前に、以下をすべて確認してください。
+
+- [ ] `python -m unittest discover -s tests` が全件パスする
+- [ ] `config.json` の `total_capital_jpy` / `total_capital_usd` が実際の運用資金と一致している
+- [ ] `holdings.csv` に重複行がない（同一銘柄が2行以上ないこと）
+- [ ] Slack通知のテスト送信ができる（`python -m scripts.batch_evening_jp` を手動実行して通知を確認）
+- [ ] 警戒モード時に新規買い候補が通知されないことを確認済み
+- [ ] `data/backup/` にDBバックアップが作成されている
+- [ ] `config.json` に `"paper_mode": {"enabled": true}` を設定し、最低1か月はペーパートレードで検証する
+- [ ] ペーパートレード結果（`python -m scripts.update_paper_trades --summary`）で期待値がプラスであることを確認
+
+## 既知の制約
+
+- JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応
+- JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
+- J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
+- Webダッシュボードは `127.0.0.1` のみで待ち受け。外部公開は不可
+- 初回セットアップ時に `fetch_historical` で3年分の履歴取得が必要（数時間かかる）

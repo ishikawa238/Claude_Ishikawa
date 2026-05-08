@@ -198,12 +198,21 @@ def fetch_daily_yf(
         tickers_with_market: [(ticker, market), ...] のリスト
         target_date: 取得対象日
 
-    返り値: price_history テーブルへの INSERT 用辞書リスト（target_date のデータのみ）
+    返り値: price_history テーブルへの INSERT 用辞書リスト。
+            target_date のデータを優先するが、祝日・取引時間外等で当日分が
+            ない場合は直近5営業日のデータをすべて返す（upsert で冪等）。
     """
     from_date = target_date - timedelta(days=5)
     all_rows, _ = fetch_history_bulk_yf(tickers_with_market, from_date, target_date)
 
     target_str = target_date.strftime("%Y-%m-%d")
     daily_rows = [r for r in all_rows if r["date"] == target_str]
-    logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
-    return daily_rows
+    if daily_rows:
+        logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
+        return daily_rows
+
+    # 当日分がない場合（祝日・時間外）は直近5日分をすべて返す
+    logger.info(
+        f"yfinance 当日価格なし ({target_str})。直近データ {len(all_rows)} 件を返します"
+    )
+    return all_rows

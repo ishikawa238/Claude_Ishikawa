@@ -8,6 +8,7 @@ Morning English プレイリスト更新 & 再生のコアロジック
 """
 
 import time
+from datetime import datetime
 
 import spotipy
 
@@ -82,15 +83,18 @@ def update_playlist(sp: spotipy.Spotify, episodes: list[dict]) -> None:
     _logger().info(f"プレイリスト更新完了: {len(uris)} エピソード")
 
 
-def start_playback(sp: spotipy.Spotify) -> str | None:
+def start_playback(sp: spotipy.Spotify, device_name_override: str | None = None) -> str | None:
     """Spotify Connect で指定デバイスに再生を開始する。
+
+    Args:
+        device_name_override: 指定時、config の device_name の代わりに使用する。
 
     Returns:
         再生開始したデバイス名。デバイスが見つからない場合は None。
     """
     cfg = get_config()
     playlist_id = cfg["spotify"]["playlist_id"]
-    device_name = cfg["spotify"]["device_name"]
+    device_name = device_name_override or cfg["spotify"]["device_name"]
 
     devices = sp.devices().get("devices", [])
     if not devices:
@@ -163,10 +167,46 @@ def send_slack_failure(error: str) -> None:
     slack.send_webhook(webhook_url, {"blocks": blocks}, logger=_logger())
 
 
+def _get_active_schedule(cfg: dict) -> dict | None:
+    """現在時刻に一致するスケジュールを返す。一致しなければ None。"""
+    schedules = cfg.get("spotify", {}).get("schedules", [])
+    if not schedules:
+        return None
+
+    now = datetime.now()
+    current_min = now.hour * 60 + now.minute
+
+    for sched in schedules:
+        parts = sched.get("start", "").split(":")
+        if len(parts) != 2:
+            continue
+        sched_min = int(parts[0]) * 60 + int(parts[1])
+        # 起動時刻の前後 10 分以内なら一致とみなす
+        if abs(current_min - sched_min) <= 10:
+            return sched
+
+    return None
+
+
 def run(sp: spotipy.Spotify) -> None:
     """メイン処理: エピソード取得 → プレイリスト更新 → 再生開始 → 通知"""
     cfg = get_config()
-    target_minutes = cfg["spotify"].get("target_minutes", 90)
+
+    # スケジュールから再生時間とデバイスを決定
+    schedule = _get_active_schedule(cfg)
+    if schedule:
+        start_parts = schedule["start"].split(":")
+        end_parts = schedule["end"].split(":")
+        target_minutes = (
+            (int(end_parts[0]) * 60 + int(end_parts[1]))
+            - (int(start_parts[0]) * 60 + int(start_parts[1]))
+        )
+        sched_device = schedule.get("device_name")
+        label = schedule.get("label", schedule["start"])
+        _logger().info(f"スケジュール '{label}' に一致: {target_minutes}分")
+    else:
+        target_minutes = cfg["spotify"].get("target_minutes", 90)
+        sched_device = None
 
     try:
         # エピソード取得
@@ -186,7 +226,7 @@ def run(sp: spotipy.Spotify) -> None:
         time.sleep(2)
 
         # 再生開始
-        device_name = start_playback(sp)
+        device_name = start_playback(sp, device_name_override=sched_device)
 
         # 成功通知
         send_slack_success(selected, device_name)

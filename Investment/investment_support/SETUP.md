@@ -104,7 +104,13 @@ python -c "import sqlite3; conn=sqlite3.connect('./data/investment.db'); [print(
 
 ---
 
-## 7. Windowsタスクスケジューラへの登録（後工程）
+## 7. 運用開始前チェック
+
+タスクスケジューラに登録する前に、[README の運用開始前チェックリスト](../README.md#運用開始前チェックリスト) をすべて確認してください。特に `paper_mode` を有効にして最低1か月の検証運用を推奨します。
+
+---
+
+## 8. Windowsタスクスケジューラへの登録（後工程）
 
 バッチが完成した後に以下を登録する。
 

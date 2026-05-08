@@ -9,6 +9,7 @@ paths:
   - "Investment/investment_support/SETUP.md"
   - "EnglishDaily/CLAUDE.md"
   - "EnglishDaily/README.md"
+  - "MorningPlaylist/README.md"
 ---
 
 # Documentation Update Rules

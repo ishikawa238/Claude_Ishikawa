@@ -23,6 +23,8 @@ from shared.logger import get_logger
 
 logger = get_logger(__name__)
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # ---------------------------------------------------------------------------
 # 検知ロジック
 # ---------------------------------------------------------------------------
@@ -135,6 +137,14 @@ def check_fatal_errors(
     返り値:
         {"count": int, "ok": bool, "samples": list[str]}
     """
+    # error_log テーブルが存在しないシステムはスキップ
+    tbl = db.fetch_one(
+        conn,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='error_log'",
+    )
+    if tbl is None:
+        return {"count": 0, "ok": True, "samples": []}
+
     row = db.fetch_one(
         conn,
         """
@@ -261,6 +271,122 @@ def check_project(project_key: str, project_cfg: dict, watchdog_cfg: dict) -> di
 
 
 # ---------------------------------------------------------------------------
+# 新規システム自動発見
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EXCLUDE_DIRS = {"shared", "shared.egg-info", "watchdog", "claude-study"}
+
+
+def _find_db_file(system_dir: Path) -> Path | None:
+    """システムディレクトリ配下の data/*.db を探す。"""
+    for sub in system_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        data_dir = sub / "data"
+        if data_dir.is_dir():
+            db_files = list(data_dir.glob("*.db"))
+            if db_files:
+                return db_files[0]
+    return None
+
+
+def _has_batch_run_log(db_path: Path) -> bool:
+    """DB に batch_run_log テーブルが存在するか確認する。"""
+    try:
+        with db.get_connection(db_path) as conn:
+            row = db.fetch_one(
+                conn,
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='batch_run_log'",
+            )
+            return row is not None
+    except Exception:
+        return False
+
+
+def _detect_batch_types(db_path: Path) -> list[str]:
+    """batch_run_log から直近のバッチ種別を取得する。"""
+    try:
+        with db.get_connection(db_path) as conn:
+            rows = db.fetch_all(
+                conn,
+                "SELECT DISTINCT batch_type FROM batch_run_log ORDER BY batch_type",
+            )
+            return [r["batch_type"] for r in rows]
+    except Exception:
+        return []
+
+
+def _guess_log_dir(db_path: Path) -> Path:
+    """DB パスからログディレクトリを推定する。"""
+    # data/ と同階層に logs/ があるパターン
+    return db_path.parent.parent / "logs"
+
+
+def discover_new_projects(known_keys: set[str], cfg: dict) -> list[dict]:
+    """
+    リポジトリルートを走査し、config 未登録のシステムを発見する。
+
+    返り値: check_project() に渡せる (project_key, project_cfg) 相当の辞書リスト
+        [{"key": str, "cfg": dict}, ...]
+    """
+    discovery_cfg = cfg.get("discovery", {})
+    if not discovery_cfg.get("enabled", True):
+        return []
+
+    exclude = set(discovery_cfg.get("exclude_dirs", _DEFAULT_EXCLUDE_DIRS))
+
+    # config のキーとラベルの両方を正規化して比較対象にする
+    known_names = set(known_keys)
+    projects_cfg = cfg.get("projects", {})
+    for proj_cfg in projects_cfg.values():
+        label = proj_cfg.get("label", "")
+        known_names.add(label.lower().replace("-", "_").replace(" ", "_"))
+
+    discovered = []
+
+    for entry in sorted(_REPO_ROOT.iterdir()):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        if entry.name in exclude:
+            continue
+
+        # config に既に登録されているか判定
+        dir_lower = entry.name.lower().replace("-", "_")
+        if dir_lower in known_names:
+            continue
+
+        db_path = _find_db_file(entry)
+        if db_path is None:
+            continue
+
+        if not _has_batch_run_log(db_path):
+            logger.info(f"[Discovery] {entry.name}: DB あり・batch_run_log なし → スキップ")
+            continue
+
+        batch_types = _detect_batch_types(db_path)
+        if not batch_types:
+            logger.info(f"[Discovery] {entry.name}: batch_run_log 空 → スキップ")
+            continue
+
+        log_dir = _guess_log_dir(db_path)
+        batches = [{"batch_type": bt, "schedule": "daily"} for bt in batch_types]
+
+        project_cfg = {
+            "label": entry.name,
+            "db_path": str(db_path),
+            "log_dir": str(log_dir),
+            "batches": batches,
+        }
+        discovered.append({"key": dir_lower, "cfg": project_cfg})
+        logger.info(
+            f"[Discovery] 新規発見: {entry.name} "
+            f"(batches: {', '.join(batch_types)})"
+        )
+
+    return discovered
+
+
+# ---------------------------------------------------------------------------
 # Slack 通知
 # ---------------------------------------------------------------------------
 
@@ -274,12 +400,44 @@ _STATUS_ICON = {
 }
 
 
+def _build_project_lines(proj: dict) -> list[str]:
+    """1プロジェクト分の表示行を組み立てる。"""
+    lines = [f"*--- {proj['label']} ---*"]
+
+    for b in proj["batches"]:
+        icon = _STATUS_ICON.get(b["status"], "?")
+        lines.append(f"`{b['batch_type']:16s}` [{icon}] {b['detail']}")
+
+    fe = proj["fatal_errors"]
+    if not fe["ok"]:
+        lines.append(f"`fatal errors   ` [NG] {fe['count']} 件")
+        for s in fe["samples"]:
+            lines.append(f"    {s}")
+    else:
+        lines.append("`fatal errors   ` [OK] 0 件")
+
+    lf = proj["log_file"]
+    if not lf["ok"]:
+        lines.append("`log file       ` [NG] 本日分なし")
+
+    if not proj["db_available"]:
+        lines.append("`database       ` [NG] DB ファイルが見つかりません")
+
+    return lines
+
+
 def build_slack_blocks(
-    results: list[dict], run_time: str, *, all_ok: bool,
+    results: list[dict],
+    run_time: str,
+    *,
+    all_ok: bool,
+    discovered_results: list[dict] | None = None,
 ) -> list[dict]:
     """監視結果から Slack Block Kit の blocks リストを組み立てる。"""
-    if all_ok:
+    if all_ok and not discovered_results:
         header = f"*[Watchdog] 全プロジェクト正常  {run_time}*"
+    elif all_ok and discovered_results:
+        header = f"*[Watchdog] 正常 + 新規発見あり  {run_time}*"
     else:
         header = f"*[Watchdog] バッチ異常検知  {run_time}*"
 
@@ -289,33 +447,22 @@ def build_slack_blocks(
     ]
 
     for proj in results:
-        lines = [f"*--- {proj['label']} ---*"]
-
-        # バッチ状態
-        for b in proj["batches"]:
-            icon = _STATUS_ICON.get(b["status"], "?")
-            lines.append(f"`{b['batch_type']:16s}` [{icon}] {b['detail']}")
-
-        # Fatal エラー
-        fe = proj["fatal_errors"]
-        if not fe["ok"]:
-            lines.append(f"`fatal errors   ` [NG] {fe['count']} 件")
-            for s in fe["samples"]:
-                lines.append(f"    {s}")
-        else:
-            lines.append(f"`fatal errors   ` [OK] 0 件")
-
-        # ログファイル
-        lf = proj["log_file"]
-        if not lf["ok"]:
-            lines.append(f"`log file       ` [NG] 本日分なし")
-
-        # DB 不在
-        if not proj["db_available"]:
-            lines.append("`database       ` [NG] DB ファイルが見つかりません")
-
+        lines = _build_project_lines(proj)
         blocks.append(slack.section("\n".join(lines)))
         blocks.append(slack.divider())
+
+    # 新規発見セクション
+    if discovered_results:
+        blocks.append(slack.section(
+            "*--- 新規発見（config 未登録） ---*\n"
+            "_以下のシステムが自動検出されました。"
+            "config.json への登録を検討してください。_"
+        ))
+        blocks.append(slack.divider())
+        for proj in discovered_results:
+            lines = _build_project_lines(proj)
+            blocks.append(slack.section("\n".join(lines)))
+            blocks.append(slack.divider())
 
     return blocks
 
@@ -343,31 +490,55 @@ def run() -> int:
     logger.info(f"[Watchdog] 監視開始: {run_time}")
     logger.info(f"対象プロジェクト: {', '.join(projects_cfg.keys())}")
 
+    # --- 登録済みプロジェクトのチェック ---
     results = []
     for key, proj_cfg in projects_cfg.items():
         logger.info(f"--- {proj_cfg.get('label', key)} ---")
         result = check_project(key, proj_cfg, watchdog_cfg)
         results.append(result)
+        _log_project_result(result)
 
-        # コンソールにサマリー出力
-        for b in result["batches"]:
-            icon = _STATUS_ICON.get(b["status"], "?")
-            logger.info(f"  {b['batch_type']:16s} [{icon}] {b['detail']}")
-        fe = result["fatal_errors"]
-        logger.info(f"  {'fatal errors':16s} {'[OK]' if fe['ok'] else '[NG]'} {fe['count']} 件")
-        lf = result["log_file"]
-        logger.info(f"  {'log file':16s} {'[OK]' if lf['ok'] else '[NG]'}")
+    # --- 新規システムの自動発見 ---
+    known_keys = set(projects_cfg.keys())
+    discovered = discover_new_projects(known_keys, cfg)
+    discovered_results = []
+    for item in discovered:
+        logger.info(f"--- [Discovery] {item['cfg']['label']} ---")
+        result = check_project(item["key"], item["cfg"], watchdog_cfg)
+        discovered_results.append(result)
+        _log_project_result(result)
 
+    if discovered_results:
+        logger.info(f"[Discovery] 新規 {len(discovered_results)} システムを検出")
+
+    # --- 総合判定 & Slack 通知 ---
     all_ok = all(r["ok"] for r in results)
 
     if all_ok:
         logger.info("[Watchdog] 全プロジェクト正常")
-        blocks = build_slack_blocks(results, run_time, all_ok=True)
+        display_results = results
     else:
         failed_results = [r for r in results if not r["ok"]]
         logger.info(f"[Watchdog] 異常検知 {len(failed_results)} プロジェクト")
-        blocks = build_slack_blocks(failed_results, run_time, all_ok=False)
+        display_results = failed_results
 
+    blocks = build_slack_blocks(
+        display_results,
+        run_time,
+        all_ok=all_ok,
+        discovered_results=discovered_results or None,
+    )
     payload = {"blocks": blocks}
     slack.send_webhook(webhook_url, payload, logger=logger)
     return 0 if all_ok else 1
+
+
+def _log_project_result(result: dict) -> None:
+    """1プロジェクトの監視結果をコンソールに出力する。"""
+    for b in result["batches"]:
+        icon = _STATUS_ICON.get(b["status"], "?")
+        logger.info(f"  {b['batch_type']:16s} [{icon}] {b['detail']}")
+    fe = result["fatal_errors"]
+    logger.info(f"  {'fatal errors':16s} {'[OK]' if fe['ok'] else '[NG]'} {fe['count']} 件")
+    lf = result["log_file"]
+    logger.info(f"  {'log file':16s} {'[OK]' if lf['ok'] else '[NG]'}")

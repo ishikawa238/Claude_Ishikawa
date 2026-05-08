@@ -84,6 +84,10 @@ def detect_and_save_signals(
         elif final_score >= 30 and best["label"] == "skip":
             best["label"] = "watch"
 
+        # 警戒モード時は新規買い候補を停止（分析ログとしては watch で保存）
+        if market_mode in ("caution", "full_caution") and best["label"] == "candidate":
+            best["label"] = "watch"
+
         # スコアフィールドを行に追加
         best["trend_score"]      = scores["trend_score"]
         best["pattern_a_score"]  = scores["pattern_a_score"]
@@ -130,11 +134,17 @@ def detect_and_save_signals(
                 c[fld] = val
 
     candidate_count = len(candidates)
-    logger.info(
-        f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
-        f"candidate={candidate_count} 件 / "
-        f"watch={sum(1 for r in all_rows if r['label']=='watch')} 件"
-    )
+    watch_count = sum(1 for r in all_rows if r["label"] == "watch")
+    if market_mode in ("caution", "full_caution"):
+        logger.info(
+            f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
+            f"watch={watch_count} 件（警戒モードのため新規買い候補は停止）"
+        )
+    else:
+        logger.info(
+            f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
+            f"candidate={candidate_count} 件 / watch={watch_count} 件"
+        )
     return candidates[:_MAX_CANDIDATES]  # 最大件数に絞って返す
 
 

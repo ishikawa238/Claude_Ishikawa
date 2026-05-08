@@ -7,14 +7,16 @@
 - 損切り幅（%）
 - 利確目安（リスクリワード 2:1）
 - 推奨投入額（総資金 × 2% / 損切り幅）
+- 投入額の上限制御（総資金・同時保有上限・取引単位）
 - 警告フラグ（損切り幅が狭すぎ / 広すぎ）
 """
 
 import json
-from datetime import date
+import math
+from datetime import date, datetime
 
 from src.config import CONFIG
-from src.data_store import get_connection, insert_one
+from src.data_store import fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -29,6 +31,8 @@ _WARN_MAX_PCT   = float(_SIG["stop_loss_warning_max_pct"])
 _RISK_PCT       = float(_CAP["max_risk_per_trade_pct"]) / 100  # 0.02
 _CAPITAL_JPY    = float(_CAP["total_capital_jpy"])
 _CAPITAL_USD    = float(_CAP["total_capital_usd"])
+_MAX_HOLDINGS   = int(_CAP.get("max_concurrent_holdings", 3))
+_EARNINGS_WARN  = int(CONFIG.get("jquants", {}).get("earnings_alert_days_warning", 7))
 
 
 # ============================================================
@@ -58,6 +62,11 @@ def calc_entry_set(signal: dict) -> dict:
     stop_loss_price = entry_price - atr14 * _ATR_MULT if atr14 > 0 else entry_price * (1 - 0.08)
     stop_loss_pct   = (entry_price - stop_loss_price) / entry_price * 100
 
+    # 損切り幅が1%未満 → エントリー候補から除外
+    if stop_loss_pct < _WARN_MIN_PCT:
+        logger.info(f"損切り幅が狭すぎるため除外: {ticker}（{stop_loss_pct:.2f}%）")
+        return {}
+
     # 利確目安: リスクリワード 2:1
     target_price = entry_price * (1 + stop_loss_pct / 100 * _RR_RATIO)
 
@@ -67,6 +76,27 @@ def calc_entry_set(signal: dict) -> dict:
         recommended_amount = capital * _RISK_PCT / (stop_loss_pct / 100)
     else:
         recommended_amount = None
+
+    # --- 投入額の上限制御 ---
+    if recommended_amount is not None:
+        # (1) 総資金を超えない
+        recommended_amount = min(recommended_amount, capital)
+        # (2) 同時保有上限を考慮（1ポジションあたりの上限）
+        max_per_position = capital / _MAX_HOLDINGS
+        recommended_amount = min(recommended_amount, max_per_position)
+
+    # --- 日本株: 100株単位チェック ---
+    skip_reason = None
+    if market == "JP" and recommended_amount is not None and entry_price > 0:
+        purchasable_shares = math.floor(recommended_amount / entry_price / 100) * 100
+        if purchasable_shares <= 0:
+            skip_reason = "資金不足のため見送り"
+            logger.info(f"日本株100株単位で購入不可: {ticker}（必要額 {entry_price * 100:,.0f}円 > 投入上限 {recommended_amount:,.0f}円）")
+        else:
+            recommended_amount = purchasable_shares * entry_price
+
+    # --- 決算近接チェック ---
+    warn_earnings = _check_earnings_near(ticker, signal["date"])
 
     # 充足条件リスト（通知の理由文生成に使用）
     conditions_met = _build_conditions_met(signal, pattern)
@@ -84,9 +114,12 @@ def calc_entry_set(signal: dict) -> dict:
         "recommended_amount": round(recommended_amount, 0) if recommended_amount else None,
         "market_mode":        signal.get("market_mode", "normal"),
         "conditions_met":     json.dumps(conditions_met, ensure_ascii=False),
+        # 見送り理由（通知側で使用・DB保存対象外）
+        "_skip_reason": skip_reason,
         # 警告フラグ（通知側で使用・DB保存対象外）
-        "_warn_narrow":  stop_loss_pct < _WARN_MIN_PCT,
+        "_warn_narrow":  False,  # 1%未満は上流で除外済み
         "_warn_wide":    stop_loss_pct > _WARN_MAX_PCT,
+        "_warn_earnings": warn_earnings,
         # 通知の根拠数値（DB保存対象外・notifier で使用）
         "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
         "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
@@ -167,6 +200,29 @@ def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
         elif signal.get(key) == 0:
             met.append(f"❌ {desc}")
     return met
+
+
+def _check_earnings_near(ticker: str, date_str: str) -> str | None:
+    """決算発表が _EARNINGS_WARN 日以内に迫っている場合、警告文を返す。"""
+    try:
+        with get_connection() as conn:
+            row = fetch_one(
+                conn,
+                "SELECT announcement_date FROM earnings_schedule "
+                "WHERE ticker=? AND announcement_date>=? "
+                "ORDER BY announcement_date ASC LIMIT 1",
+                (ticker, date_str),
+            )
+        if not row:
+            return None
+        target_dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+        ann_dt = datetime.strptime(row["announcement_date"], "%Y-%m-%d").date()
+        days = (ann_dt - target_dt).days
+        if days <= _EARNINGS_WARN:
+            return f"決算発表まで{days}日（{row['announcement_date']}）"
+    except Exception:
+        pass
+    return None
 
 
 def _log_entry_set(es: dict) -> None:

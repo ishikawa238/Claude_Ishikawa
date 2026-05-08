@@ -269,6 +269,9 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
 
         is_excluded, exclude_reason = _check_excluded(asset_type)
 
+        sector_raw = (r.get("Sector") or "").strip() or None
+        industry_raw = (r.get("Industry") or "").strip() or None
+
         rows.append({
             "ticker":             ticker,
             "name":               (r.get("Name") or "").strip(),
@@ -278,6 +281,8 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
             "is_active":          1,
             "is_excluded":        1 if is_excluded else 0,
             "exclude_reason":     exclude_reason,
+            "sector":             sector_raw,
+            "industry":           industry_raw,
             "last_updated":       today,
         })
 
@@ -292,15 +297,22 @@ _JPX_SYMBOLS_URL = (
 )
 
 # JPX Excel の列名
-_JPX_COL_CODE    = "コード"
-_JPX_COL_NAME    = "銘柄名"
-_JPX_COL_SEGMENT = "市場・商品区分"
+_JPX_COL_CODE     = "コード"
+_JPX_COL_NAME     = "銘柄名"
+_JPX_COL_SEGMENT  = "市場・商品区分"
+_JPX_COL_SECTOR33 = "33業種区分"
+_JPX_COL_SECTOR17 = "17業種区分"
 
 
 def _fetch_jp_symbols_from_jpx() -> list[dict]:
     """
     JPX が公開する上場銘柄一覧 Excel から JP 銘柄マスタを取得する。
     EODHD exchange-symbol-list の JP 代替。
+
+    NOTE: JPX の .xls は BIFF8 形式だが codepage 宣言が不正（1200=UTF-16LE）なため
+    xlrd が日本語列名を文字化けさせる。列名ではなく列インデックスで参照する。
+    列順: 0=日付, 1=コード, 2=銘柄名, 3=市場・商品区分, 4=33業種コード,
+          5=33業種区分, 6=17業種コード, 7=17業種区分, 8=規模コード, 9=規模区分
     """
     try:
         import pandas as pd
@@ -319,40 +331,47 @@ def _fetch_jp_symbols_from_jpx() -> list[dict]:
     try:
         df = pd.read_excel(
             io.BytesIO(resp.content),
-            dtype={_JPX_COL_CODE: str},
+            header=None,
+            skiprows=1,
+            dtype={1: str},
             engine="xlrd",
         )
     except Exception as e:
         logger.error(f"JPX Excel パース失敗: {e}")
         return []
 
-    if _JPX_COL_CODE not in df.columns:
+    if len(df.columns) < 8:
         logger.error(
-            f"JPX Excel に '{_JPX_COL_CODE}' 列が見つかりません。"
-            f"実際の列: {list(df.columns)}"
+            f"JPX Excel の列数が想定と異なります（{len(df.columns)}列）。"
+            "フォーマット変更の可能性があります。"
         )
         return []
 
     today = date.today().strftime("%Y-%m-%d")
     rows = []
     for _, r in df.iterrows():
-        code = str(r.get(_JPX_COL_CODE, "")).strip()
-        # 4桁数字のみを対象とする（ETF等は別途 segment で除外）
+        code = str(r.iloc[1]).strip()
         if not code or not code.isdigit():
             continue
 
-        segment = str(r.get(_JPX_COL_SEGMENT, "")).lower()
+        segment = str(r.iloc[3]).lower()
         is_excluded, exclude_reason = _classify_jpx_segment(segment)
+
+        name_raw = str(r.iloc[2]).strip()
+        sector33 = str(r.iloc[5]).strip()
+        sector17 = str(r.iloc[7]).strip()
 
         rows.append({
             "ticker":             code,
-            "name":               str(r.get(_JPX_COL_NAME, "")).strip(),
+            "name":               name_raw,
             "market":             "JP",
             "exchange":           "TSE",
             "shares_outstanding": None,
             "is_active":          1,
             "is_excluded":        1 if is_excluded else 0,
             "exclude_reason":     exclude_reason,
+            "sector":             sector33 if sector33 and sector33 != "-" else None,
+            "industry":           sector17 if sector17 and sector17 != "-" else None,
             "last_updated":       today,
         })
 
@@ -364,15 +383,16 @@ def _classify_jpx_segment(segment: str) -> tuple[bool, Optional[str]]:
     """
     JPX の市場・商品区分文字列から除外判定を行う。
     返り値: (is_excluded: bool, reason: str or None)
+
+    NOTE: JPX Excel の文字化けにより日本語文字列での照合は不可。
+    半角英字キーワード (etf, etn, reit, pro market) で判定する。
     """
     if "etf" in segment or "etn" in segment:
         return True, "ETF"
-    if "reit" in segment or "不動産投資信託" in segment:
+    if "reit" in segment:
         return True, "REIT"
-    if "インフラファンド" in segment:
-        return True, "インフラファンド"
-    if "優先出資" in segment:
-        return True, "優先株"
+    if "pro market" in segment:
+        return True, "PRO Market"
     return False, None
 
 

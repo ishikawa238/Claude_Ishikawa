@@ -264,6 +264,22 @@ class SyncHoldingsFromCsvIdempotencyTests(unittest.TestCase):
 class EnsureHoldingPricesTests(unittest.TestCase):
     """ensure_holding_prices: price_historyにないETF銘柄を補完フェッチするテスト"""
 
+    def _fake_get_connection(self, conn):
+        """テスト用 get_connection ファクトリ"""
+        def _factory():
+            from contextlib import contextmanager
+
+            @contextmanager
+            def _cm():
+                try:
+                    yield conn
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            return _cm()
+        return _factory
+
     def test_fetches_price_for_ticker_missing_from_price_history(self):
         import src.holdings_monitor as hm
 
@@ -282,25 +298,15 @@ class EnsureHoldingPricesTests(unittest.TestCase):
             "is_holiday": 0,
         }]
 
-        def fake_get_connection():
-            from contextlib import contextmanager
+        # ensure_holding_prices は関数内で data_fetcher を import するため
+        # モジュール読み込み時の CONFIG["eodhd"] エラーを回避する
+        mock_data_fetcher = MagicMock()
+        mock_data_fetcher.fetch_price_history = MagicMock(return_value=fake_prices)
 
-            @contextmanager
-            def _cm():
-                try:
-                    yield conn
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    raise
-            return _cm()
-
-        # ensure_holding_prices は fetch_price_history を関数内で
-        # "from src.data_fetcher import fetch_price_history" するため
-        # src.data_fetcher.fetch_price_history をパッチする
-        with patch("src.holdings_monitor.get_connection", fake_get_connection), \
+        import sys
+        with patch("src.holdings_monitor.get_connection", self._fake_get_connection(conn)), \
              patch("src.holdings_monitor.upsert") as mock_upsert, \
-             patch("src.data_fetcher.fetch_price_history", return_value=fake_prices):
+             patch.dict(sys.modules, {"src.data_fetcher": mock_data_fetcher}):
             fetched = hm.ensure_holding_prices(date(2026, 4, 15))
 
         self.assertIn("VT", fetched)
@@ -320,20 +326,10 @@ class EnsureHoldingPricesTests(unittest.TestCase):
         )
         conn.commit()
 
-        def fake_get_connection():
-            from contextlib import contextmanager
-
-            @contextmanager
-            def _cm():
-                try:
-                    yield conn
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-                    raise
-            return _cm()
-
-        with patch("src.holdings_monitor.get_connection", fake_get_connection):
+        import sys
+        mock_data_fetcher = MagicMock()
+        with patch("src.holdings_monitor.get_connection", self._fake_get_connection(conn)), \
+             patch.dict(sys.modules, {"src.data_fetcher": mock_data_fetcher}):
             fetched = hm.ensure_holding_prices(date(2026, 4, 15))
 
         # 既存データがあるためフェッチしない

@@ -111,6 +111,13 @@ def main() -> int:
         signals_count = len(candidates)
         us_entry_sets = save_entry_sets(candidates, mode)
 
+        # ペーパートレード: 仮想エントリー記録 + 日次更新
+        from src.paper_trading import is_paper_mode_enabled, record_paper_entries, update_paper_trades
+        if is_paper_mode_enabled():
+            logger.info("STEP 4.5: ペーパートレード更新")
+            record_paper_entries(us_entry_sets)
+            update_paper_trades(_TODAY)
+
         # 前夜バッチの JP entry_sets も取得（朝通知の上位2件に含める）
         jp_entry_sets = _load_last_evening_entry_sets()
         all_entry_sets = jp_entry_sets + us_entry_sets
@@ -119,6 +126,11 @@ def main() -> int:
         # STEP 5: 保有銘柄判定（JP+US 全体）
         # ────────────────────────────────────────
         logger.info("STEP 5: 保有銘柄判定")
+        try:
+            from src.moomoo_sync import sync_from_moomoo
+            sync_from_moomoo()
+        except Exception as e:
+            logger.warning(f"moomoo 同期スキップ: {e}")
         sync_holdings_from_csv()
         ensure_holding_prices(_TODAY)  # ETF等 universe_master 未登録銘柄の価格を補完
         holdings = evaluate_holdings(_TODAY)

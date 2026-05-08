@@ -146,19 +146,19 @@ class EntrySetBlockTests(unittest.TestCase):
             _trend_score=82, _pattern_a_score=75,
             _pattern_b_score=40, _liquidity_score=100,
         ))
-        self.assertIn("T:82", text)
-        self.assertIn("A:75", text)
-        self.assertIn("B:40", text)
-        self.assertIn("L:100", text)
+        self.assertIn("トレンド:82", text)
+        self.assertIn("ブレイクアウト:75", text)
+        self.assertIn("押し目:40", text)
+        self.assertIn("流動性:100", text)
 
     def test_sub_scores_absent_when_none(self):
         text = self._get_text(_make_entry_set(
             _trend_score=None, _pattern_a_score=None,
             _pattern_b_score=None, _liquidity_score=None,
         ))
-        # サブスコア行（📈 T: で始まる）が出力されないことを確認
-        self.assertNotIn("T:", text)
-        self.assertNotIn("L:", text)
+        # サブスコア行が出力されないことを確認
+        self.assertNotIn("トレンド:", text)
+        self.assertNotIn("流動性:", text)
 
     # --- 52週高値テスト ---
     def test_52w_high_distance_shown(self):

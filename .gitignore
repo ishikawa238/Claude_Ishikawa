@@ -14,6 +14,7 @@ AiNewsDigest/ai_news_digest/config.json
 EnglishDaily/english_daily/config.json
 MorningPlaylist/morning_playlist/config.json
 watchdog/config.json
+auto_commit/config.json
 
 # Python キャッシュ
 __pycache__/

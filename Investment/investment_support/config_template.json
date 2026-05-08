@@ -75,5 +75,16 @@
     "request_interval_sec": 1.0,
     "earnings_alert_days_warning": 7,
     "earnings_alert_days_critical": 3
+  },
+
+  "_paper_mode_comment": "paper_mode を有効にすると、シグナル発生時に仮想エントリーを記録し、日次で損切り・利確を自動判定する。運用開始前の検証期間（1〜3か月）に使用する。",
+  "paper_mode": {
+    "enabled": false
+  },
+
+  "_moomoo_comment": "moomoo セクションは任意。moomoo OpenD から保有銘柄を同期する場合のみ設定する。未設定でも holdings.csv による管理で動作する。",
+  "moomoo": {
+    "host": "127.0.0.1",
+    "port": 11111
   }
 }

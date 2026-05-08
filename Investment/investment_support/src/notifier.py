@@ -118,7 +118,8 @@ def send_morning_report(
         blocks.append(_divider())
     elif mode != "normal":
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — 本日はスコア基準を満たす候補がありません*"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
+            "保有銘柄の損切り判定は通常通り実施しています。"
         ))
         blocks.append(_divider())
 
@@ -186,7 +187,8 @@ def send_evening_report(
         blocks.append(_divider())
     elif mode != "normal":
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中 — スコア基準を満たす候補がありません*\n"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
+            "保有銘柄の損切り判定は通常通り実施しています。\n"
             + _mode_detail(market_env)
         ))
         blocks.append(_divider())
@@ -296,10 +298,14 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     rank_str = f"  ランク{rs_rank}位" if rs_rank else ""
 
     warn_str = ""
-    if es.get("_warn_narrow"):
+    if es.get("_skip_reason"):
+        warn_str = f"\n🚫 {es['_skip_reason']}"
+    elif es.get("_warn_narrow"):
         warn_str = "\n⚠️ 損切り幅が狭すぎます（ATRが小さい銘柄）"
     elif es.get("_warn_wide"):
         warn_str = "\n⚠️ 損切り幅が広めです（高ボラティリティ銘柄）"
+    if es.get("_warn_earnings"):
+        warn_str += f"\n📅 {es['_warn_earnings']} — エントリー判断に注意"
 
     entry  = es["entry_price"]
     stop   = es["stop_loss_price"]
@@ -332,7 +338,9 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     recommend_reason = es.get("_recommend_reason") or es.get("recommend_reason") or ""
     score_str = ""
     if final_score is not None:
-        score_str = f"\n🏅 おすすめ度：*{final_score}点（{recommend_rank}ランク）*"
+        fs = int(final_score) if final_score is not None else 0
+        stars = "⭐" * (fs // 20) + "☆" * (5 - fs // 20)
+        score_str = f"\n🏅 おすすめ度：{stars} *{final_score}点（{recommend_rank}ランク）*"
         if recommend_reason:
             score_str += f"\n💡 {recommend_reason}"
 
@@ -535,13 +543,13 @@ def _sub_score_line(es: dict) -> str:
         return ""
     parts = []
     if t is not None:
-        parts.append(f"T:{t}")
+        parts.append(f"トレンド:{t}")
     if a is not None:
-        parts.append(f"A:{a}")
+        parts.append(f"ブレイクアウト:{a}")
     if b is not None:
-        parts.append(f"B:{b}")
+        parts.append(f"押し目:{b}")
     if l is not None:
-        parts.append(f"L:{l}")
+        parts.append(f"流動性:{l}")
     return "\n📈 " + " / ".join(parts)
 
 

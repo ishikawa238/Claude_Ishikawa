@@ -10,6 +10,9 @@ paths:
   - "PaperWatch/paper_watch/scripts/**/*.py"
   - "EnglishDaily/english_daily/src/**/*.py"
   - "EnglishDaily/english_daily/scripts/**/*.py"
+  - "MorningPlaylist/morning_playlist/src/**/*.py"
+  - "MorningPlaylist/morning_playlist/scripts/**/*.py"
+  - "auto_commit/**/*.py"
 ---
 
 # Python Source Rules

@@ -1,0 +1,293 @@
+投資判断支援システム 修正計画
+作成日: 2026-04-30
+
+目的
+====
+現状の投資判断支援システムを、初心者が誤解なく使える「実行規律補助システム」に近づける。
+特に以下を重視する。
+
+1. 警戒相場で不用意な新規買いを出さないこと
+2. 推奨投入額が過大にならないこと
+3. シグナルの期待値を検証できること
+4. README・要件定義・詳細設計・実装の食い違いをなくすこと
+5. テストが通る状態に戻すこと
+
+
+優先度A: すぐ直すべき安全性・整合性
+====================================
+
+1. 警戒モード時の新規買い停止を実装と文書で統一する
+--------------------------------------------------
+現状:
+- README/要件では「警戒時は新規買いシグナル停止」と説明している。
+- しかし src/signal_detector.py は市場環境に関わらず candidate を生成する。
+- batch_evening_jp.py / batch_morning_all.py は、その candidate をそのまま save_entry_sets に渡す。
+
+修正方針:
+- market_mode が caution / full_caution の場合は、新規買い候補を通知・trade_signal_log 保存しない。
+- daily_signals には分析ログとして保存してよいが、label は candidate ではなく watch または skip に落とす。
+- Slack通知には「警戒モード中のため新規買い候補は停止」と明示する。
+
+対象ファイル:
+- Investment/investment_support/src/signal_detector.py
+- Investment/investment_support/scripts/batch_evening_jp.py
+- Investment/investment_support/scripts/batch_morning_all.py
+- Investment/investment_support/src/notifier.py
+- Investment/README.md
+
+確認観点:
+- normal のときだけ entry_set が作られる。
+- caution / full_caution のときは trade_signal_log に新規買い候補が保存されない。
+- 保有銘柄の損切り判定は警戒モードでも必ず実行される。
+
+
+2. 推奨投入額に上限と取引単位チェックを入れる
+--------------------------------------------
+現状:
+- 推奨投入額は「総資金 × 2% ÷ 損切り幅」で算出している。
+- 損切り幅が小さい場合、総資金を超える投入額になる可能性がある。
+- 要件にある「同時保有3銘柄」「日本株100株単位」「最低取引単位不足」の制御が弱い。
+
+修正方針:
+- 推奨投入額は少なくとも以下で制限する。
+  - 総資金を超えない
+  - 同時保有上限を考慮する
+  - 日本株は100株単位で購入可能株数を算出する
+  - 購入可能株数が0なら「資金不足のため見送り」扱いにする
+- 損切り幅が1%未満の場合は、警告だけでなくエントリー候補から除外する。
+- 損切り幅が15%超の場合は候補には残してよいが、強い警告を表示する。
+
+対象ファイル:
+- Investment/investment_support/src/entry_calculator.py
+- Investment/investment_support/src/notifier.py
+- Investment/investment_support/scripts/order_server.py
+- Investment/README.md
+
+確認観点:
+- recommended_amount が総資金を超えない。
+- 日本株で100株未満しか買えない場合は見送り表示になる。
+- 米国株は小数株対応の可否を設定で切り替えられると望ましい。
+
+
+3. 落ちているテストを修正する
+----------------------------
+現状:
+- .venv\Scripts\python.exe -m unittest discover -s tests で 106 tests 中、8 errors / 1 failure。
+- holdings_monitor.py が import 時に CONFIG["capital"] を直接読むため、テスト用設定で KeyError になる。
+- test_notifier.py はサブスコア表記として T:82 等を期待しているが、実装は「トレンド:82」形式。
+
+修正方針:
+- import 時に設定値へ強く依存しないよう、CONFIG 読み込みにデフォルト値を持たせる。
+- テスト期待値と実装の表示方針を統一する。
+- 日本語ログの文字化けも確認する。
+
+対象ファイル:
+- Investment/investment_support/src/holdings_monitor.py
+- Investment/investment_support/src/notifier.py
+- Investment/investment_support/tests/test_holdings_monitor.py
+- Investment/investment_support/tests/test_notifier.py
+
+確認コマンド:
+  cd Investment/investment_support
+  .venv\Scripts\python.exe -m unittest discover -s tests
+
+
+優先度B: 初心者向けの誤解防止
+============================
+
+4. READMEに「これは買い指示ではない」と明記する
+----------------------------------------------
+現状:
+- READMEには「実行規律補助システム」とあるが、初心者には candidate や推奨投入額が買い指示に見えやすい。
+
+修正方針:
+- README冒頭に、以下を明記する。
+  - 投資助言・利益保証ではない
+  - 最終判断はユーザーが行う
+  - 候補は「検討対象」であり、注文指示ではない
+  - 損失が出る可能性がある
+- 通知文にも「買い候補」ではなく「検討候補」などの表現を検討する。
+
+対象ファイル:
+- Investment/README.md
+- Investment/investment_support/src/notifier.py
+
+
+5. シグナルの「見送り理由」を表示する
+------------------------------------
+現状:
+- 条件を満たした理由はある程度表示されるが、初心者に重要な「なぜ見送るべきか」が弱い。
+
+修正方針:
+- 以下の理由を通知・ダッシュボードに出す。
+  - 警戒モードのため新規買い停止
+  - 損切り幅が狭すぎる
+  - 損切り幅が広すぎる
+  - 推奨投入額が資金に対して過大
+  - 日本株の単元未満で購入不可
+  - 決算発表が近い
+  - データ不足で判定保留
+
+対象ファイル:
+- Investment/investment_support/src/entry_calculator.py
+- Investment/investment_support/src/notifier.py
+- Investment/investment_support/scripts/order_server.py
+
+
+6. 初心者向けダッシュボード表示を追加する
+----------------------------------------
+現状:
+- ダッシュボードは高機能だが、初心者が「今日何をすべきか」を一目で判断する導線が弱い。
+
+修正方針:
+- /report の上部に「今日の行動」を表示する。
+  - 損切り対象あり: 最優先で確認
+  - 警戒モード: 新規買い停止
+  - 通常モード: 検討候補あり/なし
+  - 保有銘柄の注意点
+- 専門用語には短い説明を添える。
+
+対象ファイル:
+- Investment/investment_support/scripts/order_server.py
+
+
+優先度C: 儲けにつながるかを検証する仕組み
+======================================
+
+7. バックテストを追加する
+------------------------
+現状:
+- 要件には「1年間で期待値を検証」とあるが、運用前に過去データでの妥当性確認が不足している。
+
+修正方針:
+- 過去3年データを使って、以下を検証する。
+  - パターンA/B別の勝率
+  - 平均利益、平均損失
+  - 期待値
+  - 最大ドローダウン
+  - 連敗数
+  - 市場環境別の成績
+  - 手数料・スプレッド・スリッページ込みの成績
+- 未来の価格を使わないよう、日次ごとの時点情報だけで判定する。
+
+新規候補ファイル:
+- Investment/investment_support/scripts/backtest_signals.py
+- Investment/investment_support/src/backtester.py
+- Investment/investment_support/tests/test_backtester.py
+
+
+8. フォワードテスト運用モードを作る
+----------------------------------
+現状:
+- 実績入力はあるが、実売買しない検証モードが明確ではない。
+
+修正方針:
+- シグナルを実売買せず、仮想エントリー・仮想決済として記録する paper mode を追加する。
+- 実売買ログと仮想売買ログを分ける。
+- まず1〜3か月は paper mode で期待値を確認する。
+
+新規候補ファイル:
+- Investment/investment_support/src/paper_trading.py
+- Investment/investment_support/scripts/update_paper_trades.py
+
+
+9. 月次レポートを「改善判断」に使える内容にする
+----------------------------------------------
+現状:
+- 月次レポート機能はあるが、システム改善の判断基準がREADME上では弱い。
+
+修正方針:
+- 月次レポートに以下を必ず出す。
+  - パターン別期待値
+  - 警戒モード時に停止した候補数
+  - 実行した場合/見送った場合の比較
+  - 損切り通知に従った場合の損失削減額
+  - 資金サイズに対する月額コストの比率
+
+対象ファイル:
+- Investment/investment_support/src/report_generator.py
+- Investment/investment_support/scripts/batch_monthly.py
+- Investment/investment_support/scripts/order_server.py
+
+
+優先度D: 文書と実装のズレをなくす
+==============================
+
+10. moomoo関連の記述を整理する
+-----------------------------
+現状:
+- detailed_design.md v1.5 では半自動注文機能を削除したとある。
+- READMEやconfig_template.jsonには moomoo 同期の記述が残っている。
+
+修正方針:
+- 現在サポートする範囲を明確化する。
+  - 保有銘柄同期のみサポートするのか
+  - 注文補助は完全に削除したのか
+  - scripts/sync_holdings_from_moomoo.py と src/moomoo_sync.py は正式機能なのか
+- README、要件定義、詳細設計、config_template.json を同じ状態に揃える。
+
+対象ファイル:
+- Investment/README.md
+- Investment/low_cost_investment_support_requirements.md
+- Investment/detailed_design.md
+- Investment/investment_support/config_template.json
+- Investment/investment_support/src/moomoo_sync.py
+- Investment/investment_support/scripts/sync_holdings_from_moomoo.py
+
+
+11. J-Quants設定キー名を統一する
+-------------------------------
+現状:
+- READMEでは jquants.refresh_token と書かれている。
+- config_template.json では jquants.api_key になっている。
+
+修正方針:
+- 実装が参照しているキー名を確認し、README/SETUP/config_template を統一する。
+- 未設定時の動作も明記する。
+
+対象ファイル:
+- Investment/README.md
+- Investment/investment_support/SETUP.md
+- Investment/investment_support/config_template.json
+- Investment/investment_support/src/jquants_fetcher.py
+
+
+12. READMEに「運用開始前チェックリスト」を追加する
+-----------------------------------------------
+追加する内容:
+- テストが全件通る
+- config.json に資金額が正しく入っている
+- holdings.csv が重複していない
+- Slack通知がテスト送信できる
+- 警戒モード時に新規買いが出ない
+- バックアップが作成される
+- paper mode または少額で最低1か月検証する
+
+対象ファイル:
+- Investment/README.md
+- Investment/investment_support/SETUP.md
+
+
+実施順序
+========
+1. 優先度A-1: 警戒モード時の新規買い停止
+2. 優先度A-3: テスト失敗の修正
+3. 優先度A-2: 推奨投入額の上限制御
+4. 優先度D-10/D-11: 文書と設定の不整合解消
+5. 優先度B-4/B-5: 初心者向けの注意・見送り理由の追加
+6. 優先度B-6: ダッシュボードの「今日の行動」追加
+7. 優先度C-7/C-8/C-9: バックテスト・フォワードテスト・月次検証の強化
+8. READMEとSETUPを最終更新
+9. 全テスト実行
+10. 実運用前に1か月以上の検証運用
+
+
+完了条件
+========
+- 全テストが成功する。
+- caution / full_caution で新規買い候補が通知されない。
+- 推奨投入額が総資金・同時保有数・取引単位を超えない。
+- READMEだけを読んでも、初心者が「これは利益保証や買い指示ではない」と理解できる。
+- バックテストまたはフォワードテストで、パターンA/Bの期待値を確認できる。
+- 月次レポートで継続・停止・条件見直しの判断ができる。
+

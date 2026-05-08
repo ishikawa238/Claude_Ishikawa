@@ -1,0 +1,307 @@
+================================================================================
+  ダッシュボード・アップグレード実装計画 (Phase 1〜3)
+  作成日: 2026-04-28
+  対象: Investment/investment_support/scripts/order_server.py
+================================================================================
+
+【概要】
+現在の /report ページ（保有銘柄テーブル＋直近7日シグナル履歴）を、
+プロの投資家が日常的に利用できるレベルのダッシュボードへ段階的に拡張する。
+
+【方針】
+- Flask + Bootstrap 5.3.0 (CDN) + Chart.js 4.4.0 (CDN) で構築
+- テンプレートエンジンは導入せず、既存の f-string HTML 方式を継続
+- 各 Phase は独立してリリース可能
+- DB スキーマ変更は Phase 3 まで不要（Phase 1-2 は既存テーブルのみ）
+
+================================================================================
+  Phase 1: ポートフォリオ概況＋チャート強化 (既存データ活用)
+================================================================================
+
+■ 目標
+  /report ページを「一目で全体を把握できる」状態にする
+
+■ 変更対象ファイル
+  - scripts/order_server.py（メイン）
+  - tests/test_order_server.py（新規作成）
+
+■ 1-1. ポートフォリオ・サマリーカード
+  ページ上部に 4 枚のカードを追加:
+
+  (a) 総合損益カード
+      - 保有全銘柄の合計含み損益（円 + %）
+      - SQL:
+        SELECT SUM((current_price - entry_price) * quantity) AS total_pnl,
+               SUM(entry_price * quantity) AS total_cost
+        FROM (保有銘柄 + 最新価格サブクエリ)
+
+  (b) 市場環境バッジ（既存の改良）
+      - 日経平均 vs MA25 乖離率、S&P500 vs MA25 乖離率を数値で表示
+      - モード（normal / caution / full_caution）をカラーバッジで強調
+
+  (c) 保有銘柄数 / 市場別内訳
+      - JP: X 銘柄、US: Y 銘柄
+
+  (d) 直近シグナル数
+      - 過去7日間の新規シグナル件数（パターン別内訳）
+
+■ 1-2. 保有銘柄テーブル拡張
+  既存の 9 カラムに以下を追加:
+
+  - RSI14: technical_snapshot.rsi14
+  - ATR14: technical_snapshot.atr14
+  - MA25乖離率: (close - ma25) / ma25 * 100
+  - スコア: daily_signals.final_score (最新)
+  - ランク: daily_signals.recommend_rank (最新)
+  - トレンド: MA5 >= MA25 >= MA75 なら ↑ / それ以外で条件分岐
+
+  SQL例:
+    SELECT t.rsi14, t.atr14, t.ma25, t.close,
+           d.final_score, d.recommend_rank
+    FROM technical_snapshot t
+    LEFT JOIN daily_signals d ON t.ticker = d.ticker
+      AND d.signal_date = (SELECT MAX(signal_date) FROM daily_signals
+                           WHERE ticker = t.ticker)
+    WHERE t.ticker = ? AND t.snapshot_date = ?
+
+■ 1-3. Chart.js ミニチャート（CDN導入）
+  CDN: https://cdn.jsdelivr.net/npm/chart.js@4.4.0
+
+  (a) 損益推移チャート（折れ線グラフ）
+      - 保有銘柄の合計損益を日次で計算
+      - データソース: price_history + holdings
+      - 直近30営業日分
+      - 新規エンドポイント: GET /api/portfolio-pnl
+        → JSON: {"dates": [...], "pnl": [...], "pnl_pct": [...]}
+
+  (b) スコア・レーダーチャート
+      - 各保有銘柄のスコア 4 軸（trend / pattern_a / pattern_b / liquidity）
+      - データソース: daily_signals テーブル
+      - 新規エンドポイント: GET /api/score-radar?ticker=XXXX
+        → JSON: {"trend": 75, "pattern_a": 60, "pattern_b": 80, "liquidity": 90}
+
+■ 1-4. テスト計画
+  tests/test_order_server.py を新規作成:
+  - Flask test_client() を使用
+  - /health → 200 OK
+  - /report → 200 + 必須 HTML 要素の存在確認
+  - /api/portfolio-pnl → JSON 構造の検証
+  - /api/score-radar → パラメータなし時の 400 / 正常時の構造検証
+  - テスト用の SQLite を in-memory で作成、fixtures でデータ投入
+
+================================================================================
+  Phase 2: 個別銘柄詳細 + パフォーマンス分析
+================================================================================
+
+■ 目標
+  個別銘柄の深掘り分析と、トレード結果の振り返りができるようにする
+
+■ 変更対象ファイル
+  - scripts/order_server.py（エンドポイント追加）
+  - tests/test_order_server.py（テスト追加）
+
+■ 2-1. 個別銘柄ページ: GET /stock/<ticker>
+  保有銘柄テーブルの銘柄名をクリック → 詳細ページへ遷移
+
+  表示内容:
+  (a) 銘柄ヘッダ
+      - ティッカー、銘柄名、市場、セクター（Phase 3 で追加）
+      - 現在値、前日比、52 週高値/安値
+
+  (b) 価格チャート（Chart.js 折れ線グラフ）
+      - 直近 60 営業日の終値 + MA25 + MA75 のオーバーレイ
+      - データソース: price_history
+      - 新規エンドポイント: GET /api/price-history?ticker=XXXX&days=60
+        → JSON: {"dates": [...], "close": [...], "ma25": [...], "ma75": [...]}
+
+  (c) テクニカル指標パネル
+      - RSI14, ATR14, MA5/25/75/200, 出来高比率(vol/vol_20d_avg)
+      - データソース: technical_snapshot
+
+  (d) スコア・レーダーチャート（Phase 1 の API 再利用）
+
+  (e) シグナル履歴テーブル
+      - その銘柄の trade_signal_log を全件表示
+      - エントリー、損切り、利確、パターン、日付
+
+■ 2-2. パフォーマンス分析ページ: GET /performance
+  クローズ済みトレードの分析
+
+  表示内容:
+  (a) サマリー統計
+      - 勝率、平均損益%、プロフィットファクター、最大DD
+      - SQL:
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
+               AVG(pnl_pct) AS avg_pnl,
+               MIN(pnl_pct) AS worst_trade
+        FROM trade_result_log
+
+  (b) 月別損益テーブル / バーチャート
+      - 月ごとの合計損益、勝敗数
+      - データソース: trade_result_log.exit_date を月単位で集計
+
+  (c) パターン別成績
+      - パターン A vs B の勝率・平均損益を比較
+      - データソース: trade_result_log.pattern
+
+  (d) 累積損益曲線（折れ線グラフ）
+      - exit_date 順にソートして累積合計
+
+■ 2-3. 市場環境タイムライン
+  /report ページに追加（または /market サブページ）
+
+  (a) 日経平均 & S&P500 の推移チャート
+      - 直近 60 日分の終値 + MA25 ライン
+      - データソース: index_snapshot テーブル
+      - モード遷移ポイントをアノテーション表示
+
+  (b) 市場環境モード遷移履歴
+      - market_environment テーブルの mode 変化をタイムラインで表示
+
+■ 2-4. テスト計画
+  - /stock/<ticker> → 存在する銘柄 200 OK / 存在しない銘柄 404
+  - /performance → テストデータでの統計値検証
+  - /api/price-history → JSON 構造 + 日数パラメータの検証
+
+================================================================================
+  Phase 3: ファンダメンタルズ＋リスク指標＋セクター分析
+================================================================================
+
+■ 目標
+  プロの投資家が意思決定に必要な高度な分析情報を提供する
+
+■ 変更対象ファイル
+  - scripts/order_server.py（エンドポイント追加）
+  - scripts/init_db.py（DDL + マイグレーション追加）
+  - src/technical.py or 新規 src/risk.py（リスク計算ロジック）
+  - tests/test_order_server.py（テスト追加）
+
+■ 3-1. ファンダメンタルズ分析パネル（JP銘柄のみ、当面）
+  /stock/<ticker> ページに追加
+
+  表示内容:
+  - PER、PBR、配当利回り、ROE、自己資本比率
+  - データソース: fundamentals_snapshot テーブル（既存）
+  - 業種平均との比較（将来: 業種マスタ拡張後）
+
+  注意:
+  - J-Quants API で取得可能な範囲のみ
+  - US銘柄は「データなし」表示（将来の API 拡張で対応）
+
+■ 3-2. セクター・アロケーション（DB拡張必要）
+  /report ページにドーナツチャートで表示
+
+  *** DB 拡張が必要 ***
+  universe_master テーブルに以下カラムを追加:
+    ALTER TABLE universe_master ADD COLUMN sector TEXT;
+    ALTER TABLE universe_master ADD COLUMN industry TEXT;
+
+  データ投入:
+  - JP: J-Quants の銘柄マスタ API からセクター情報を取得
+  - US: yfinance の info['sector'] / info['industry'] を利用
+
+  表示:
+  - セクター別の投資額割合（ドーナツチャート）
+  - セクター別損益ヒートマップ
+
+■ 3-3. リスク指標（numpy 使用）
+  /report サマリーカードに追加 + /stock/<ticker> にも表示
+
+  計算対象:
+  (a) VaR (Value at Risk) — 99% 1日
+      - 直近60日間のリターン分布から算出
+      - 計算: numpy.percentile(returns, 1)
+      - 表示: 「最大想定損失: ¥XXX / $XXX」
+
+  (b) ベータ値 — 60日間
+      - ベンチマーク: JP → 日経225 / US → S&P500
+      - 計算: numpy.cov + numpy.var
+      - 表示: β = 1.2 のように表示
+
+  (c) シャープレシオ
+      - 計算: (平均リターン - 無リスク金利) / リターン標準偏差
+      - 無リスク金利: JP → 0.1% / US → 5.0%（CONFIG で設定可能に）
+
+  *** オプション: DB キャッシュ ***
+  計算コストが高い場合、新テーブルでキャッシュ:
+
+    CREATE TABLE IF NOT EXISTS risk_snapshot (
+        ticker       TEXT    NOT NULL,
+        calc_date    TEXT    NOT NULL,
+        var_99_1d    REAL,
+        beta_60d     REAL,
+        sharpe_60d   REAL,
+        updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (ticker, calc_date)
+    );
+
+  再計算条件: calc_date が当日でない場合のみ再計算
+
+■ 3-4. テスト計画
+  - リスク計算ロジックの単体テスト（固定データで VaR / Beta / Sharpe 検証）
+  - DBマイグレーションの冪等性テスト
+  - ファンダメンタルズ表示（データあり/なし両方）
+
+================================================================================
+  DB 拡張まとめ (Phase 3 で必要)
+================================================================================
+
+scripts/init_db.py の MIGRATION_STATEMENTS に追加:
+
+  -- universe_master にセクター・業種カラム追加
+  ALTER TABLE universe_master ADD COLUMN sector TEXT;
+  ALTER TABLE universe_master ADD COLUMN industry TEXT;
+
+  -- リスク指標キャッシュテーブル
+  CREATE TABLE IF NOT EXISTS risk_snapshot (
+      ticker       TEXT    NOT NULL,
+      calc_date    TEXT    NOT NULL,
+      var_99_1d    REAL,
+      beta_60d     REAL,
+      sharpe_60d   REAL,
+      updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (ticker, calc_date)
+  );
+
+セクターデータの取得方法:
+  - JP: J-Quants API /listed/info → 33業種コード + 17業種コード
+  - US: yfinance Ticker.info['sector'] / info['industry']
+  - バッチ処理 (run_monthly.bat) でマスタ更新を推奨
+
+================================================================================
+  全体スケジュール目安
+================================================================================
+
+  Phase 1: ポートフォリオ概況 + チャート  → 既存データのみで実装可能
+  Phase 2: 個別銘柄詳細 + パフォーマンス  → 既存データのみで実装可能
+  Phase 3: ファンダメンタルズ + リスク    → DB拡張 + 新規計算ロジック必要
+
+================================================================================
+  リスク・注意事項
+================================================================================
+
+  1. パフォーマンス
+     - Chart.js は CDN 読み込みのため初回表示がやや遅い可能性あり
+     - リスク計算（Phase 3）は銘柄数が増えると重くなる
+       → risk_snapshot キャッシュで対応
+     - price_history の大量データ取得は SQL 最適化が必要
+       → インデックス確認: (ticker, date) の複合インデックスが既にある
+
+  2. セキュリティ
+     - 全入力値は markupsafe.escape() で処理（既存パターンを踏襲）
+     - API エンドポイントは JSON 返却のみ、書き込み操作なし
+     - 127.0.0.1 バインドのため外部アクセス不可（現状維持）
+
+  3. データ制約
+     - ファンダメンタルズは JP 銘柄のみ（J-Quants 依存）
+     - US銘柄のセクター情報は yfinance の精度に依存
+     - リスク指標は 60 日分の価格データが必要
+       → 新規追加銘柄は十分なデータが溜まるまで「計算不可」表示
+
+  4. 互換性
+     - 既存の /report, /health エンドポイントは変更しない（拡張のみ）
+     - 既存の Slack 通知のレポートリンクはそのまま動作
+     - DB マイグレーションは ALTER TABLE + try/except で冪等に実行
+
+================================================================================

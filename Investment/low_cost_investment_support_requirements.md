@@ -748,7 +748,7 @@ AAPL,Apple Inc,US,185.5,2025-01-20,10,,
     "secret": "YOUR_RANDOM_SECRET_HEX"
   },
   "jquants": {
-    "refresh_token": "YOUR_JQUANTS_REFRESH_TOKEN",
+    "api_key": "YOUR_JQUANTS_REFRESH_TOKEN",
     "request_interval_sec": 1.0,
     "earnings_alert_days_critical": 3,
     "earnings_alert_days_warning": 7
@@ -761,7 +761,7 @@ AAPL,Apple Inc,US,185.5,2025-01-20,10,,
 
 - `total_capital_jpy` と `total_capital_usd` は実際の投資可能資金を入力する（推奨投入額の計算に使用）
 - 資金額が変わったら都度このファイルを手動更新すること
-- `jquants.refresh_token` は J-Quants ポータルで取得したリフレッシュトークンを入力する。未設定の場合は J-Quants 関連処理をすべてスキップする
+- `jquants.api_key` は J-Quants ポータルで取得したリフレッシュトークンを入力する。未設定の場合は J-Quants 関連処理をすべてスキップする
 - `moomoo.security_firm` は moomoo Japan 口座を利用する場合 `FUTUJP` を設定すること
 - `moomoo.trade_password_md5` は通常版 OpenD で API unlock を使う場合に設定する。GUI 版 OpenD では未設定でもよいが、注文前に moomoo 画面で手動解除が必要である
 - `order_server.secret` が未設定の場合、Slack の注文リンクは生成しないこと

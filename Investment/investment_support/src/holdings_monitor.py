@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 _PROJECT_ROOT    = Path(__file__).resolve().parent.parent
 _HOLDINGS_CSV    = _PROJECT_ROOT / "holdings.csv"
-_DEFAULT_SL_PCT  = float(CONFIG["capital"]["default_stop_loss_pct"]) / 100  # 0.08
+_DEFAULT_SL_PCT  = float(CONFIG.get("capital", {}).get("default_stop_loss_pct", "8")) / 100  # 0.08
 
 # 損切りライン接近の警告閾値（損切りラインまで残り %）
 _SL_NEAR_PCT = 2.0

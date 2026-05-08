@@ -349,6 +349,49 @@ DDL_STATEMENTS = [
     )
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_fundamentals_ticker_period ON fundamentals_snapshot(ticker, fiscal_year, fiscal_quarter)",
+
+    # ----------------------------------------------------------
+    # リスク指標キャッシュ (Phase 3)
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS risk_snapshot (
+        ticker       TEXT    NOT NULL,
+        calc_date    TEXT    NOT NULL,
+        var_99_1d    REAL,
+        beta_60d     REAL,
+        sharpe_60d   REAL,
+        updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (ticker, calc_date)
+    )
+    """,
+
+    # ----------------------------------------------------------
+    # ペーパートレード（仮想売買記録）
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS paper_trades (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        signal_date      DATE    NOT NULL,
+        ticker           TEXT    NOT NULL,
+        name             TEXT,
+        market           TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
+        pattern          TEXT    CHECK(pattern IN ('A', 'B', NULL)),
+        entry_price      REAL    NOT NULL,
+        stop_loss_price  REAL    NOT NULL,
+        target_price     REAL    NOT NULL,
+        position_size    REAL,
+        exit_price       REAL,
+        exit_date        DATE,
+        exit_reason      TEXT    CHECK(exit_reason IN ('stop_loss', 'take_profit', 'manual', NULL)),
+        pnl_pct          REAL,
+        pnl_amount       REAL,
+        status           TEXT    NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
+        created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(status)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(ticker, status)",
 ]
 
 # 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）
@@ -367,6 +410,9 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE daily_signals ADD COLUMN recommend_rank    TEXT",
     "ALTER TABLE daily_signals ADD COLUMN recommend_reason  TEXT",
     "ALTER TABLE daily_signals ADD COLUMN market_mode       TEXT",
+    # Phase 3: セクター・業種カラム追加
+    "ALTER TABLE universe_master ADD COLUMN sector   TEXT",
+    "ALTER TABLE universe_master ADD COLUMN industry TEXT",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）

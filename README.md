@@ -11,6 +11,7 @@
 | `PaperWatch/` | 新着論文監視システム。arXiv RSS から指定カテゴリの論文を取得し、キーワードスコアリングで関連度の高い論文を Slack に通知する。 |
 | `FreelanceScout/` | フリーランス案件自動収集システム。CrowdWorks・Coconala から IT/AI 系案件をスクレイプし、キーワードフィルタ後に Slack 通知する。 |
 | `EnglishDaily/` | 英語学習習慣化システム。曜日別カリキュラムを毎朝 Slack に配信し、連続学習日数（ストリーク）を管理する。 |
+| `MorningPlaylist/` | 英語ポッドキャスト自動再生システム。Spotify API で最新エピソードをプレイリストに入れ替え、Spotify Connect で Echo に再生開始する。 |
 | `watchdog/` | 横断監視スクリプト。全システムの SQLite DB を巡回し、バッチ未実行や致命的エラーを検知して Slack に通知する。 |
 | `shared/` | 共通モジュール（config, db, slack, logger）。各システムから `pip install -e "../../[slack]"` で利用する。 |
 | `claude-study/` | Claude Code の練習用プロジェクト。CLI 電卓と CSV 集計ツール。 |
@@ -25,6 +26,7 @@
 | 毎日 18:30 | Investment | 日本株のテクニカル分析・売買シグナル検知結果（夕方レポート） |
 | 毎月 1日 08:00 | Investment | 月次レポート（銘柄マスタ更新 + ファンダメンタルズ取得） |
 | 毎日 07:00 | PaperWatch | arXiv 新着論文のキーワードマッチレポート |
+| 毎日 07:00 | MorningPlaylist | 英語ポッドキャストプレイリスト自動更新 & Echo 再生 |
 | 毎日 07:00 | EnglishDaily | 曜日別英語学習カリキュラム + ストリーク通知 |
 | 毎日 17:30 / 19:30 / 21:30 / 23:30 | EnglishDaily | 未完了タスクのリマインド通知 |
 | 随時（異常時のみ） | watchdog | バッチ未実行・致命的エラーの検知アラート |
@@ -53,3 +55,40 @@ python -m scripts.init_db
 ```
 
 詳細は各フォルダの `CLAUDE.md` または `README.md` を参照。
+
+## タスクスケジューラ一括登録
+
+全システムのタスクスケジューラを一括で登録する。初回セットアップ時、またはタスクを再登録したいときに実行する。
+
+```powershell
+# 管理者権限の PowerShell で実行
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\setup_all.ps1
+```
+
+登録されるタスク:
+
+| タスク | トリガー |
+|--------|----------|
+| Investment_Dashboard | ログオン時（常駐サーバー） |
+| Investment_MorningBatch_ALL | 毎日 07:30 |
+| Investment_EveningBatch_JP | 毎日 18:30 |
+| Investment_MonthlyBatch | 毎月 1日 08:00 |
+| MorningEnglishPlaylistUpdate | config.json で指定した時刻 |
+| FreelanceScout_MorningBatch | 毎日 07:00 |
+| AiNewsDigest_MorningBatch | 毎日 07:00 |
+| EnglishDaily_MorningBatch | 毎日 07:00 |
+| EnglishDaily_Reminder_* | 毎日 17:30 / 19:30 / 21:30 / 23:30 |
+| PaperWatch_MorningBatch | 毎日 07:00 |
+| Ishikawa238_Watchdog | 毎日 22:00 |
+
+## 稼働状態チェック
+
+PC 再起動後などに、全タスクの登録状態と最終実行結果を一覧で確認する。
+
+```powershell
+# 管理者権限不要
+.\status.ps1
+```
+
+未登録タスクがある場合は `.\setup_all.ps1` を実行するようガイドが表示される。

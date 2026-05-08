@@ -42,5 +42,10 @@
   "watchdog": {
     "check_window_hours": 26,
     "fatal_error_lookback_hours": 26
+  },
+
+  "discovery": {
+    "enabled": true,
+    "exclude_dirs": ["shared", "shared.egg-info", "watchdog", "claude-study"]
   }
 }

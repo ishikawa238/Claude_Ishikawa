@@ -53,6 +53,7 @@ def detect_and_save_signals(
     target_str = target_date.strftime("%Y-%m-%d")
     candidates: list[dict] = []
     all_rows: list[dict] = []
+    data_insufficient_count = 0
 
     logger.info(f"市場環境 [{market_mode}]: シグナル検出を実施")
 
@@ -63,6 +64,11 @@ def detect_and_save_signals(
     for tk in screened_tickers:
         ticker = tk["ticker"]
         market = tk["market"]
+
+        # データ不足チェック（主要テクニカル指標の欠損）
+        _key_fields = ("ma200", "ma25", "rsi14")
+        if any(tk.get(f) is None for f in _key_fields):
+            data_insufficient_count += 1
 
         # スコア計算
         recent_low = recent_lows.get(ticker)
@@ -135,15 +141,16 @@ def detect_and_save_signals(
 
     candidate_count = len(candidates)
     watch_count = sum(1 for r in all_rows if r["label"] == "watch")
+    insufficient_str = f" / データ不足={data_insufficient_count} 件" if data_insufficient_count > 0 else ""
     if market_mode in ("caution", "full_caution"):
         logger.info(
             f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
-            f"watch={watch_count} 件（警戒モードのため新規買い候補は停止）"
+            f"watch={watch_count} 件（警戒モードのため新規買い候補は停止）{insufficient_str}"
         )
     else:
         logger.info(
             f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
-            f"candidate={candidate_count} 件 / watch={watch_count} 件"
+            f"candidate={candidate_count} 件 / watch={watch_count} 件{insufficient_str}"
         )
     return candidates[:_MAX_CANDIDATES]  # 最大件数に絞って返す
 
@@ -251,6 +258,19 @@ def _eval_pattern_b(tk: dict, target_str: str, market: str) -> dict:
     vol       = tk.get("volume")
     vol_avg   = tk.get("vol_20d_avg")
     rsi       = tk.get("rsi14")
+
+    # データ不足の条件を記録する
+    missing = []
+    if ma200 is None or ma200_5d is None:
+        missing.append("MA200")
+    if ma75 is None or ma25 is None:
+        missing.append("MA整列")
+    if ma25 is None or ma25_5d is None:
+        missing.append("MA25推移")
+    if rsi is None:
+        missing.append("RSI")
+    if missing:
+        logger.debug(f"{tk['ticker']}: データ不足のため判定保留（B） — {', '.join(missing)}")
 
     c1 = _flag(ma200 and ma200_5d and ma200 > ma200_5d)         # MA200上昇中
     c2 = _flag(ma75 and ma200 and ma25 and

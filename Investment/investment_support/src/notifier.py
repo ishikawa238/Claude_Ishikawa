@@ -711,6 +711,11 @@ def _no_candidates_reason(
         elif entry == 0:
             lines.append(f"→ {cand}銘柄がcandidate判定されましたが、損切り幅・資金条件で全て見送り")
 
+    # データ不足の銘柄数
+    if screening_stats and screening_stats.get("data_insufficient", 0) > 0:
+        insuf = screening_stats["data_insufficient"]
+        lines.append(f"⚠️ データ不足のため一部条件を判定保留: {insuf}銘柄")
+
     # near_misses から最高スコアを抽出
     if near_misses:
         top = near_misses[0]

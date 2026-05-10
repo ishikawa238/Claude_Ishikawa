@@ -253,7 +253,8 @@ def _run_batch() -> int:
         # STEP 8: 夜通知送信
         # ────────────────────────────────────────
         logger.info("STEP 8: 夜通知送信")
-        screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(entry_sets)}
+        data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ma200", "ma25", "rsi14")))
+        screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(entry_sets), "data_insufficient": data_insufficient}
         try:
             send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count,
                                 llm_feedback=llm_feedback, near_misses=near_misses,

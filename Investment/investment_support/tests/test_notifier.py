@@ -423,13 +423,13 @@ class NearMissSectionTests(unittest.TestCase):
         combined = "\n".join(texts)
         self.assertIn("トレンドは良好", combined)
 
-    def test_max_three_shown(self):
+    def test_max_two_shown(self):
         nms = [_make_near_miss(ticker=f"T{i}") for i in range(5)]
         texts = self._get_texts(nms)
         combined = "\n".join(texts)
         self.assertIn("T0", combined)
-        self.assertIn("T2", combined)
-        self.assertNotIn("T3", combined)
+        self.assertIn("T1", combined)
+        self.assertNotIn("T2", combined)
 
 
 class NoCandidatesReasonTests(unittest.TestCase):
@@ -460,6 +460,67 @@ class NoCandidatesReasonTests(unittest.TestCase):
         result = notifier._no_candidates_reason(None, nms, "normal")
         self.assertIn("47点", result)
         self.assertIn("6758", result)
+
+
+class ActionGuidanceTests(unittest.TestCase):
+    """A-2: 損切り到達時のアクション導線テスト"""
+
+    def test_forced_stop_has_action_guidance(self):
+        """forced_stop の朝通知ブロックに成行売りの指示が含まれる"""
+        from datetime import date
+        market_env = {"mode": "normal", "n225_close": 38000, "n225_ma25": 37500,
+                      "sp500_close": 5200, "sp500_ma25": 5100}
+        holdings = [_make_holding(label="forced_stop", pnl_pct=-10.0)]
+        # send_morning_report の blocks 生成を間接的にテスト
+        # _build_tomorrow_notes で確認
+        notes = notifier._build_tomorrow_notes(holdings)
+        self.assertTrue(any("成行売り" in n for n in notes))
+
+    def test_sl_near_has_guidance(self):
+        """SL接近銘柄に「割込み時は即手仕舞い」の指示がある"""
+        holdings = [_make_holding(label="sl_near", pnl_pct=-5.0)]
+        notes = notifier._build_tomorrow_notes(holdings)
+        self.assertTrue(any("即手仕舞い" in n for n in notes))
+
+
+class CapacityWarningTests(unittest.TestCase):
+    """A-2: 保有枠満杯の警告テスト"""
+
+    def _get_text(self, es):
+        block = notifier._entry_set_block(es)
+        return block["text"]["text"]
+
+    def test_at_capacity_shows_warning(self):
+        """保有枠満杯で警告が表示される"""
+        text = self._get_text(_make_entry_set(_warn_at_capacity=True, _remaining_slots=0))
+        self.assertIn("保有枠が満杯", text)
+
+    def test_remaining_slots_shown(self):
+        """保有枠に残りがある場合は残り枠数が表示される"""
+        text = self._get_text(_make_entry_set(_warn_at_capacity=True, _remaining_slots=1))
+        self.assertIn("残り1枠", text)
+
+    def test_no_capacity_warning_when_not_at_capacity(self):
+        """保有枠に余裕がある場合は警告なし"""
+        text = self._get_text(_make_entry_set(_warn_at_capacity=False, _remaining_slots=2))
+        self.assertNotIn("保有枠", text)
+
+
+class DataInsufficientReasonTests(unittest.TestCase):
+    """A-5: データ不足の通知表示テスト"""
+
+    def test_data_insufficient_shown(self):
+        """データ不足の銘柄数が表示される"""
+        stats = {"screened": 100, "candidates": 0, "entry_sets": 0, "data_insufficient": 15}
+        result = notifier._no_candidates_reason(stats, None, "normal")
+        self.assertIn("データ不足", result)
+        self.assertIn("15銘柄", result)
+
+    def test_no_data_insufficient_when_zero(self):
+        """データ不足が0件のとき表示されない"""
+        stats = {"screened": 100, "candidates": 0, "entry_sets": 0, "data_insufficient": 0}
+        result = notifier._no_candidates_reason(stats, None, "normal")
+        self.assertNotIn("データ不足", result)
 
 
 if __name__ == "__main__":

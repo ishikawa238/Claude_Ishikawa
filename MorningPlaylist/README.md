@@ -53,7 +53,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 `config.json` の `spotify.device_name` を変更する。デバイス名は部分一致で検索される。
 
 - Echo で再生: `"device_name": "Echo"`
-- PC で再生: `"device_name": "PC名"` または Spotify アプリに表示されるデバイス名
+- PC で再生: `"device_name": "Ishikawa"` または Spotify アプリに表示されるデバイス名
 
 ## タスクスケジューラ
 

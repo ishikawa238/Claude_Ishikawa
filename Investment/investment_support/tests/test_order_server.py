@@ -156,6 +156,20 @@ def _init_test_db(conn):
             completion_tokens INTEGER, response_text TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS take_profit_targets (
+            id INTEGER PRIMARY KEY, ticker TEXT, profit_type TEXT,
+            r_value REAL,
+            t1_price REAL, t1_pct REAL,
+            t1_reached INTEGER DEFAULT 0, t1_reached_date DATE,
+            t2_price REAL, t2_pct REAL,
+            t2_reached INTEGER DEFAULT 0, t2_reached_date DATE,
+            t3_price REAL, t3_pct REAL,
+            t3_reached INTEGER DEFAULT 0, t3_reached_date DATE,
+            adjusted_stop REAL, trailing_active INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
     today = date.today()
@@ -402,7 +416,8 @@ class OrderServerTestCase(unittest.TestCase):
         resp = self.client.get("/stock/7203")
         html = resp.data.decode()
         self.assertIn("stockRadar", html)
-        self.assertIn("score-radar", html)
+        # score-radar API の呼び出しは外部 JS (stock_detail.js) に移行済み
+        self.assertIn("stock_detail.js", html)
 
     def test_stock_contains_signal_history(self):
         resp = self.client.get("/stock/7203")

@@ -8,12 +8,13 @@
 
 #### v1.5（2026-04-19）
 
-- 半自動注文機能（moomoo連携）を削除
-  - `src/order_executor.py`, `scripts/sync_from_moomoo.py`, `run_order_server.bat` を削除
+- 半自動注文機能を削除し、moomoo連携を保有同期のみに縮小
+  - `src/order_executor.py`, `run_order_server.bat` を削除
   - `src/notifier.py` から注文リンク生成コードを除去
   - `scripts/order_server.py` を注文確認機能なしのレポートサーバーに変更（`/report`, `/health` のみ）
-  - `config.json` の `moomoo`・`order_server` セクションを削除し `report_server` に置き換え
+  - `config.json` の `order_server` セクションを削除し `report_server` に置き換え。`moomoo` セクションは保有同期用に host/port のみ残存（任意）
   - セクション9（moomoo OpenAPI 連携）・セクション10（半自動注文機能）を削除
+  - `src/moomoo_sync.py` を新設: moomoo OpenD からの保有銘柄同期 + 約定履歴取得（バッチで自動実行、未接続時はスキップ）
 - Slack通知のバッチを毎日実行（平日のみから変更）
   - タスクスケジューラ設定を月〜日（全曜日）20:30/07:30 に更新済み
 
@@ -823,6 +824,7 @@ investment_support/
 │   ├── entry_calculator.py   # エントリーセット計算・ポジションサイジング
 │   ├── holdings_monitor.py   # 保有銘柄の損益計算・損切り判定
 │   ├── notifier.py           # Slack Block Kit 生成・送信
+│   ├── moomoo_sync.py        # moomoo OpenD からの保有銘柄同期・約定履歴取得（任意）
 │   └── report_generator.py   # 月次集計レポート生成
 │
 ├── scripts/
@@ -915,9 +917,16 @@ investment_support/
   "report_server": {
     "host": "127.0.0.1",
     "port": 5100
+  },
+
+  "moomoo": {
+    "host": "127.0.0.1",
+    "port": 11111
   }
 }
 ```
+
+`moomoo` セクションは任意。moomoo OpenD から保有銘柄を同期する場合のみ設定する。未設定でも `holdings.csv` による管理で動作する。
 
 ### 6.1 report_server セクション仕様
 

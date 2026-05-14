@@ -411,6 +411,36 @@ DDL_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_llm_feedback_date ON llm_feedback_log(feedback_date)",
+
+    # ----------------------------------------------------------
+    # 利確ターゲット管理
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS take_profit_targets (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker          TEXT    NOT NULL,
+        profit_type     TEXT    NOT NULL CHECK(profit_type IN ('I', 'II', 'III')),
+        r_value         REAL,
+        t1_price        REAL,
+        t1_pct          REAL,
+        t1_reached      INTEGER NOT NULL DEFAULT 0,
+        t1_reached_date DATE,
+        t2_price        REAL,
+        t2_pct          REAL,
+        t2_reached      INTEGER NOT NULL DEFAULT 0,
+        t2_reached_date DATE,
+        t3_price        REAL,
+        t3_pct          REAL,
+        t3_reached      INTEGER NOT NULL DEFAULT 0,
+        t3_reached_date DATE,
+        adjusted_stop   REAL,
+        trailing_active INTEGER NOT NULL DEFAULT 0,
+        is_active       INTEGER NOT NULL DEFAULT 1,
+        created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_targets_active ON take_profit_targets(ticker, is_active) WHERE is_active = 1",
 ]
 
 # 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）

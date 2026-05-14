@@ -218,8 +218,9 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         logger.info("STEP 7: 保有銘柄判定")
         try:
-            from src.moomoo_sync import sync_from_moomoo
+            from src.moomoo_sync import sync_from_moomoo, sync_trade_results
             sync_from_moomoo()
+            sync_trade_results()
         except Exception as e:
             logger.warning(f"moomoo 同期スキップ: {e}")
         sync_holdings_from_csv()

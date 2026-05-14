@@ -1,0 +1,73 @@
+/* Investment Dashboard 共通スタイル */
+body { padding: 24px; font-size: 14px; background: #f8f9fa; }
+h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; }
+.mode-badge { display: inline-block; padding: 4px 12px; border-radius: 20px;
+              color: #fff; font-weight: 600; }
+.rank-badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+              color: #fff; font-weight: 600; font-size: 0.8rem; }
+th { white-space: nowrap; }
+.section { margin-bottom: 32px; }
+.summary-card { border-radius: 12px; padding: 16px; background: #fff;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+.summary-card .label { color: #666; font-size: 0.75rem; margin-bottom: 4px; }
+.summary-card .value { font-size: 1.5rem; font-weight: 700; }
+.chart-container { position: relative; width: 100%; }
+.nav-link.active { font-weight: 600; }
+.trend-up { color: #4CAF50; }
+.trend-down { color: #D32F2F; }
+.trend-flat { color: #FF9800; }
+a.ticker-link { text-decoration: none; color: #1976D2; font-weight: 600; }
+a.ticker-link:hover { text-decoration: underline; }
+
+/* 状態バッジ */
+.status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
+                border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+.status-safe { background: #E8F5E9; color: #2E7D32; }
+.status-warn { background: #FFF3E0; color: #E65100; }
+.status-danger { background: #FFEBEE; color: #C62828; }
+.status-tp { background: #E3F2FD; color: #1565C0; }
+
+/* ツールチップ */
+.tip { position: relative; cursor: help; border-bottom: 1px dotted #999; }
+.tip:hover::after { content: attr(data-tip); position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: 110%; background: #333; color: #fff; padding: 6px 10px; border-radius: 6px;
+    font-size: 0.75rem; white-space: nowrap; z-index: 10; font-weight: 400; }
+
+/* 詳細列トグル */
+.detail-col { display: none; }
+.show-detail .detail-col { display: table-cell; }
+.toggle-btn { font-size: 0.8rem; cursor: pointer; color: #1976D2; border: 1px solid #1976D2;
+              background: #fff; padding: 3px 12px; border-radius: 16px; }
+.toggle-btn:hover { background: #E3F2FD; }
+.filter-group { display: inline-flex; gap: 4px; margin-right: 16px; }
+.filter-btn { font-size: 0.8rem; cursor: pointer; padding: 3px 12px; border-radius: 16px;
+              border: 1px solid #ccc; background: #fff; color: #666; }
+.filter-btn:hover { background: #f5f5f5; }
+.filter-btn.active { background: #1976D2; color: #fff; border-color: #1976D2; }
+
+/* モバイル対応 */
+@media (max-width: 576px) {
+  body { padding: 8px; font-size: 13px; }
+  h2 { font-size: 1rem; }
+  .summary-card { padding: 10px; }
+  .summary-card .value { font-size: 1.2rem; }
+  .filter-group { margin-right: 8px; margin-bottom: 4px; }
+  .filter-btn, .toggle-btn { padding: 4px 10px; font-size: 0.75rem; }
+  th { font-size: 0.75rem; }
+  td { font-size: 0.8rem; }
+  .mobile-hide { display: none !important; }
+  .section { margin-bottom: 16px; }
+}
+@media (max-width: 768px) {
+  .tip:hover::after { display: none; }
+}
+
+/* AI アドバイザーカード */
+.llm-card { border-radius: 12px; padding: 16px; background: #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-top: 3px solid #ccc; }
+.llm-card .llm-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.llm-card .llm-provider { font-weight: 700; font-size: 0.95rem; }
+.llm-card .llm-model { font-size: 0.75rem; color: #888; }
+.llm-card .llm-body { font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap;
+                      word-break: break-word; }
+.llm-card .llm-meta { font-size: 0.7rem; color: #aaa; margin-top: 8px; text-align: right; }

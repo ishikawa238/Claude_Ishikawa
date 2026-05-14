@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Performance Analysis{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="h4 mb-0">Performance Analysis</h1>
+  <button class="btn btn-primary btn-sm" onclick="document.getElementById('tradeModal').style.display='flex'">
+    + トレード結果を記録
+  </button>
+</div>
+
+<!-- トレード記録モーダル -->
+<div id="tradeModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+     background:rgba(0,0,0,0.5);z-index:1050;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;padding:28px;width:min(480px,90vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0">トレード結果を記録</h5>
+      <button class="btn-close" onclick="document.getElementById('tradeModal').style.display='none'"></button>
+    </div>
+    <form id="tradeForm">
+      <div class="mb-3">
+        <label class="form-label fw-bold">ティッカー <span style="color:#D32F2F">*</span></label>
+        <input type="text" id="tf_ticker" class="form-control" placeholder="7203 / AAPL" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-bold">シグナル</label>
+        <select id="tf_signal" class="form-select">
+          <option value="">-- ティッカー入力後に自動取得 --</option>
+        </select>
+        <div class="form-text">シグナルがない場合は「なし」のままで記録できます</div>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-6">
+          <label class="form-label">エントリー価格</label>
+          <input type="number" step="any" id="tf_entry_price" class="form-control" placeholder="シグナル参照">
+        </div>
+        <div class="col-6">
+          <label class="form-label">エントリー日</label>
+          <input type="date" id="tf_entry_date" class="form-control">
+        </div>
+      </div>
+      <div class="row g-2 mb-3">
+        <div class="col-6">
+          <label class="form-label fw-bold">決済価格 <span style="color:#D32F2F">*</span></label>
+          <input type="number" step="any" id="tf_exit_price" class="form-control" required>
+        </div>
+        <div class="col-6">
+          <label class="form-label fw-bold">決済日 <span style="color:#D32F2F">*</span></label>
+          <input type="date" id="tf_exit_date" class="form-control" required>
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label fw-bold">決済理由</label>
+        <select id="tf_reason" class="form-select">
+          <option value="take_profit">利益確定</option>
+          <option value="stop_loss">損切り</option>
+          <option value="manual" selected>手動決済</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">メモ</label>
+        <input type="text" id="tf_memo" class="form-control" placeholder="任意">
+      </div>
+      <div id="tf_result" class="mb-3" style="display:none"></div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary flex-grow-1">記録する</button>
+        <button type="button" class="btn btn-outline-secondary"
+                onclick="document.getElementById('tradeModal').style.display='none'">キャンセル</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- サマリーカード -->
+<div class="row g-3 mb-4">
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">総トレード数</div>
+      <div class="value">{{ total }}</div>
+    </div>
+  </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">勝率</div>
+      <div class="value {{ 'trend-up' if win_rate >= 50 else 'trend-down' }}">{{ "{:.1f}".format(win_rate) }}%</div>
+      <div style="font-size:0.75rem;color:#666">{{ wins }}W / {{ losses }}L</div>
+    </div>
+  </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">平均損益</div>
+      <div class="value {{ 'trend-up' if avg_pnl >= 0 else 'trend-down' }}">{{ "{:+.2f}".format(avg_pnl) }}%</div>
+    </div>
+  </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label"><span class="tip" data-tip="プロフィットファクター：利益÷損失の比率。1.0以上なら利益が出ている">PF（利益率）</span></div>
+      <div class="value">{{ "{:.2f}".format(pf) }}</div>
+      <div style="font-size:0.7rem;color:#888">{{ "利益 &gt; 損失 👍"|safe if pf >= 1.0 else "損失 &gt; 利益"|safe }}</div>
+    </div>
+  </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">Best</div>
+      <div class="value trend-up">{{ "{:+.2f}".format(best) }}%</div>
+    </div>
+  </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">Worst</div>
+      <div class="value trend-down">{{ "{:+.2f}".format(worst) }}%</div>
+    </div>
+  </div>
+</div>
+
+<!-- チャート -->
+<div class="row g-3 mb-4">
+  <div class="col-md-6">
+    <div class="summary-card">
+      <div class="label">累積損益曲線</div>
+      <div class="chart-container" style="height:250px">
+        <canvas id="cumChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="summary-card">
+      <div class="label">月別損益</div>
+      <div class="chart-container" style="height:250px">
+        <canvas id="monthlyChart"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- パターン別成績 -->
+<div class="section">
+  <h2>パターン別成績</h2>
+  <div class="table-responsive">
+    <table class="table table-bordered table-sm bg-white" style="max-width:600px">
+      <thead class="table-light">
+        <tr><th>パターン</th><th>トレード数</th><th>勝ち</th><th>勝率</th><th>平均損益</th></tr>
+      </thead>
+      <tbody>
+        {% for p in pat_rows %}
+        <tr>
+          <td>{{ p.pattern_name }}</td>
+          <td>{{ p.total }}</td>
+          <td>{{ p.wins }}</td>
+          <td>{{ "{:.1f}".format(p.win_rate) }}%</td>
+          <td style="color:{{ '#4CAF50' if p.avg_pnl >= 0 else '#D32F2F' }}">{{ "{:+.2f}".format(p.avg_pnl) }}%</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" style="text-align:center;color:#999">データなし</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- トレード一覧 -->
+<div class="section">
+  <h2>直近トレード（最新50件）</h2>
+  <div class="table-responsive">
+    <table class="table table-bordered table-sm table-hover bg-white">
+      <thead class="table-light">
+        <tr><th>決済日</th><th>Ticker</th><th class="mobile-hide">パターン</th><th>損益</th><th>理由</th></tr>
+      </thead>
+      <tbody>
+        {% for t in trade_rows %}
+        <tr>
+          <td>{{ t.exit_date }}</td>
+          <td><a class="ticker-link" href="/stock/{{ t.ticker }}">{{ t.ticker }}</a></td>
+          <td class="mobile-hide">{{ t.pattern_name }}</td>
+          <td style="color:{{ '#4CAF50' if t.pnl >= 0 else '#D32F2F' }}">{{ "{:+.2f}".format(t.pnl) }}%</td>
+          <td>{{ t.reason_label }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" style="text-align:center;color:#999">データなし</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/performance.js') }}"></script>
+{% endblock %}

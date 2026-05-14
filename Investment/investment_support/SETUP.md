@@ -51,6 +51,14 @@ copy config_template.json config.json
 | 総資金（円） | `capital.total_capital_jpy` | 現在の投資可能総資金（例: 200000） |
 | 総資金（ドル） | `capital.total_capital_usd` | 米国株用資金（例: 1500） |
 
+任意の設定（未設定でも動作する）：
+
+| 項目 | 設定箇所 | 内容 |
+|------|---------|------|
+| J-Quants APIキー | `jquants.api_key` | J-Quants ポータルで取得したリフレッシュトークン。未設定の場合、JP財務データ・決算アラートは機能しない |
+| moomoo 接続先 | `moomoo.host` / `moomoo.port` | moomoo OpenD の接続先。未設定でも `holdings.csv` で保有銘柄を管理できる |
+| LLM アドバイザー | `llm.enabled` | `true` に設定し、使用するプロバイダーの `api_key` を入力。未設定の場合、LLMフィードバックは表示されない |
+
 ---
 
 ## 4. DB の初期化

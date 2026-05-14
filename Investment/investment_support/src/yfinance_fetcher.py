@@ -1,12 +1,15 @@
 """
-yfinance を使った初回履歴データ取得モジュール
+yfinance を使った価格データ取得モジュール
 
-用途: fetch_historical.py の初回3年分データ取得専用。
-日次バッチでは使用しない（EODHD Bulk endpoint を使用）。
+用途:
+- fetch_historical.py の初回3年分データ取得
+- 日次バッチでのJP株価格取得（EODHD Bulk が JP 未対応のため）
+- USD/JPY 為替レート取得（ダッシュボード円換算用）
 
 yfinance の仕様:
 - JP株: "7203.T"（東証）
 - US株: "AAPL"（そのまま）
+- 為替: "USDJPY=X"
 - 無料・API キー不要・登録不要
 - 非公式 API のため将来的に動作しなくなる可能性がある
 """
@@ -207,12 +210,43 @@ def fetch_daily_yf(
 
     target_str = target_date.strftime("%Y-%m-%d")
     daily_rows = [r for r in all_rows if r["date"] == target_str]
-    if daily_rows:
+
+    # 当日データが対象銘柄の半数以上あれば「当日取得成功」と判定する。
+    # 市場が未開場の場合、ごく少数の銘柄だけ当日データを持つことがあり、
+    # その場合は「当日データなし」として直近5日分を返す。
+    min_coverage = len(tickers_with_market) * 0.5
+    if daily_rows and len(daily_rows) >= min_coverage:
         logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
         return daily_rows
 
-    # 当日分がない場合（祝日・時間外）は直近5日分をすべて返す
+    # 当日分が不十分な場合（祝日・時間外・市場未開場）は直近5日分をすべて返す
     logger.info(
         f"yfinance 当日価格なし ({target_str})。直近データ {len(all_rows)} 件を返します"
     )
     return all_rows
+
+
+def fetch_usdjpy_rate() -> float | None:
+    """
+    yfinance で最新の USD/JPY 為替レートを取得する。
+
+    ダッシュボードの資産総額円換算に使用する。
+    取得できない場合は None を返す（呼び出し側でフォールバック値を使用する）。
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.error("yfinance がインストールされていません: pip install yfinance")
+        return None
+
+    try:
+        ticker = yf.Ticker("USDJPY=X")
+        info = ticker.fast_info
+        rate = float(getattr(info, "last_price", 0) or getattr(info, "previous_close", 0))
+        if rate > 0:
+            logger.info(f"USD/JPY レート取得: {rate:.2f}")
+            return rate
+    except Exception as e:
+        logger.warning(f"USD/JPY レート取得失敗: {e}")
+
+    return None

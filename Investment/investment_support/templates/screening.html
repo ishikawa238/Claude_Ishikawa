@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Screening {{ target_date }}{% endblock %}
+
+{% block content %}
+<h1 class="h4 mb-4">Screening List <span class="text-muted fs-6">{{ target_date }}</span></h1>
+
+<!-- サマリーカード -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md">
+    <div class="summary-card">
+      <div class="label">スクリーニング通過</div>
+      <div class="value">{{ total }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md">
+    <div class="summary-card">
+      <div class="label">候補 (candidate)</div>
+      <div class="value" style="color:#4CAF50">{{ cand_cnt }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md">
+    <div class="summary-card">
+      <div class="label">監視 (watch)</div>
+      <div class="value" style="color:#FF9800">{{ watch_cnt }}</div>
+    </div>
+  </div>
+  <div class="col-6 col-md">
+    <div class="summary-card">
+      <div class="label">スキップ (skip)</div>
+      <div class="value" style="color:#9E9E9E">{{ skip_cnt }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- フィルタ -->
+<div class="summary-card mb-4">
+  <div class="d-flex flex-wrap align-items-center gap-2">
+    <span style="font-size:0.8rem;font-weight:600;color:#666">ラベル:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('label','candidate',this)">候補</button>
+      <button class="filter-btn" onclick="setFilter('label','watch',this)">監視</button>
+      <button class="filter-btn" onclick="setFilter('label','skip',this)">スキップ</button>
+      <button class="filter-btn" onclick="setFilter('label','all',this)">すべて</button>
+    </div>
+    <span style="font-size:0.8rem;font-weight:600;color:#666">市場:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('market','all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('market','JP',this)">JP</button>
+      <button class="filter-btn" onclick="setFilter('market','US',this)">US</button>
+    </div>
+    <span style="font-size:0.8rem;font-weight:600;color:#666">パターン:</span>
+    <div class="filter-group">
+      <button class="filter-btn active" onclick="setFilter('pattern','all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('pattern','A',this)">A</button>
+      <button class="filter-btn" onclick="setFilter('pattern','B',this)">B</button>
+    </div>
+    <span id="filterCount" style="font-size:0.8rem;color:#999;margin-left:auto"></span>
+    <button class="toggle-btn" onclick="document.querySelector('#screeningTable').classList.toggle('show-detail');this.textContent=this.textContent==='詳細を表示'?'詳細を隠す':'詳細を表示'">詳細を表示</button>
+  </div>
+</div>
+
+<!-- テーブル -->
+<div class="section">
+  <div class="table-responsive">
+    <table id="screeningTable" class="table table-bordered table-sm table-hover bg-white">
+      <thead class="table-light">
+        <tr>
+          <th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th>
+          <th><span class="tip" data-tip="A=モメンタムブレイクアウト B=押し目買い">PT</span></th>
+          <th>ラベル</th>
+          <th class="mobile-hide"><span class="tip" data-tip="緑=条件充足 灰=未充足。ホバーで条件名を表示">条件 (6項目)</span></th>
+          <th id="sortScore" style="cursor:pointer"><span class="tip" data-tip="クリックで並び替え">Score ⇅</span></th>
+          <th>Rank</th>
+          <th class="mobile-hide"><span class="tip" data-tip="買い候補/監視/対象外の判定と未達条件">買い判定</span></th>
+          <th class="mobile-hide"><span class="tip" data-tip="スコアリングの理由（主要な加点・減点要因）">理由</span></th>
+          <th class="detail-col">終値</th>
+          <th class="detail-col"><span class="tip" data-tip="70以上=買われすぎ 30以下=売られすぎ">RSI</span></th>
+          <th class="detail-col"><span class="tip" data-tip="出来高 ÷ 20日平均出来高">出来高比</span></th>
+          <th class="detail-col">セクター</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in table_rows %}
+        {{ r.row_html|safe }}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/screening.js') }}"></script>
+{% endblock %}

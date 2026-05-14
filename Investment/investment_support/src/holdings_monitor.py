@@ -16,6 +16,12 @@ from typing import Optional
 from src.config import CONFIG
 from src.data_store import fetch_all, fetch_one, get_connection, upsert
 from src.logger import get_logger
+from src.take_profit import (
+    check_target_reached,
+    cleanup_stale_targets,
+    ensure_targets,
+    get_targets,
+)
 
 logger = get_logger(__name__)
 
@@ -241,6 +247,35 @@ def evaluate_holdings(target_date: date) -> list[dict]:
 
         # テクニカルスナップショット（通知の詳細表示用）
         snap = _get_technical(ticker, target_str)
+        ma25 = snap.get("ma25") if snap else None
+
+        # --- 利確ターゲット ---
+        tp_targets = ensure_targets(
+            ticker, entry_price, stop_loss_price,
+            quantity or 1, target_str,
+        )
+        tp_result = {"newly_reached": [], "adjusted_stop": None,
+                     "sell_qty": 0, "trailing_triggered": False}
+        if tp_targets and label not in ("forced_stop", "sl_near"):
+            tp_result = check_target_reached(
+                ticker, current_price, entry_price, target_str, ma25=ma25,
+            )
+            # 利確到達時はラベルを上書き（sell_watch / hold より優先）
+            if tp_result["newly_reached"]:
+                highest = tp_result["newly_reached"][-1]  # t1 < t2 < t3
+                if tp_result["trailing_triggered"]:
+                    label = "tp_trailing"
+                    reasons = [f"MA25割れ検知（MA25: {ma25:,.2f}）— 残りポジションの手仕舞いを検討"]
+                else:
+                    label = f"tp_{highest}"
+                    r_mult = _tp_r_label(tp_targets, highest)
+                    reasons = [f"{highest.upper()} 到達（{r_mult}）— "
+                               f"{tp_result['sell_qty']}株の利確を検討"]
+                    if tp_result["adjusted_stop"]:
+                        reasons.append(
+                            f"損切りラインの引き上げ推奨: "
+                            f"{stop_loss_price:,.2f} → {tp_result['adjusted_stop']:,.2f}"
+                        )
 
         results.append({
             "ticker":          ticker,
@@ -262,20 +297,45 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "target_price":    _get_target_price(ticker),
             # テクニカル指標（notifier で使用）
             "tech_ma5":   snap.get("ma5")   if snap else None,
-            "tech_ma25":  snap.get("ma25")  if snap else None,
+            "tech_ma25":  ma25,
             "tech_ma200": snap.get("ma200") if snap else None,
             "tech_rsi14": snap.get("rsi14") if snap else None,
+            # 利確ターゲット情報
+            "profit_type":     tp_targets["profit_type"] if tp_targets else None,
+            "tp_t1_price":     tp_targets["t1_price"] if tp_targets else None,
+            "tp_t2_price":     tp_targets["t2_price"] if tp_targets else None,
+            "tp_t3_price":     tp_targets["t3_price"] if tp_targets else None,
+            "tp_t1_reached":   tp_targets["t1_reached"] if tp_targets else 0,
+            "tp_t2_reached":   tp_targets["t2_reached"] if tp_targets else 0,
+            "tp_t3_reached":   tp_targets["t3_reached"] if tp_targets else 0,
+            "tp_adjusted_stop": tp_result.get("adjusted_stop"),
+            "tp_sell_qty":     tp_result.get("sell_qty", 0),
+            "tp_newly_reached": tp_result.get("newly_reached", []),
         })
 
     forced = sum(1 for r in results if r["label"] == "forced_stop")
     sl_near = sum(1 for r in results if r["label"] == "sl_near")
     sell    = sum(1 for r in results if r["label"] == "sell_watch")
     hold    = sum(1 for r in results if r["label"] == "hold")
+    tp      = sum(1 for r in results if r["label"].startswith("tp_"))
     logger.info(
         f"保有銘柄判定: {len(results)} 件 | "
-        f"強制損切り={forced} 売り検討={sell} SL接近={sl_near} 継続={hold}"
+        f"強制損切り={forced} 利確到達={tp} 売り検討={sell} SL接近={sl_near} 継続={hold}"
     )
     return results
+
+
+def _tp_r_label(tp_targets: dict, stage: str) -> str:
+    """利確段階のR倍率ラベルを返す（例: "+0.5R"）。"""
+    r_val = tp_targets.get("r_value") or 0
+    entry_approx = (tp_targets.get("t1_price") or 0) - r_val * 0.5  # 概算
+    price = tp_targets.get(f"{stage}_price")
+    if r_val > 0 and price:
+        mult = (price - entry_approx) / r_val
+        return f"+{mult:.1f}R"
+    if stage == "t3" and tp_targets.get("profit_type") == "II":
+        return "MA25トレーリング"
+    return stage.upper()
 
 
 # ============================================================

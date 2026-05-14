@@ -184,6 +184,55 @@ def aggregate_system_stats(year: int, month: int) -> dict:
         )
         batch_map = {r["status"]: r["cnt"] for r in batch_rows}
 
+        # パターン別期待値 (trade_result_log)
+        pattern_ev_rows = fetch_all(
+            conn,
+            "SELECT tsl.pattern, "
+            "  COUNT(*) as cnt, "
+            "  AVG(trl.pnl_pct) as avg_pnl, "
+            "  SUM(CASE WHEN trl.pnl_pct > 0 THEN 1 ELSE 0 END) as wins, "
+            "  AVG(CASE WHEN trl.pnl_pct > 0 THEN trl.pnl_pct END) as avg_win, "
+            "  AVG(CASE WHEN trl.pnl_pct <= 0 THEN trl.pnl_pct END) as avg_loss "
+            "FROM trade_result_log trl "
+            "LEFT JOIN trade_signal_log tsl ON trl.signal_id = tsl.id "
+            "WHERE trl.actual_exit_date >= ? AND trl.actual_exit_date < ? "
+            "  AND trl.pnl_pct IS NOT NULL "
+            "GROUP BY tsl.pattern",
+            (month_start, month_end),
+        )
+        pattern_ev = {}
+        for r in pattern_ev_rows:
+            pat = r["pattern"] or "manual"
+            cnt = r["cnt"]
+            wr = r["wins"] / cnt if cnt > 0 else 0
+            avg_win = r["avg_win"] or 0
+            avg_loss = r["avg_loss"] or 0
+            ev = wr * avg_win + (1 - wr) * avg_loss
+            pattern_ev[pat] = {
+                "count": cnt,
+                "win_rate": round(wr * 100, 1),
+                "ev": round(ev, 2),
+            }
+
+        # 損切り遵守による損失削減額
+        sl_savings_row = fetch_one(
+            conn,
+            "SELECT SUM(ABS(trl.pnl_amount)) as total_loss "
+            "FROM trade_result_log trl "
+            "WHERE trl.actual_exit_date >= ? AND trl.actual_exit_date < ? "
+            "  AND trl.exit_reason = 'stop_loss' AND trl.pnl_amount < 0",
+            (month_start, month_end),
+        )
+        sl_total_loss = sl_savings_row["total_loss"] if sl_savings_row and sl_savings_row["total_loss"] else 0
+
+    # コスト比率（月額コスト ÷ 総資金）
+    capital_jpy = CONFIG.get("capital", {}).get("total_capital_jpy", 0)
+    capital_usd = CONFIG.get("capital", {}).get("total_capital_usd", 0)
+    usdjpy = CONFIG.get("capital", {}).get("usdjpy_fallback", 150.0)
+    total_capital = capital_jpy + capital_usd * usdjpy
+    monthly_cost = 19.99 * usdjpy  # EODHD $19.99/月
+    cost_ratio = round(monthly_cost / total_capital * 100, 2) if total_capital > 0 else None
+
     return {
         "caution_days":        env_map.get("caution", 0),
         "full_caution_days":   env_map.get("full_caution", 0),
@@ -195,6 +244,10 @@ def aggregate_system_stats(year: int, month: int) -> dict:
         "stop_loss_count":     sl_row["cnt"] if sl_row else 0,
         "batch_runs":          sum(batch_map.values()) if batch_map else 0,
         "batch_failures":      batch_map.get("failed", 0) + batch_map.get("partial_failure", 0),
+        "pattern_ev":          pattern_ev,
+        "sl_total_loss":       round(sl_total_loss, 0),
+        "cost_ratio":          cost_ratio,
+        "monthly_cost":        round(monthly_cost, 0),
     }
 
 
@@ -323,18 +376,43 @@ def _append_system_stats(blocks: list, ss: dict) -> None:
         ]
     })
 
-    # 損切り・バッチ
+    # パターン別期待値
+    pattern_ev = ss.get("pattern_ev", {})
+    if pattern_ev:
+        ev_lines = ["*パターン別期待値*"]
+        for pat in sorted(pattern_ev.keys()):
+            info = pattern_ev[pat]
+            pat_label = {"A": "A (ブレイクアウト)", "B": "B (押し目買い)"}.get(pat, pat)
+            ev_sign = "+" if info["ev"] >= 0 else ""
+            ev_lines.append(
+                f"  {pat_label}: {info['count']}件 "
+                f"勝率{info['win_rate']}% "
+                f"EV {ev_sign}{info['ev']}%"
+            )
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "\n".join(ev_lines)},
+        })
+
+    # 損切り・コスト
     sl_text = f"*損切り実行*\n{ss['stop_loss_count']}件"
-    batch_text = (
-        f"*バッチ実行*\n"
-        f"{ss['batch_runs']}回 (失敗: {ss['batch_failures']}回)"
-    )
+    if ss.get("sl_total_loss", 0) > 0:
+        sl_text += f"\n損切りによる確定損失: {ss['sl_total_loss']:,.0f}円"
+        sl_text += "\n（SLなしなら更に拡大した可能性あり）"
+
+    cost_text = f"*バッチ実行*\n{ss['batch_runs']}回 (失敗: {ss['batch_failures']}回)"
+    if ss.get("cost_ratio") is not None:
+        cost_text += (
+            f"\n*月額コスト*\n"
+            f"約{ss['monthly_cost']:,.0f}円 "
+            f"(資金比 {ss['cost_ratio']}%)"
+        )
 
     blocks.append({
         "type": "section",
         "fields": [
             {"type": "mrkdwn", "text": sl_text},
-            {"type": "mrkdwn", "text": batch_text},
+            {"type": "mrkdwn", "text": cost_text},
         ]
     })
 
@@ -346,6 +424,8 @@ def _append_system_stats(blocks: list, ss: dict) -> None:
         guide_lines.append(f"警戒モードで{ss['signals_suppressed']}件停止 → 市場回復後の再開判断に注意")
     if ss["batch_failures"] > 0:
         guide_lines.append(f"バッチ失敗{ss['batch_failures']}回 → ログを確認してください")
+    if ss.get("cost_ratio") is not None and ss["cost_ratio"] > 5.0:
+        guide_lines.append(f"月額コスト比率 {ss['cost_ratio']}% → 資金規模に対してコストが高め。増資または縮小を検討")
 
     if guide_lines:
         blocks.append({

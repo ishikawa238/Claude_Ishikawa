@@ -402,7 +402,8 @@ def fetch_near_misses(
     """
     params = base_params + [date_str, limit]
     with get_connection() as conn:
-        return fetch_all(conn, sql, tuple(params))
+        rows = fetch_all(conn, sql, tuple(params))
+    return [dict(r) for r in rows]
 
 
 # 後方互換: 旧名でも呼び出し可能

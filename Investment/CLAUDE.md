@@ -75,7 +75,8 @@ External APIs → price_history / index_snapshot (SQLite)
 | `market_filter.py` | Market environment judge (normal/caution/full_caution) + liquidity screening |
 | `signal_detector.py` | Pattern A (breakout) and Pattern B (MA25 pullback) detection |
 | `entry_calculator.py` | Computes entry price, stop-loss, target, recommended amount → `trade_signal_log` |
-| `holdings_monitor.py` | Evaluates stop-loss hits and earnings alerts for open positions |
+| `holdings_monitor.py` | Evaluates stop-loss hits, take-profit target reaches, and earnings alerts for open positions |
+| `take_profit.py` | Take-profit target management — type determination (I/II/III), T1/T2/T3 price calculation, reach detection, DB ops → `take_profit_targets` |
 | `notifier.py` | Builds and sends Slack messages (morning and evening reports) |
 | `llm_advisor.py` | Sends stock data + news to OpenAI/Anthropic/Gemini APIs and returns feedback for Slack notifications (config: `llm` section) |
 | `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
@@ -87,7 +88,7 @@ External APIs → price_history / index_snapshot (SQLite)
 - `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → LLM advisor → Slack → DB backup
 - `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → LLM advisor → Slack
 - `batch_monthly.py` — Universe master refresh + J-Quants fundamentals + monthly Slack report
-- `order_server.py` — Flask server that serves the daily report page (`/report`)
+- `order_server.py` — Flask server that serves the daily report page (`/report`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`)
 
 ### Database (`data/investment.db`)
 
@@ -100,7 +101,8 @@ SQLite with WAL mode. Tables:
 - `holdings` — open/closed positions (source of truth is `holdings.csv`, synced via `sync_holdings_from_csv()`)
 - `daily_signals` — all screened tickers with pattern condition results
 - `trade_signal_log` — notified entry sets (entry/stop/target/amount)
-- `trade_result_log` — manually recorded trade outcomes
+- `take_profit_targets` — staged take-profit targets per holding (T1/T2/T3 prices, reach status, adjusted stop-loss)
+- `trade_result_log` — trade outcomes (moomoo auto-sync or dashboard form or CLI)
 - `earnings_schedule` — JP earnings announcement dates from J-Quants
 - `fundamentals_snapshot` — JP financial data from J-Quants
 - `llm_feedback_log` — LLM advisor responses (date, provider, model, tokens, response text)

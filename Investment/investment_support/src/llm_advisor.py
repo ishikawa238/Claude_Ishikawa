@@ -32,6 +32,9 @@ _MAX_HOLDINGS = 5
 # Slack セクション上限（3000文字）対策
 _MAX_RESPONSE_CHARS = 2800
 
+# プロンプトのトークン上限（各プロバイダーの最小入力枠を目安に安全マージン込み）
+_MAX_PROMPT_TOKENS = 80_000
+
 # パターン名の日本語表記
 _PATTERN_NAMES = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
 
@@ -72,8 +75,27 @@ def get_llm_feedback(
         logger.info("LLM アドバイザー: 無効（config.llm.enabled = false）")
         return []
 
-    user_prompt = _build_prompt(entry_sets, holdings, market_env, news=news)
     today_str = date.today().strftime("%Y-%m-%d")
+
+    # 同日・同バッチタイプのキャッシュ確認
+    try:
+        with get_connection() as conn:
+            cached = fetch_all(
+                conn,
+                "SELECT provider, model, response_text FROM llm_feedback_log "
+                "WHERE feedback_date = ? AND batch_type = ? AND response_text != ''",
+                (today_str, batch_type),
+            )
+        if cached:
+            logger.info(f"LLM アドバイザー: 同日キャッシュあり（{len(cached)}件）。API呼び出しをスキップ")
+            return [
+                {"provider": r["provider"], "model": r["model"], "text": r["response_text"], "error": None}
+                for r in cached
+            ]
+    except Exception:
+        logger.debug("LLM キャッシュ確認スキップ")
+
+    user_prompt = _build_prompt(entry_sets, holdings, market_env, news=news)
 
     providers: list[tuple[str, dict]] = []
     for name in ("openai", "anthropic", "gemini"):
@@ -132,6 +154,22 @@ def get_llm_feedback(
 
 
 # ============================================================
+# トークン推計
+# ============================================================
+
+def _estimate_tokens(text: str) -> int:
+    """テキストのトークン数をヒューリスティックに推計する。
+
+    日本語は平均3文字/トークン、ASCII は平均4文字/トークン、
+    マークダウン構造のオーバーヘッドを10%加算する。
+    """
+    jp_chars = sum(1 for c in text if ord(c) > 0x2FFF)
+    ascii_chars = len(text) - jp_chars
+    raw = jp_chars / 3 + ascii_chars / 4
+    return int(raw * 1.1)
+
+
+# ============================================================
 # プロンプト構築
 # ============================================================
 
@@ -174,7 +212,27 @@ def _build_prompt(
             "3. 初心者向け学びポイント（今日のデータから学べるテクニカル分析の知識）"
         )
 
-    return "\n\n".join(sections)
+    prompt = "\n\n".join(sections)
+
+    # トークン上限ガード: 超過する場合はニュース→保有→候補の順に削減
+    est = _estimate_tokens(prompt)
+    if est > _MAX_PROMPT_TOKENS:
+        logger.warning(f"プロンプト推計 {est} トークン > 上限 {_MAX_PROMPT_TOKENS}。ニュースを削除して再構築します")
+        sections_trimmed = [s for s in sections if not s.startswith("## 直近の市場ニュース")]
+        prompt = "\n\n".join(sections_trimmed)
+        est = _estimate_tokens(prompt)
+        if est > _MAX_PROMPT_TOKENS:
+            logger.warning(f"ニュース削除後も推計 {est} トークン。情報量を縮小します")
+            sections_trimmed = []
+            sections_trimmed.append(_format_market_env_rich(market_env))
+            sections_trimmed.append(_format_entry_sets_rich(entry_sets[:1]))
+            sections_trimmed.append(_format_holdings_rich(holdings[:2]))
+            sections_trimmed.append(sections[-1])  # 回答指示は残す
+            prompt = "\n\n".join(sections_trimmed)
+    else:
+        logger.debug(f"プロンプト推計: {est} トークン")
+
+    return prompt
 
 
 def _format_market_env_rich(market_env: dict) -> str:

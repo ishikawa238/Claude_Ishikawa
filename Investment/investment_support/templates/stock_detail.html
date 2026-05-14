@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} - {{ name }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="/report" class="text-decoration-none">&larr; Dashboard に戻る</a>
+</div>
+
+<!-- 銘柄ヘッダ -->
+<div class="row align-items-end mb-4">
+  <div class="col">
+    <h1 class="h4 mb-0">{{ ticker }} <span class="text-muted">{{ name }}</span></h1>
+    <div class="text-muted" style="font-size:0.85rem">
+      {{ market }} | セクター: {{ sector }} | 業種: {{ industry }}
+    </div>
+  </div>
+  <div class="col-auto text-end">
+    <div style="font-size:1.8rem; font-weight:700">{{ "{:,.2f}".format(cp) }}</div>
+    <div class="{{ change_color }}" style="font-size:1rem">{{ "{:+.2f}".format(change_pct) }}%</div>
+    <div class="text-muted" style="font-size:0.75rem">52W: {{ l52_str }} — {{ h52_str }}</div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <!-- 価格チャート -->
+  <div class="col-md-8">
+    <div class="summary-card">
+      <div class="label">価格推移（60営業日）</div>
+      <div class="chart-container" style="height:300px">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <!-- スコアレーダー -->
+  <div class="col-md-4">
+    <div class="summary-card">
+      <div class="label">スコア: {{ fscore if fscore is not none else "—" }}
+        <span class="rank-badge ms-2" style="background:{{ rank_color }}">{{ frank }}</span>
+      </div>
+      <div class="chart-container" style="height:200px">
+        <canvas id="stockRadar"></canvas>
+      </div>
+      <div class="mt-2" style="font-size:0.8rem; color:#666">{{ reason }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- テクニカル + ファンダメンタルズ + リスク -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="summary-card">
+      <h2>テクニカル指標</h2>
+      <table class="table table-sm mb-0">
+        <tr><td><span class="tip" data-tip="買われすぎ・売られすぎの指標。70以上は過熱、30以下は売られすぎ">RSI (14)</span></td><td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span>{{ rsi_str }}</span>
+            <div style="flex:1;height:8px;background:#eee;border-radius:4px">
+              <div style="width:{{ rsi_width }}%;height:100%;background:{{ rsi_bar_color }};border-radius:4px"></div>
+            </div>
+          </div>
+        </td></tr>
+        {% for key, label in tech_rows %}
+        <tr><td>{{ label }}</td><td>{{ tech_values[key] }}</td></tr>
+        {% endfor %}
+        <tr><td>出来高平均(20d)</td><td>{{ vol_str }}</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="summary-card">
+      <h2>ファンダメンタルズ{{ " (JP)" if has_fundamentals else "" }}</h2>
+      {% if has_fundamentals %}
+      <table class="table table-sm mb-0">
+        {% for label, value in fund_rows %}
+        <tr><td>{{ label }}</td><td>{{ value }}</td></tr>
+        {% endfor %}
+      </table>
+      {% else %}
+      <div class="text-muted mt-3">データなし</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="summary-card">
+      <h2>リスク指標 (60日)</h2>
+      <table class="table table-sm mb-0">
+        <tr>
+          <td><span class="tip" data-tip="最悪ケースで1日にどれだけ下がりうるか（99%の確率でこの範囲に収まる）">VaR (99%, 1日)</span></td>
+          <td>{{ var_str }}</td>
+        </tr>
+        <tr>
+          <td><span class="tip" data-tip="市場全体と比べた値動きの大きさ。1.0なら市場と同じ、1.5なら1.5倍動く">ベータ値</span></td>
+          <td>{{ beta_str }}</td>
+        </tr>
+        <tr>
+          <td><span class="tip" data-tip="リスクに見合ったリターンが得られているか。高いほど効率よく利益が出ている">シャープレシオ</span></td>
+          <td>{{ sharpe_str }}</td>
+        </tr>
+      </table>
+      <div style="font-size:0.7rem;color:#888;margin-top:8px">
+        ※ 過去60日の値動きから計算した参考値です
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- シグナル履歴 -->
+<div class="section">
+  <h2>シグナル履歴</h2>
+  <div class="table-responsive">
+    <table class="table table-bordered table-sm table-hover bg-white">
+      <thead class="table-light">
+        <tr><th>日付</th><th>パターン</th><th>エントリー</th><th>損切りSL</th><th>利確目安</th><th>市場モード</th></tr>
+      </thead>
+      <tbody>
+        {% for s in sig_rows %}
+        <tr>
+          <td>{{ s.signal_date }}</td>
+          <td>{{ s.pattern_name }}</td>
+          <td>{{ s.entry_str }}</td>
+          <td>{{ s.sl_str }}</td>
+          <td>{{ s.target_str }}</td>
+          <td>{{ s.market_mode }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" style="text-align:center;color:#999">シグナルなし</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/stock_detail.js') }}"></script>
+<script>initStockCharts("{{ ticker }}");</script>
+{% endblock %}

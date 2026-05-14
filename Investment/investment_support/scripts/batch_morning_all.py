@@ -159,6 +159,19 @@ def _run_batch() -> int:
         else:
             _save_in_chunks(all_rows, "price_history")
 
+        # US市場の実際の最新取引日を特定する。
+        # 07:30 JST 時点ではUS市場の当日分がまだ存在しないため、
+        # price_history の日付と technical_snapshot の日付を揃える必要がある。
+        # 最も多くの銘柄がデータを持つ日付を採用する（テスト銘柄等に引きずられない）。
+        if all_rows:
+            from collections import Counter
+            date_counts = Counter(r["date"] for r in all_rows)
+            us_price_date = date.fromisoformat(max(date_counts, key=date_counts.get))
+        else:
+            us_price_date = _TODAY
+        if us_price_date != _TODAY:
+            logger.info(f"US 最新取引日: {us_price_date}（本日 {_TODAY} のデータなし）")
+
         # ────────────────────────────────────────
         # STEP 2: テクニカル指標計算（インデックスMA）
         # ────────────────────────────────────────
@@ -186,16 +199,19 @@ def _run_batch() -> int:
             near_misses = []
             signals_count = 0
         else:
-            calculate_and_save_snapshots(tickers_with_market, _TODAY)
+            # テクニカル計算・スクリーニングは実際の取引日で実行する。
+            # price_history.date と technical_snapshot.date が一致しないと
+            # 流動性フィルタの JOIN が 0 件になるため。
+            calculate_and_save_snapshots(tickers_with_market, us_price_date)
 
             logger.info("STEP 4: 流動性フィルタ・シグナル検出（US）")
-            screened = get_screened_tickers(_TODAY, "US")
-            candidates = detect_and_save_signals(screened, _TODAY, mode)
+            screened = get_screened_tickers(us_price_date, "US")
+            candidates = detect_and_save_signals(screened, us_price_date, mode)
             signals_count = len(candidates)
             us_entry_sets = save_entry_sets(candidates, mode)
 
             from src.signal_detector import fetch_near_misses
-            near_misses = fetch_near_misses(_TODAY, limit=5)
+            near_misses = fetch_near_misses(us_price_date, limit=5)
 
             # ペーパートレード: 仮想エントリー記録 + 日次更新
             from src.paper_trading import is_paper_mode_enabled, record_paper_entries, update_paper_trades
@@ -213,8 +229,9 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         logger.info("STEP 5: 保有銘柄判定")
         try:
-            from src.moomoo_sync import sync_from_moomoo
+            from src.moomoo_sync import sync_from_moomoo, sync_trade_results
             sync_from_moomoo()
+            sync_trade_results()
         except Exception as e:
             logger.warning(f"moomoo 同期スキップ: {e}")
         sync_holdings_from_csv()

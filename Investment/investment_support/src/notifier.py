@@ -16,7 +16,7 @@ from shared.slack import (
 )
 
 from src.config import CONFIG
-from src.data_store import get_connection, insert_one
+from src.data_store import fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
 _EARNINGS_WARN_DAYS     = int(CONFIG["jquants"].get("earnings_alert_days_warning",  7))
@@ -40,10 +40,14 @@ _MODE_LABEL = {
     "full_caution": "全面警戒モード",
 }
 _HOLDING_EMOJI = {
-    "forced_stop": "🚨",
-    "sl_near":     "⚠️",
-    "sell_watch":  "🟡",
-    "hold":        "🟢",
+    "forced_stop":  "🚨",
+    "sl_near":      "⚠️",
+    "sell_watch":   "🟡",
+    "hold":         "🟢",
+    "tp_t1":        "🎯",
+    "tp_t2":        "🎯",
+    "tp_t3":        "🏆",
+    "tp_trailing":  "📉",
 }
 _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
     "A": {
@@ -63,6 +67,30 @@ _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
         "cond_b_rsi_ok":        "RSI適正範囲",
     },
 }
+
+_BATCH_TYPE_LABEL = {
+    "evening_jp": "夜バッチ(JP)",
+    "morning_all": "朝バッチ(全体)",
+    "monthly": "月次バッチ",
+}
+
+
+def _get_data_freshness() -> str:
+    """batch_run_log から最新バッチの実行時刻を取得し、フッター用文字列を返す。"""
+    try:
+        with get_connection() as conn:
+            row = fetch_one(
+                conn,
+                "SELECT batch_type, end_time FROM batch_run_log "
+                "WHERE status IN ('success', 'partial_failure') "
+                "ORDER BY end_time DESC LIMIT 1",
+            )
+        if row:
+            label = _BATCH_TYPE_LABEL.get(row["batch_type"], row["batch_type"])
+            return f"🕐 データ取得: {label} {row['end_time']}"
+    except Exception:
+        logger.debug("batch_run_log 読み込みスキップ")
+    return ""
 
 
 # ============================================================
@@ -132,6 +160,11 @@ def send_morning_report(
 
     # 買い候補（市場環境にかかわらずスコア付きで表示）
     morning_candidates = candidates[:2]
+    # データ不足情報（候補の有無にかかわらず表示）
+    _data_insuf_note = ""
+    if screening_stats and screening_stats.get("data_insufficient", 0) > 0:
+        _data_insuf_note = f"\n⚠️ データ不足のため一部条件を判定保留: {screening_stats['data_insufficient']}銘柄"
+
     if morning_candidates:
         mode_note = ""
         if mode == "caution":
@@ -139,7 +172,8 @@ def send_morning_report(
         elif mode == "full_caution":
             mode_note = "（🔴 全面警戒 — スコア大幅減点あり）"
         blocks.append(_section(
-            f"📈 *本日の買い候補（{len(morning_candidates)}件）*{mode_note}"
+            f"📈 *本日の検討候補（{len(morning_candidates)}件）*{mode_note}"
+            + _data_insuf_note
         ))
         for es in morning_candidates:
             blocks.append(_entry_set_block(es))
@@ -148,7 +182,7 @@ def send_morning_report(
     elif mode != "normal":
         reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規検討候補は停止しています*\n"
             "保有銘柄の損切り判定は通常通り実施しています。"
             + (f"\n\n{reason}" if reason else "")
         ))
@@ -157,7 +191,7 @@ def send_morning_report(
     else:
         reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
-            "本日はスコア基準を満たす買い候補が検出されませんでした。"
+            "本日はスコア基準を満たす検討候補が検出されませんでした。"
             + (f"\n\n{reason}" if reason else "")
         ))
         blocks.extend(_near_miss_section(near_misses))
@@ -175,8 +209,12 @@ def send_morning_report(
     # LLM アドバイザー意見
     blocks.extend(_llm_feedback_blocks(llm_feedback))
 
-    # フッター：詳細レポートリンク
-    blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
+    # フッター：データ鮮度 + 詳細レポートリンク
+    freshness = _get_data_freshness()
+    footer_text = f"📊 <{_REPORT_URL}|詳細レポートを見る>"
+    if freshness:
+        footer_text += f"\n{freshness}"
+    blocks.append(_section(footer_text))
 
     payload = {"blocks": blocks}
     return _send(payload, target_date, "morning")
@@ -224,13 +262,18 @@ def send_evening_report(
 
     # 買い候補（市場環境にかかわらずスコア付きで表示）
     evening_sets = entry_sets[:3]
+    # データ不足情報（候補の有無にかかわらず表示）
+    _data_insuf_note = ""
+    if screening_stats and screening_stats.get("data_insufficient", 0) > 0:
+        _data_insuf_note = f"\n⚠️ データ不足のため一部条件を判定保留: {screening_stats['data_insufficient']}銘柄"
+
     if evening_sets:
         mode_note = ""
         if mode == "caution":
             mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア減点あり\n" + _mode_detail(market_env)
         elif mode == "full_caution":
             mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア大幅減点あり\n" + _mode_detail(market_env)
-        blocks.append(_section(f"📈 *新規買い候補（{len(evening_sets)}件）*{mode_note}"))
+        blocks.append(_section(f"📈 *新規検討候補（{len(evening_sets)}件）*{mode_note}" + _data_insuf_note))
         for i, es in enumerate(evening_sets, start=1):
             blocks.append(_section(f"━ No.{i} ━━━━━━━━━━━━━━━━━━━━━━━━"))
             blocks.append(_entry_set_block(es, show_conditions=True))
@@ -239,7 +282,7 @@ def send_evening_report(
     elif mode != "normal":
         reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
-            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規買い候補は停止しています*\n"
+            f"{_MODE_EMOJI[mode]} *{_MODE_LABEL[mode]}中のため、新規検討候補は停止しています*\n"
             "保有銘柄の損切り判定は通常通り実施しています。\n"
             + _mode_detail(market_env)
             + (f"\n\n{reason}" if reason else "")
@@ -249,7 +292,7 @@ def send_evening_report(
     else:
         reason = _no_candidates_reason(screening_stats, near_misses, mode)
         blocks.append(_section(
-            "本日はスコア基準を満たす買い候補が検出されませんでした。"
+            "本日はスコア基準を満たす検討候補が検出されませんでした。"
             + (f"\n\n{reason}" if reason else "")
         ))
         blocks.extend(_near_miss_section(near_misses))
@@ -293,8 +336,12 @@ def send_evening_report(
     # LLM アドバイザー意見
     blocks.extend(_llm_feedback_blocks(llm_feedback))
 
-    # フッター：詳細レポートリンク
-    blocks.append(_section(f"📊 <{_REPORT_URL}|詳細レポートを見る>"))
+    # フッター：データ鮮度 + 詳細レポートリンク
+    freshness = _get_data_freshness()
+    footer_text = f"📊 <{_REPORT_URL}|詳細レポートを見る>"
+    if freshness:
+        footer_text += f"\n{freshness}"
+    blocks.append(_section(footer_text))
 
     payload = {"blocks": blocks}
     return _send(payload, target_date, "evening")
@@ -412,6 +459,14 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     amount = es.get("recommended_amount")
     amount_str = f"{amount:,.0f}" if amount else "計算不可"
     currency   = "円" if market == "JP" else "USD"
+    # 株数換算（B-4）
+    qty_str = ""
+    if amount and entry > 0:
+        est_qty = amount / entry
+        if est_qty >= 1:
+            qty_str = f"（約{est_qty:.0f}株）"
+        else:
+            qty_str = f"（約{est_qty:.2f}株）"
 
     # RSI・出来高倍率
     rsi = es.get("_rsi14")
@@ -458,7 +513,7 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
         f"エントリー目安：{entry:,.2f}\n"
         f"損切りライン：{stop:,.2f}（-{sl_pct:.1f}%）→ 利確目安：{target:,.2f}（+{tg_pct:.1f}%）  リスクリワード2:1"
         f"{warn_str}\n"
-        f"推奨投入額：{amount_str} {currency}"
+        f"推奨投入額：{amount_str} {currency}{qty_str}"
         f"{metrics_str}"
         f"{high_52w_str}"
         f"{ma_align_str}"
@@ -489,10 +544,14 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     reasons = h.get("reasons") or []
 
     label_names = {
-        "forced_stop": "強制損切り",
-        "sl_near":     "SL接近",
-        "sell_watch":  "売り検討",
-        "hold":        "継続保有",
+        "forced_stop":  "強制損切り",
+        "sl_near":      "SL接近",
+        "sell_watch":   "売り検討",
+        "hold":         "継続保有",
+        "tp_t1":        "利確検討(T1)",
+        "tp_t2":        "利確検討(T2)",
+        "tp_t3":        "最終利確(T3)",
+        "tp_trailing":  "MA25割れ",
     }
     label_str = label_names.get(label, label)
 
@@ -506,17 +565,45 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
         f"終値: {current:,.2f} ｜ 損益: {pnl_str} ｜ SL: {sl:,.2f}"
     )
 
-    # 保有日数・目標距離
+    # 保有日数・利確ターゲット
     holding_days = h.get("holding_days")
-    target_price = h.get("target_price")
     detail_parts = []
     if holding_days is not None:
         detail_parts.append(f"保有: {holding_days}日目")
-    if target_price and current > 0:
-        target_dist_pct = (target_price - current) / current * 100
-        detail_parts.append(f"目標まで: {target_dist_pct:+.1f}%（利確目安: {target_price:,.2f}）")
+
+    # 分割ターゲット表示（利確タイプI/IIの場合）
+    profit_type = h.get("profit_type")
+    if profit_type in ("I", "II") and current > 0:
+        tp_parts = []
+        for stage, lbl in [("tp_t1", "T1"), ("tp_t2", "T2"), ("tp_t3", "T3")]:
+            price_key = f"{stage.replace('tp_', '')}_price"
+            reached_key = f"{stage.replace('tp_', '')}_reached"
+            price = h.get(price_key)
+            reached = h.get(reached_key)
+            if price is None:
+                if stage == "tp_t3" and profit_type == "II":
+                    tp_parts.append(f"{lbl}: MA25トレーリング")
+                continue
+            if reached:
+                tp_parts.append(f"✓{lbl} {price:,.0f}")
+            else:
+                dist = (price - current) / current * 100
+                tp_parts.append(f"{lbl} {price:,.0f}({dist:+.1f}%)")
+        if tp_parts:
+            detail_parts.append(" / ".join(tp_parts))
+    else:
+        target_price = h.get("target_price")
+        if target_price and current > 0:
+            target_dist_pct = (target_price - current) / current * 100
+            detail_parts.append(f"目標まで: {target_dist_pct:+.1f}%（利確目安: {target_price:,.2f}）")
+
     if detail_parts:
         text += "\n" + " ｜ ".join(detail_parts)
+
+    # SL引き上げ推奨
+    adj_stop = h.get("tp_adjusted_stop")
+    if adj_stop and adj_stop > sl:
+        text += f"\n📋 SL引き上げ推奨: {sl:,.2f} → {adj_stop:,.2f}"
 
     if detail and reasons:
         text += "\n理由: " + " / ".join(reasons)
@@ -698,7 +785,7 @@ def _no_candidates_reason(
     lines: list[str] = []
 
     if mode != "normal":
-        lines.append(f"→ {_MODE_LABEL[mode]}のため新規買い候補を停止中")
+        lines.append(f"→ {_MODE_LABEL[mode]}のため新規検討候補を停止中")
     elif screening_stats:
         screened = screening_stats.get("screened", 0)
         cand = screening_stats.get("candidates", 0)

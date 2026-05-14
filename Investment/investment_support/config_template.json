@@ -16,7 +16,8 @@
     "total_capital_usd": 1500,
     "max_risk_per_trade_pct": 2.0,
     "max_concurrent_holdings": 3,
-    "default_stop_loss_pct": 8.0
+    "default_stop_loss_pct": 8.0,
+    "usdjpy_fallback": 150.0
   },
 
   "signal": {

@@ -126,6 +126,19 @@ with patch("src.config.CONFIG", _CONFIG_MOCK), \
     )
 
 
+class ConfigPatchMixin:
+    """各テストでテスト用 config を使う。"""
+
+    def setUp(self):
+        super().setUp()
+        self._config_patcher = patch("src.config.CONFIG", _CONFIG_MOCK)
+        self._config_patcher.start()
+
+    def tearDown(self):
+        self._config_patcher.stop()
+        super().tearDown()
+
+
 def _make_entry_set(**kwargs):
     """テスト用エントリーセット辞書を生成する。"""
     base = {
@@ -144,15 +157,16 @@ def _make_entry_set(**kwargs):
     return base
 
 
-class IsPaperModeEnabledTests(unittest.TestCase):
+class IsPaperModeEnabledTests(ConfigPatchMixin, unittest.TestCase):
 
     def test_enabled(self):
         self.assertTrue(is_paper_mode_enabled())
 
 
-class RecordPaperEntriesTests(unittest.TestCase):
+class RecordPaperEntriesTests(ConfigPatchMixin, unittest.TestCase):
 
     def setUp(self):
+        super().setUp()
         _setup_test_db()
 
     def test_record_single_entry(self):
@@ -190,9 +204,10 @@ class RecordPaperEntriesTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
 
-class UpdatePaperTradesTests(unittest.TestCase):
+class UpdatePaperTradesTests(ConfigPatchMixin, unittest.TestCase):
 
     def setUp(self):
+        super().setUp()
         _setup_test_db()
 
     def _insert_trade(self, ticker="7203.TSE", entry_price=2500.0,
@@ -225,6 +240,7 @@ class UpdatePaperTradesTests(unittest.TestCase):
         result = update_paper_trades(date(2026, 4, 30))
         self.assertEqual(len(result["closed"]), 1)
         self.assertEqual(result["closed"][0]["exit_reason"], "stop_loss")
+        self.assertEqual(result["closed"][0]["pnl_amount"], -4000.0)
         self.assertEqual(len(result["open"]), 0)
 
     def test_take_profit_triggered(self):
@@ -236,6 +252,7 @@ class UpdatePaperTradesTests(unittest.TestCase):
         result = update_paper_trades(date(2026, 4, 30))
         self.assertEqual(len(result["closed"]), 1)
         self.assertEqual(result["closed"][0]["exit_reason"], "take_profit")
+        self.assertEqual(result["closed"][0]["pnl_amount"], 8000.0)
 
     def test_no_trigger(self):
         """SL/TP に達しなければオープンのまま"""
@@ -255,9 +272,10 @@ class UpdatePaperTradesTests(unittest.TestCase):
         self.assertEqual(len(result["open"]), 0)
 
 
-class GetPaperTradeSummaryTests(unittest.TestCase):
+class GetPaperTradeSummaryTests(ConfigPatchMixin, unittest.TestCase):
 
     def setUp(self):
+        super().setUp()
         _setup_test_db()
 
     def test_empty_summary(self):

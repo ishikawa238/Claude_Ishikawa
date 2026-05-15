@@ -8,15 +8,18 @@ function initStockCharts(ticker) {
       data: {
         labels: data.dates,
         datasets: [
-          { label: '終値', data: data.close, borderColor: '#1976D2', borderWidth: 2, pointRadius: 0, tension: 0.2 },
-          { label: 'MA25', data: data.ma25, borderColor: '#FF9800', borderWidth: 1, borderDash: [4, 4], pointRadius: 0, tension: 0.2 },
-          { label: 'MA75', data: data.ma75, borderColor: '#9E9E9E', borderWidth: 1, borderDash: [2, 2], pointRadius: 0, tension: 0.2 }
+          { label: '終値', data: data.close, borderColor: ChartTheme.primary(), borderWidth: 2, pointRadius: 0, tension: 0.2 },
+          { label: 'MA25', data: data.ma25, borderColor: ChartTheme.maLine(), borderWidth: 1, borderDash: [4, 4], pointRadius: 0, tension: 0.2 },
+          { label: 'MA75', data: data.ma75, borderColor: ChartTheme.maSecondary(), borderWidth: 1, borderDash: [2, 2], pointRadius: 0, tension: 0.2 }
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { font: { size: 10 } } } },
-        scales: { x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } }, y: { ticks: { font: { size: 10 } } } }
+        plugins: { legend: { labels: { font: { size: 10 }, color: ChartTheme.textColor() } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } },
+          y: { ticks: { font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } }
+        }
       }
     });
   });
@@ -29,15 +32,15 @@ function initStockCharts(ticker) {
         labels: [['トレンド'], ['パターンA', '(ブレイクアウト)'], ['パターンB', '(押し目買い)'], ['流動性']],
         datasets: [{
           data: [data.trend, data.pattern_a, data.pattern_b, data.liquidity],
-          backgroundColor: 'rgba(25,118,210,0.2)',
-          borderColor: '#1976D2',
-          pointBackgroundColor: '#1976D2'
+          backgroundColor: ChartTheme.primaryAlpha(0.15),
+          borderColor: ChartTheme.primary(),
+          pointBackgroundColor: ChartTheme.primary()
         }]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { r: { min: 0, max: 100, ticks: { stepSize: 20, font: { size: 9 } }, pointLabels: { font: { size: 9 } } } }
+        scales: { r: { min: 0, max: 100, ticks: { stepSize: 20, font: { size: 9 }, color: ChartTheme.textColor() }, pointLabels: { font: { size: 9 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } } }
       }
     });
   });

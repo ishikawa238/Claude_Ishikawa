@@ -124,6 +124,65 @@ def _fetch_positions(host: str, port: int) -> list[dict]:
     return results
 
 
+def fetch_account_cash() -> dict[str, float]:
+    """
+    moomoo OpenD から口座の現金残高（円）を取得する。
+
+    moomoo証券JP（FUTUJP）は円建て口座のため、JP口座から1回だけ取得する。
+    JP/US市場で同じ現金が通貨違いで返されるため、二重計上を避ける。
+
+    返り値: {"cash_jpy": float, "cash_usd": float}
+    moomoo 未接続時や取得失敗時は各値が 0.0 のまま返す。
+    """
+    result = {"cash_jpy": 0.0, "cash_usd": 0.0}
+
+    cfg = _get_moomoo_cfg()
+    if not cfg:
+        return result
+
+    host = cfg.get("host", "127.0.0.1")
+    port = int(cfg.get("port", 11111))
+
+    sdk_path = str(_MOOMOO_SDK)
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)
+
+    from moomoo import OpenSecTradeContext
+    from moomoo.common.constant import RET_OK, TrdEnv, TrdMarket, SecurityFirm, Currency
+
+    firm_name = cfg.get("security_firm", "FUTUJP")
+    security_firm = getattr(SecurityFirm, firm_name, SecurityFirm.FUTUJP)
+
+    # 円建て口座（FUTUJP）のため JP 口座から円建てで1回だけ取得する
+    try:
+        ctx = OpenSecTradeContext(
+            filter_trdmarket=TrdMarket.JP,
+            host=host, port=port,
+            security_firm=security_firm,
+        )
+    except Exception as e:
+        logger.warning(f"moomoo OpenD 接続失敗: {e}")
+        return result
+
+    try:
+        ret, data = ctx.accinfo_query(trd_env=TrdEnv.REAL, currency=Currency.JPY)
+        if ret != RET_OK:
+            logger.warning(f"moomoo 口座情報取得失敗: {data}")
+            return result
+
+        if data is not None and len(data) > 0:
+            cash_val = data.iloc[0].get("cash", 0)
+            if cash_val and str(cash_val) != "N/A":
+                result["cash_jpy"] = float(cash_val)
+                logger.info(f"moomoo 現金残高: ¥{result['cash_jpy']:,.0f}")
+    except Exception as e:
+        logger.warning(f"moomoo 口座情報処理中エラー: {e}")
+    finally:
+        ctx.close()
+
+    return result
+
+
 def _read_existing_csv() -> dict[str, dict]:
     """既存 holdings.csv を ticker をキーにした辞書で返す。"""
     existing = {}

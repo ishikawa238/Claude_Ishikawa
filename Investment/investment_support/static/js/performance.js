@@ -9,15 +9,18 @@ fetch('/api/perf-cumulative').then(function(r) { return r.json(); }).then(functi
       datasets: [{
         label: '累積損益 (%)',
         data: data.cumulative_pnl,
-        borderColor: '#1976D2',
-        backgroundColor: 'rgba(25,118,210,0.1)',
+        borderColor: ChartTheme.primary(),
+        backgroundColor: ChartTheme.primaryAlpha(0.1),
         fill: true, tension: 0.3, pointRadius: 2
       }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: { x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } }, y: { ticks: { callback: function(v) { return v + '%'; } } } }
+      scales: {
+        x: { ticks: { maxTicksLimit: 8, font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } },
+        y: { ticks: { callback: function(v) { return v + '%'; }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } }
+      }
     }
   });
 });
@@ -31,13 +34,16 @@ fetch('/api/perf-monthly').then(function(r) { return r.json(); }).then(function(
       datasets: [{
         label: '月別損益 (%)',
         data: data.pnl,
-        backgroundColor: data.pnl.map(function(v) { return v >= 0 ? 'rgba(76,175,80,0.7)' : 'rgba(211,47,47,0.7)'; })
+        backgroundColor: data.pnl.map(function(v) { return ChartTheme.pnlColor(v); })
       }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
-      scales: { x: { ticks: { font: { size: 10 } } }, y: { ticks: { callback: function(v) { return v + '%'; } } } }
+      scales: {
+        x: { ticks: { font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } },
+        y: { ticks: { callback: function(v) { return v + '%'; }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } }
+      }
     }
   });
 });

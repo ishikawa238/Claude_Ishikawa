@@ -29,6 +29,7 @@
     "pattern_b_rsi_max": 60,
     "pattern_b_ma25_touch_pct": 0.98,
     "pattern_b_lookback_days": 5,
+    "pattern_b_bounce_confirm_days": 1,
     "atr_stop_multiplier": 2.0,
     "risk_reward_ratio": 2.0,
     "max_candidates_per_pattern": 3,

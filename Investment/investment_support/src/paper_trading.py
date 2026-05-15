@@ -12,18 +12,16 @@
 
 from datetime import date
 
-from src.config import CONFIG
+from src import config as config_module
 from src.data_store import fetch_all, fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MAX_HOLDINGS = int(CONFIG.get("capital", {}).get("max_concurrent_holdings", 3))
-
 
 def is_paper_mode_enabled() -> bool:
     """config.json の paper_mode.enabled を確認する。"""
-    return bool(CONFIG.get("paper_mode", {}).get("enabled", False))
+    return _as_bool(config_module.CONFIG.get("paper_mode", {}).get("enabled", False))
 
 
 # ============================================================
@@ -37,12 +35,13 @@ def record_paper_entries(entry_sets: list[dict]) -> list[dict]:
     引数: save_entry_sets() の返り値（エントリーセットのリスト）
     返り値: 記録したペーパートレードのリスト
     """
+    max_holdings = _max_holdings()
     open_count = _count_open_trades()
     recorded = []
 
     for es in entry_sets:
-        if open_count >= _MAX_HOLDINGS:
-            logger.info(f"ペーパートレード保有上限 ({_MAX_HOLDINGS}) に到達。残りをスキップ。")
+        if open_count >= max_holdings:
+            logger.info(f"ペーパートレード保有上限 ({max_holdings}) に到達。残りをスキップ。")
             break
 
         # skip 理由がある場合はスキップ
@@ -121,16 +120,20 @@ def update_paper_trades(target_date: date) -> dict:
 
         # 損切り判定
         if low <= stop_loss:
-            _close_trade(trade["id"], stop_loss, target_str, "stop_loss", entry_price)
-            trade["exit_reason"] = "stop_loss"
-            closed.append(trade)
+            closed_info = _close_trade(
+                trade["id"], stop_loss, target_str, "stop_loss",
+                entry_price, float(trade.get("position_size") or 0),
+            )
+            closed.append({**dict(trade), **closed_info})
             continue
 
         # 利確判定
         if high >= target:
-            _close_trade(trade["id"], target, target_str, "take_profit", entry_price)
-            trade["exit_reason"] = "take_profit"
-            closed.append(trade)
+            closed_info = _close_trade(
+                trade["id"], target, target_str, "take_profit",
+                entry_price, float(trade.get("position_size") or 0),
+            )
+            closed.append({**dict(trade), **closed_info})
             continue
 
         still_open.append(trade)
@@ -270,9 +273,11 @@ def _close_trade(
     exit_date: str,
     reason: str,
     entry_price: float,
-) -> None:
+    position_size: float,
+) -> dict:
     """ペーパートレードをクローズする。"""
     pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price > 0 else 0
+    pnl_amount = position_size * pnl_pct / 100 if position_size > 0 else 0
 
     with get_connection() as conn:
         conn.execute(
@@ -286,8 +291,28 @@ def _close_trade(
                 exit_date,
                 reason,
                 round(pnl_pct, 2),
-                0,  # pnl_amount は position_size が不正確な場合があるため 0
+                round(pnl_amount, 2),
                 trade_id,
             ),
         )
         conn.commit()
+
+    return {
+        "exit_price": round(exit_price, 4),
+        "exit_date": exit_date,
+        "exit_reason": reason,
+        "pnl_pct": round(pnl_pct, 2),
+        "pnl_amount": round(pnl_amount, 2),
+    }
+
+
+def _max_holdings() -> int:
+    return max(int(config_module.CONFIG.get("capital", {}).get("max_concurrent_holdings", 3)), 1)
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)

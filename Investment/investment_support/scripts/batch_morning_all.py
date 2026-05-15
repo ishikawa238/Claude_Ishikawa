@@ -16,10 +16,12 @@
 7. バッチ実行ログ更新
 """
 
+import atexit
 import sys
 import os
 import signal
 import threading
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -30,7 +32,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared.batch import start_batch_log, finish_batch_log
 from src.config import CONFIG
-from src.data_fetcher import fetch_index_history
+from src.data_fetcher import fetch_bulk_eod, fetch_index_history
 from src.yfinance_fetcher import fetch_daily_yf
 from src.data_store import (
     fetch_all, fetch_one, get_connection,
@@ -100,13 +102,17 @@ def main() -> int:
         logger.warning("[朝バッチ] 既に別プロセスが実行中のためスキップします")
         return 3
 
+    # atexit でロック解放を保証（タイムアウト時の sys.exit でも実行される）
+    atexit.register(_release_lock, lock_fp)
+
     # バッチ全体タイムアウト
     timeout_event = threading.Event()
 
     def _on_timeout():
         timeout_event.set()
         logger.error(f"[朝バッチ] タイムアウト（{_BATCH_TIMEOUT_SEC}秒）に到達しました")
-        os._exit(4)
+        # os._exit ではなく sys.exit を使い、atexit ハンドラでロックを解放する
+        sys.exit(4)
 
     timer = threading.Timer(_BATCH_TIMEOUT_SEC, _on_timeout)
     timer.daemon = True
@@ -119,8 +125,40 @@ def main() -> int:
         _release_lock(lock_fp)
 
 
-def _run_batch() -> int:
+def run_manual(
+    skip_llm: bool = True,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> int:
+    """
+    手動実行用エントリーポイント。ロック取得・タイムアウト管理を含む。
+    order_server から別スレッドで呼び出される。
+    """
+    lock_fp = _acquire_lock()
+    if lock_fp is None:
+        logger.warning("[朝バッチ] 既に別プロセスが実行中のためスキップします")
+        return 3
+
+    timer = threading.Timer(_BATCH_TIMEOUT_SEC, lambda: None)
+    timer.daemon = True
+    timer.start()
+    try:
+        return _run_batch(skip_llm=skip_llm, on_progress=on_progress)
+    finally:
+        timer.cancel()
+        _release_lock(lock_fp)
+
+
+def _run_batch(
+    skip_llm: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> int:
     """朝バッチの本体処理。"""
+    _TOTAL = 7 if skip_llm else 8
+
+    def _progress(step: int, label: str) -> None:
+        if on_progress:
+            on_progress(step, _TOTAL, label)
+
     with get_connection() as conn:
         batch_id = start_batch_log(conn, _BATCH_TYPE, _TODAY.strftime("%Y-%m-%d"),
                                    {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
@@ -128,6 +166,7 @@ def _run_batch() -> int:
     signals_count = 0
 
     try:
+        _progress(1, "US価格データ取得")
         logger.info("=" * 60)
         logger.info(f"[朝バッチ] 開始: {_TODAY}")
         logger.info("=" * 60)
@@ -150,8 +189,16 @@ def _run_batch() -> int:
         tickers_with_market = [(r["ticker"], "US") for r in us_tickers]
         logger.info(f"対象銘柄: US {len(tickers_with_market)} 件")
 
-        # 価格データ取得（yfinance: EODHD US Bulk が利用不可のため代替）
-        all_rows = fetch_daily_yf(tickers_with_market, _TODAY)
+        # 価格データ取得（EODHD Bulk: 1リクエストで US 全銘柄の最新取引日データを取得）
+        # date を指定しない → EODHD が最新の取引日を自動選択する
+        valid_tickers = {t for t, _ in tickers_with_market}
+        all_rows = fetch_bulk_eod("US")
+        if all_rows:
+            all_rows = [r for r in all_rows if r["ticker"] in valid_tickers]
+            logger.info(f"universe_master 照合後: {len(all_rows)} 件")
+        if not all_rows:
+            logger.warning("EODHD Bulk 取得失敗。yfinance にフォールバックします。")
+            all_rows = fetch_daily_yf(tickers_with_market, _TODAY)
         failed_count = 0
         if not all_rows:
             logger.warning("US 価格取得失敗。price_history の更新をスキップします。")
@@ -175,6 +222,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 2: テクニカル指標計算（インデックスMA）
         # ────────────────────────────────────────
+        _progress(2, "テクニカル指標計算")
         logger.info("STEP 2: テクニカル指標計算（US）")
         calculate_and_save_index_mas("SP500",  _TODAY)
         calculate_and_save_index_mas("NASDAQ", _TODAY)
@@ -182,6 +230,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 3: 市場環境モード確定
         # ────────────────────────────────────────
+        _progress(3, "市場環境モード確定")
         logger.info("STEP 3: 市場環境モード確定（US 確定 → 統合）")
         market_env = judge_market_environment(_TODAY, market="ALL")
         mode = market_env["mode"]
@@ -189,6 +238,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 4: 米国株シグナル検出
         # ────────────────────────────────────────
+        _progress(4, "USシグナル検出・エントリーセット計算")
         if failed_count == len(tickers_with_market):
             # 全銘柄の価格取得に失敗 → 古いデータでの誤シグナルを防ぐ
             logger.warning(
@@ -227,6 +277,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 5: 保有銘柄判定（JP+US 全体）
         # ────────────────────────────────────────
+        _progress(5, "保有銘柄判定")
         logger.info("STEP 5: 保有銘柄判定")
         try:
             from src.moomoo_sync import sync_from_moomoo, sync_trade_results
@@ -238,9 +289,18 @@ def _run_batch() -> int:
         ensure_holding_prices(_TODAY)  # ETF等 universe_master 未登録銘柄の価格を補完
         holdings = evaluate_holdings(_TODAY)
 
+        # STEP 5.1: ポートフォリオスナップショット保存
+        try:
+            from src.portfolio_snapshot import compute_and_save_snapshot
+            snapshot = compute_and_save_snapshot("morning_all", _TODAY)
+            logger.info(f"ポートフォリオスナップショット保存完了: 総資産 ¥{snapshot['total_assets_combined_jpy']:,.0f}")
+        except Exception as e:
+            logger.warning(f"ポートフォリオスナップショット保存スキップ: {e}")
+
         # ────────────────────────────────────────
         # STEP 5.5: ニュース取得 + LLM アドバイザー（有効時のみ）
         # ────────────────────────────────────────
+        _progress(6, "ニュース取得")
         news = []
         try:
             from src.news_fetcher import fetch_market_news, fetch_ticker_news
@@ -253,15 +313,19 @@ def _run_batch() -> int:
             logger.warning(f"ニュース取得をスキップ: {e}")
 
         llm_feedback = []
-        try:
-            from src.llm_advisor import get_llm_feedback
-            llm_feedback = get_llm_feedback(all_entry_sets, holdings, market_env, "morning", news=news)
-        except Exception as e:
-            logger.warning(f"LLMアドバイザーをスキップ: {e}")
+        if not skip_llm:
+            try:
+                from src.llm_advisor import get_llm_feedback
+                llm_feedback = get_llm_feedback(all_entry_sets, holdings, market_env, "morning", news=news)
+            except Exception as e:
+                logger.warning(f"LLMアドバイザーをスキップ: {e}")
+        else:
+            logger.info("STEP 5.5: LLMアドバイザーをスキップ（手動実行モード）")
 
         # ────────────────────────────────────────
         # STEP 6: 朝通知送信
         # ────────────────────────────────────────
+        _progress(_TOTAL, "Slack通知送信")
         logger.info("STEP 6: 朝通知送信")
         data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ma200", "ma25", "rsi14")))
         screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(us_entry_sets), "data_insufficient": data_insufficient}

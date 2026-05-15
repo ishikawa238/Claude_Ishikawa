@@ -14,24 +14,11 @@
 import json
 from datetime import date, datetime
 
-from src.config import CONFIG
+from src import config as config_module
 from src.data_store import fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
 logger = get_logger(__name__)
-
-_SIG = CONFIG["signal"]
-_CAP = CONFIG["capital"]
-
-_ATR_MULT       = float(_SIG["atr_stop_multiplier"])
-_RR_RATIO       = float(_SIG["risk_reward_ratio"])
-_WARN_MIN_PCT   = float(_SIG["stop_loss_warning_min_pct"])
-_WARN_MAX_PCT   = float(_SIG["stop_loss_warning_max_pct"])
-_RISK_PCT       = float(_CAP["max_risk_per_trade_pct"]) / 100  # 0.02
-_CAPITAL_JPY    = float(_CAP["total_capital_jpy"])
-_CAPITAL_USD    = float(_CAP["total_capital_usd"])
-_MAX_HOLDINGS   = int(_CAP.get("max_concurrent_holdings", 3))
-_EARNINGS_WARN  = int(CONFIG.get("jquants", {}).get("earnings_alert_days_warning", 7))
 
 
 # ============================================================
@@ -50,6 +37,7 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     market  = signal["market"]
     ticker  = signal["ticker"]
     pattern = signal.get("pattern") or "A"
+    settings = _settings()
 
     if close <= 0:
         logger.warning(f"終値が0のためエントリーセット計算スキップ: {ticker}")
@@ -58,21 +46,25 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     entry_price = close  # 翌日寄付目安
 
     # 損切りライン: ATR × 2 を下回った水準
-    stop_loss_price = entry_price - atr14 * _ATR_MULT if atr14 > 0 else entry_price * (1 - 0.08)
+    stop_loss_price = (
+        entry_price - atr14 * settings["atr_mult"]
+        if atr14 > 0
+        else entry_price * (1 - settings["default_stop_loss_pct"] / 100)
+    )
     stop_loss_pct   = (entry_price - stop_loss_price) / entry_price * 100
 
     # 損切り幅が1%未満 → エントリー候補から除外
-    if stop_loss_pct < _WARN_MIN_PCT:
+    if stop_loss_pct < settings["warn_min_pct"]:
         logger.info(f"損切り幅が狭すぎるため除外: {ticker}（{stop_loss_pct:.2f}%）")
         return {}
 
     # 利確目安: リスクリワード 2:1
-    target_price = entry_price * (1 + stop_loss_pct / 100 * _RR_RATIO)
+    target_price = entry_price * (1 + stop_loss_pct / 100 * settings["rr_ratio"])
 
     # 推奨投入額
-    capital = _CAPITAL_JPY if market == "JP" else _CAPITAL_USD
+    capital = settings["capital_jpy"] if market == "JP" else settings["capital_usd"]
     if stop_loss_pct > 0:
-        recommended_amount = capital * _RISK_PCT / (stop_loss_pct / 100)
+        recommended_amount = capital * settings["risk_pct"] / (stop_loss_pct / 100)
     else:
         recommended_amount = None
 
@@ -80,9 +72,8 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     if recommended_amount is not None:
         # (1) 総資金を超えない
         recommended_amount = min(recommended_amount, capital)
-        # (2) 既存保有数を考慮した1ポジションあたりの上限
-        effective_slots = max(_MAX_HOLDINGS, open_holdings_count + 1)
-        max_per_position = capital / effective_slots
+        # (2) max_holdings に基づく1ポジションあたりの上限
+        max_per_position = capital / settings["max_holdings"]
         recommended_amount = min(recommended_amount, max_per_position)
 
     # --- 決算近接チェック ---
@@ -106,10 +97,13 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         "conditions_met":     json.dumps(conditions_met, ensure_ascii=False),
         # 警告フラグ（通知側で使用・DB保存対象外）
         "_warn_narrow":  False,  # 1%未満は上流で除外済み
-        "_warn_wide":    stop_loss_pct > _WARN_MAX_PCT,
+        "_warn_wide":    stop_loss_pct > settings["warn_max_pct"],
         "_warn_earnings": warn_earnings,
-        "_warn_at_capacity": open_holdings_count >= _MAX_HOLDINGS,
-        "_remaining_slots": max(_MAX_HOLDINGS - open_holdings_count, 0),
+        "_warn_at_capacity": open_holdings_count >= settings["max_holdings"],
+        "_remaining_slots": max(settings["max_holdings"] - open_holdings_count, 0),
+        "_candidate_source": signal.get("_candidate_source"),
+        "_conditions_met_count": signal.get("_conditions_met_count"),
+        "_conditions_total": signal.get("_conditions_total"),
         # 通知の根拠数値（DB保存対象外・notifier で使用）
         "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
         "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
@@ -144,7 +138,7 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
     saved = []
     for sig in candidates:
         sig["market_mode"] = market_mode
-        entry_set = calc_entry_set(sig, open_holdings_count=open_count)
+        entry_set = calc_entry_set(sig, open_holdings_count=open_count + len(saved))
         if not entry_set:
             continue
 
@@ -173,6 +167,7 @@ def _count_open_holdings() -> int:
 
 def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
     """充足した条件の説明文リストを返す（Slack通知の理由欄に使用）。"""
+    sig_cfg = _signal_config()
     labels = {
         "A": {
             "cond_a_ma200_rising":  "MA200上昇中",
@@ -185,7 +180,7 @@ def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
         "B": {
             "cond_b_ma200_rising":     "MA200上昇中",
             "cond_b_ma_aligned":       "中期〜長期MA整列",
-            "cond_b_pullback_touched": f"MA25へのタッチ確認（直近{_SIG['pattern_b_lookback_days']}日）",
+            "cond_b_pullback_touched": f"MA25へのタッチ確認（直近{sig_cfg['pattern_b_lookback_days']}日）",
             "cond_b_bounced":          "MA25からの反発確認",
             "cond_b_ma25_rising":      "MA25上昇中",
             "cond_b_rsi_ok":           f"RSI適正（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI適正",
@@ -202,6 +197,7 @@ def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
 
 def _check_earnings_near(ticker: str, date_str: str) -> str | None:
     """決算発表が _EARNINGS_WARN 日以内に迫っている場合、警告文を返す。"""
+    earnings_warn = int(config_module.CONFIG.get("jquants", {}).get("earnings_alert_days_warning", 7))
     try:
         with get_connection() as conn:
             row = fetch_one(
@@ -216,11 +212,32 @@ def _check_earnings_near(ticker: str, date_str: str) -> str | None:
         target_dt = datetime.strptime(date_str, "%Y-%m-%d").date()
         ann_dt = datetime.strptime(row["announcement_date"], "%Y-%m-%d").date()
         days = (ann_dt - target_dt).days
-        if days <= _EARNINGS_WARN:
+        if days <= earnings_warn:
             return f"決算発表まで{days}日（{row['announcement_date']}）"
     except Exception:
         pass
     return None
+
+
+def _signal_config() -> dict:
+    return config_module.CONFIG["signal"]
+
+
+def _settings() -> dict:
+    """実行時点の config から計算パラメータを取得する。"""
+    sig_cfg = config_module.CONFIG["signal"]
+    cap_cfg = config_module.CONFIG["capital"]
+    return {
+        "atr_mult": float(sig_cfg["atr_stop_multiplier"]),
+        "rr_ratio": float(sig_cfg["risk_reward_ratio"]),
+        "warn_min_pct": float(sig_cfg["stop_loss_warning_min_pct"]),
+        "warn_max_pct": float(sig_cfg["stop_loss_warning_max_pct"]),
+        "risk_pct": float(cap_cfg["max_risk_per_trade_pct"]) / 100,
+        "capital_jpy": float(cap_cfg["total_capital_jpy"]),
+        "capital_usd": float(cap_cfg["total_capital_usd"]),
+        "max_holdings": max(int(cap_cfg.get("max_concurrent_holdings", 3)), 1),
+        "default_stop_loss_pct": float(cap_cfg.get("default_stop_loss_pct", 8)),
+    }
 
 
 def _log_entry_set(es: dict) -> None:

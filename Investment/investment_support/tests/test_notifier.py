@@ -128,9 +128,9 @@ class EntrySetBlockTests(unittest.TestCase):
 
     def test_stop_and_target_on_one_line(self):
         text = self._get_text(_make_entry_set())
-        self.assertIn("損切りライン", text)
-        self.assertIn("→ 利確目安", text)
-        self.assertIn("リスクリワード2:1", text)
+        self.assertIn("損切:", text)
+        self.assertIn("→ 利確:", text)
+        self.assertIn("RR2:1", text)
 
     def test_stop_pct_has_minus_sign(self):
         text = self._get_text(_make_entry_set(stop_loss_pct=8.0))
@@ -138,11 +138,11 @@ class EntrySetBlockTests(unittest.TestCase):
 
     def test_warn_narrow_shown(self):
         text = self._get_text(_make_entry_set(_warn_narrow=True, _warn_wide=False))
-        self.assertIn("損切り幅が狭すぎます", text)
+        self.assertIn("損切り幅が狭い", text)
 
     def test_warn_wide_shown(self):
         text = self._get_text(_make_entry_set(_warn_narrow=False, _warn_wide=True))
-        self.assertIn("損切り幅が広めです", text)
+        self.assertIn("損切り幅が広め", text)
 
     def test_metrics_absent_when_none(self):
         text = self._get_text(_make_entry_set(_rsi14=None, _vol_ratio=None))
@@ -172,7 +172,7 @@ class EntrySetBlockTests(unittest.TestCase):
     # --- 52週高値テスト ---
     def test_52w_high_distance_shown(self):
         text = self._get_text(_make_entry_set(_close=150.0, _high_52w=155.0))
-        self.assertIn("52w高値まで:", text)
+        self.assertIn("52w高値:", text)
         self.assertIn("3.3%", text)
 
     def test_52w_high_at_new_high(self):
@@ -214,7 +214,7 @@ class HoldingBlockTests(unittest.TestCase):
 
     def test_holding_days_shown(self):
         text = self._get_text(_make_holding(holding_days=15))
-        self.assertIn("保有: 15日目", text)
+        self.assertIn("保有: 15日", text)
 
     def test_holding_days_absent_when_none(self):
         text = self._get_text(_make_holding(holding_days=None))
@@ -239,33 +239,30 @@ class HoldingBlockTests(unittest.TestCase):
         self.assertNotIn("理由:", text)
 
     # --- テクニカルスナップショットテスト ---
-    def test_tech_ma25_shown_in_detail(self):
+    def test_tech_rsi_and_trend_shown_in_detail(self):
         text = self._get_text(_make_holding(
-            tech_ma25=180.0, tech_rsi14=55.0, current_price=185.0,
+            tech_ma5=183.0, tech_ma25=180.0, tech_rsi14=55.0, current_price=185.0,
         ), detail=True)
-        self.assertIn("MA25: 180.00", text)
-        self.assertIn("上方", text)
-        self.assertIn("RSI: 55", text)
+        self.assertIn("MA5↑MA25", text)
+        self.assertIn("RSI:55", text)
 
     def test_tech_trend_up_shown_in_detail(self):
         text = self._get_text(_make_holding(
             tech_ma5=183.0, tech_ma25=180.0,
         ), detail=True)
         self.assertIn("MA5↑MA25", text)
-        self.assertIn("上昇中", text)
 
     def test_tech_trend_down_shown_in_detail(self):
         text = self._get_text(_make_holding(
             tech_ma5=178.0, tech_ma25=180.0,
         ), detail=True)
         self.assertIn("MA5↓MA25", text)
-        self.assertIn("下降中", text)
 
     def test_tech_hidden_without_detail(self):
         text = self._get_text(_make_holding(
-            tech_ma25=180.0, tech_rsi14=55.0,
+            tech_ma5=183.0, tech_ma25=180.0, tech_rsi14=55.0,
         ), detail=False)
-        self.assertNotIn("MA25:", text)
+        self.assertNotIn("MA5", text)
         self.assertNotIn("RSI:", text)
 
     def test_tech_absent_when_none(self):
@@ -400,8 +397,8 @@ class NearMissSectionTests(unittest.TestCase):
             cond_a_ma200_rising=1, cond_a_52w_high_near=0,
         )])
         combined = "\n".join(texts)
-        self.assertIn("✅ MA200上昇中", combined)
-        self.assertIn("❌ 52週高値更新圏 ← 未達", combined)
+        self.assertIn("✅MA200↑", combined)
+        self.assertIn("❌52w高値", combined)
 
     def test_pattern_b_conditions_shown(self):
         nm = _make_near_miss(
@@ -415,8 +412,8 @@ class NearMissSectionTests(unittest.TestCase):
         )
         texts = self._get_texts([nm])
         combined = "\n".join(texts)
-        self.assertIn("✅ MA200上昇中", combined)
-        self.assertIn("❌ MA25へのタッチ ← 未達", combined)
+        self.assertIn("✅MA200↑", combined)
+        self.assertIn("❌MA25タッチ", combined)
 
     def test_reason_shown(self):
         texts = self._get_texts([_make_near_miss(recommend_reason="トレンドは良好")])
@@ -493,7 +490,7 @@ class CapacityWarningTests(unittest.TestCase):
     def test_at_capacity_shows_warning(self):
         """保有枠満杯で警告が表示される"""
         text = self._get_text(_make_entry_set(_warn_at_capacity=True, _remaining_slots=0))
-        self.assertIn("保有枠が満杯", text)
+        self.assertIn("保有枠満杯", text)
 
     def test_remaining_slots_shown(self):
         """保有枠に残りがある場合は残り枠数が表示される"""

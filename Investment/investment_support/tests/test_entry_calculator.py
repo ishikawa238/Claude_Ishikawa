@@ -32,6 +32,19 @@ with patch("src.config.CONFIG", _CONFIG_MOCK):
     from src.entry_calculator import calc_entry_set
 
 
+class ConfigPatchMixin:
+    """他テストの import 順に左右されず、各ケースでテスト用 config を使う。"""
+
+    def setUp(self):
+        super().setUp()
+        self._config_patcher = patch("src.config.CONFIG", _CONFIG_MOCK)
+        self._config_patcher.start()
+
+    def tearDown(self):
+        self._config_patcher.stop()
+        super().tearDown()
+
+
 def _make_signal(**kwargs):
     """テスト用シグナル辞書を生成する。"""
     base = {
@@ -64,7 +77,7 @@ def _make_signal(**kwargs):
     return base
 
 
-class CalcEntrySetCapTests(unittest.TestCase):
+class CalcEntrySetCapTests(ConfigPatchMixin, unittest.TestCase):
     """推奨投入額の上限制御テスト"""
 
     def test_recommended_amount_does_not_exceed_capital(self):
@@ -84,7 +97,7 @@ class CalcEntrySetCapTests(unittest.TestCase):
         self.assertLessEqual(result["recommended_amount"], 200000 / 3 + 1)
 
 
-class CalcEntrySetNoShareUnitSkipTests(unittest.TestCase):
+class CalcEntrySetNoShareUnitSkipTests(ConfigPatchMixin, unittest.TestCase):
     """端株対応: 株数チェックによる見送りが発生しないことを確認"""
 
     def test_jp_expensive_stock_not_skipped(self):
@@ -103,7 +116,7 @@ class CalcEntrySetNoShareUnitSkipTests(unittest.TestCase):
         self.assertIsNotNone(result.get("recommended_amount"))
 
 
-class CalcEntrySetStopLossFilterTests(unittest.TestCase):
+class CalcEntrySetStopLossFilterTests(ConfigPatchMixin, unittest.TestCase):
     """損切り幅フィルタテスト"""
 
     def test_narrow_stop_loss_excluded(self):
@@ -129,7 +142,7 @@ class CalcEntrySetStopLossFilterTests(unittest.TestCase):
         self.assertFalse(result.get("_warn_wide"))
 
 
-class CalcEntrySetHoldingsCapacityTests(unittest.TestCase):
+class CalcEntrySetHoldingsCapacityTests(ConfigPatchMixin, unittest.TestCase):
     """既存保有数を考慮した投入額・警告テスト"""
 
     def test_no_holdings_uses_default_cap(self):
@@ -147,15 +160,14 @@ class CalcEntrySetHoldingsCapacityTests(unittest.TestCase):
         self.assertTrue(result["_warn_at_capacity"])
         self.assertEqual(result["_remaining_slots"], 0)
 
-    def test_over_capacity_reduces_amount(self):
-        """保有数が max_holdings を超えると1ポジションあたりの上限が下がる"""
+    def test_over_capacity_same_amount(self):
+        """保有数が max_holdings を超えても推奨額は capital / max_holdings で固定"""
         sig = _make_signal(close=2500.0, atr14=50.0)  # SL幅 = 4%
         result_0 = calc_entry_set(sig, open_holdings_count=0)
         result_4 = calc_entry_set(sig, open_holdings_count=4)
-        # open=4 → effective_slots = max(3, 5) = 5 → cap = 200000/5 = 40000
-        # open=0 → effective_slots = max(3, 1) = 3 → cap = 200000/3 ≈ 66667
-        self.assertLess(result_4["recommended_amount"], result_0["recommended_amount"])
-        self.assertLessEqual(result_4["recommended_amount"], 200000 / 5 + 1)
+        # max_holdings=3 で固定 → 200000/3 ≈ 66667 が上限
+        self.assertEqual(result_4["recommended_amount"], result_0["recommended_amount"])
+        self.assertLessEqual(result_4["recommended_amount"], 200000 / 3 + 1)
 
     def test_within_capacity_no_warning(self):
         """保有数が max_holdings 未満なら警告なし"""

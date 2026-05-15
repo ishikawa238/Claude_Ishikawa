@@ -469,7 +469,7 @@ def fetch_bulk_eod(market: str, target_date: Optional[date] = None) -> list[dict
         logger.error(f"未定義の市場コード: {market}")
         return []
 
-    url = f"{_BASE_URL}/eod/bulk_last_day/{exchange}"
+    url = f"{_BASE_URL}/eod-bulk-last-day/{exchange}"
     params: dict = {}
     if target_date:
         params["date"] = target_date.strftime("%Y-%m-%d")

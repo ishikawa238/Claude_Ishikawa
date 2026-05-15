@@ -441,6 +441,29 @@ DDL_STATEMENTS = [
     )
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_tp_targets_active ON take_profit_targets(ticker, is_active) WHERE is_active = 1",
+    # ポートフォリオスナップショット（バッチ実行時の総資産記録）
+    """
+    CREATE TABLE IF NOT EXISTS portfolio_snapshot (
+        id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+        snapshot_date             DATE    NOT NULL,
+        batch_type                TEXT    NOT NULL,
+        capital_jpy               REAL    NOT NULL,
+        capital_usd               REAL    NOT NULL,
+        holdings_value_jpy        REAL    NOT NULL DEFAULT 0,
+        holdings_value_usd        REAL    NOT NULL DEFAULT 0,
+        unrealized_pnl_jpy        REAL    NOT NULL DEFAULT 0,
+        unrealized_pnl_usd        REAL    NOT NULL DEFAULT 0,
+        total_assets_jpy          REAL    NOT NULL DEFAULT 0,
+        total_assets_usd          REAL    NOT NULL DEFAULT 0,
+        total_assets_combined_jpy REAL    NOT NULL DEFAULT 0,
+        cash_jpy                  REAL    NOT NULL DEFAULT 0,
+        cash_usd                  REAL    NOT NULL DEFAULT 0,
+        usdjpy_rate               REAL    NOT NULL,
+        holdings_count            INTEGER NOT NULL DEFAULT 0,
+        created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ps_date_batch ON portfolio_snapshot(snapshot_date, batch_type)",
 ]
 
 # 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）
@@ -462,6 +485,9 @@ MIGRATION_STATEMENTS = [
     # Phase 3: セクター・業種カラム追加
     "ALTER TABLE universe_master ADD COLUMN sector   TEXT",
     "ALTER TABLE universe_master ADD COLUMN industry TEXT",
+    # portfolio_snapshot: 口座現金残高カラム追加
+    "ALTER TABLE portfolio_snapshot ADD COLUMN cash_jpy REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE portfolio_snapshot ADD COLUMN cash_usd REAL NOT NULL DEFAULT 0",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）

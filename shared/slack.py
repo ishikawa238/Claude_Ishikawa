@@ -8,8 +8,12 @@ Block Kit の基本ブロック生成関数を提供する。
 import io
 import json
 import sys
+import time
 
 import requests
+
+_MAX_RETRIES = 3
+_RETRY_BASE_SEC = 2  # 指数バックオフの基底（2, 4, 8秒）
 
 
 def send_webhook(
@@ -21,6 +25,7 @@ def send_webhook(
 ) -> bool:
     """
     Slack Incoming Webhook に payload を POST する。
+    一時的な障害時は最大 _MAX_RETRIES 回リトライする（指数バックオフ）。
     返り値: 成功なら True
 
     webhook_url が空文字列または "XXXXX" を含む場合はスキップし、
@@ -32,25 +37,48 @@ def send_webhook(
         print_blocks(payload)
         return True
 
-    try:
-        resp = requests.post(
-            webhook_url,
-            data=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
-            timeout=timeout,
-        )
-        if resp.status_code == 200:
-            if logger:
-                logger.info("Slack 送信成功")
-            return True
-        else:
+    last_error = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            resp = requests.post(
+                webhook_url,
+                data=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                if logger:
+                    logger.info("Slack 送信成功")
+                return True
+            # 5xx はリトライ対象
+            if resp.status_code >= 500 and attempt < _MAX_RETRIES:
+                wait = _RETRY_BASE_SEC ** attempt
+                if logger:
+                    logger.warning(
+                        f"Slack 送信失敗 (HTTP {resp.status_code})、"
+                        f"{wait}秒後にリトライします（{attempt}/{_MAX_RETRIES}）"
+                    )
+                time.sleep(wait)
+                continue
+            # 4xx やリトライ回数超過
             if logger:
                 logger.error(f"Slack 送信失敗: HTTP {resp.status_code} / {resp.text}")
             return False
-    except Exception as e:
-        if logger:
-            logger.error(f"Slack 送信エラー: {e}")
-        return False
+        except Exception as e:
+            last_error = e
+            if attempt < _MAX_RETRIES:
+                wait = _RETRY_BASE_SEC ** attempt
+                if logger:
+                    logger.warning(
+                        f"Slack 送信エラー ({e})、"
+                        f"{wait}秒後にリトライします（{attempt}/{_MAX_RETRIES}）"
+                    )
+                time.sleep(wait)
+            else:
+                if logger:
+                    logger.error(f"Slack 送信エラー（リトライ上限到達）: {last_error}")
+                return False
+    return False
 
 
 def section(text: str) -> dict:

@@ -9,6 +9,7 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
   /screening           - スクリーニング銘柄一覧
   /stock/<ticker>      - 個別銘柄詳細ページ
   /performance         - トレード成績分析ページ
+  /settings            - 設定ページ（config.json の編集）
   /api/portfolio-pnl   - ポートフォリオ損益推移 JSON
   /api/score-radar     - スコアレーダー JSON
   /api/price-history   - 価格推移 JSON
@@ -19,6 +20,9 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
   /api/screening-funnel - スクリーニングファネル統計 JSON
   /api/recent-signals  - 指定ティッカーの直近シグナル JSON（GET）
   /api/trade-result    - トレード結果記録（POST）
+  /api/settings        - 設定値取得（GET）/ 更新（POST）
+  /api/batch/trigger   - バッチ手動実行（POST）
+  /api/batch/status    - バッチ実行状態（GET）
 
 実行方法（investment_support/ から）:
     python -m scripts.order_server
@@ -27,7 +31,9 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
 import json
 import math
 import sys
+import threading
 import time as _time
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -94,38 +100,82 @@ app = Flask(
 # ============================================================
 
 _MODE_LABEL = {"normal": "通常モード", "caution": "警戒モード", "full_caution": "全面警戒モード"}
-_MODE_COLOR = {"normal": "#4CAF50", "caution": "#FF9800", "full_caution": "#D32F2F"}
+_MODE_CSS = {"normal": "mode-normal", "caution": "mode-caution", "full_caution": "mode-full_caution"}
 _PATTERN_NAME = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
-_RANK_COLOR = {"S": "#D32F2F", "A": "#FF5722", "B": "#FF9800", "C": "#2196F3", "Watch": "#9E9E9E"}
-_LABEL_COLOR = {"candidate": "#4CAF50", "watch": "#FF9800", "skip": "#9E9E9E"}
+_RANK_CSS = {"S": "rank-s", "A": "rank-a", "B": "rank-b", "C": "rank-c", "Watch": "rank-watch"}
+_LABEL_CSS = {"candidate": "label-candidate", "watch": "label-watch", "skip": "label-skip"}
 _LABEL_DISPLAY = {"candidate": "候補", "watch": "監視", "skip": "スキップ"}
 _PROFIT_TYPE_LABEL = {"I": "ブレイクアウト", "II": "トレンドフォロー", "III": "手動管理"}
 
 
 def _build_tp_target_html(h: dict, cp: float) -> str:
     """保有銘柄の利確ターゲットをHTML文字列で構築する。"""
-    parts = []
-    for stage, label in [("t1", "T1"), ("t2", "T2"), ("t3", "T3")]:
+    from src.take_profit import _split_quantity
+
+    profit_type = h.get("profit_type", "")
+    type_label = _PROFIT_TYPE_LABEL.get(profit_type, "")
+    r_value = float(h.get("r_value") or 0)
+    entry = float(h.get("entry_price") or 0)
+    qty = int(float(h.get("quantity") or 1)) or 1
+
+    # 売却株数を計算
+    t1_pct = float(h.get("t1_pct") or 50)
+    t2_pct = float(h.get("t2_pct") or 30)
+    t3_pct = float(h.get("t3_pct") or 20)
+    t1_qty, t2_qty, t3_qty = _split_quantity(qty, t1_pct, t2_pct, t3_pct)
+
+    # タイプ表示（小さく）
+    parts = [f"<span class='tp-type-label'>{type_label}</span>"]
+
+    stages = [
+        ("t1", "T1", t1_qty),
+        ("t2", "T2", t2_qty),
+        ("t3", "T3", t3_qty),
+    ]
+    for stage, label, sell_qty in stages:
         price = h.get(f"{stage}_price")
         reached = h.get(f"{stage}_reached")
+
+        # R倍率ラベル
+        if price and r_value > 0 and entry > 0:
+            r_mult = (price - entry) / r_value
+            r_label = f"+{r_mult:.1f}R"
+        elif stage == "t3" and profit_type == "II":
+            r_label = "MA25割れ"
+        else:
+            r_label = ""
+
+        # 売却株数テキスト
+        qty_text = f" {sell_qty}株" if sell_qty > 0 else ""
+
         if price is None:
-            if stage == "t3" and h.get("profit_type") == "II":
+            # タイプII の T3: MA25トレーリング
+            if stage == "t3" and profit_type == "II":
                 if reached:
-                    parts.append(f"<span style='color:#4CAF50'>&#10003; {label} MA25</span>")
+                    parts.append(f"<span class='tp-reached'>&#10003; {label} MA25割れ{qty_text}</span>")
                 elif h.get("trailing_active"):
-                    parts.append(f"<span style='font-weight:600'>&#8594; {label} MA25</span>")
+                    parts.append(f"<span class='tp-active'>&#8594; {label} MA25割れ{qty_text}</span>")
                 else:
-                    parts.append(f"<span style='color:#999'>{label} MA25</span>")
+                    parts.append(f"<span class='tp-pending'>{label} MA25割れ{qty_text}</span>")
             continue
+
         if reached:
-            parts.append(f"<span style='color:#4CAF50'>&#10003; {label} {price:,.0f}</span>")
+            parts.append(
+                f"<span class='tp-reached'>&#10003; {label} {price:,.0f}"
+                f" <span class='tp-sub'>({r_label}){qty_text}</span></span>"
+            )
         elif cp >= price:
-            dist = (price - cp) / cp * 100
-            parts.append(f"<span style='font-weight:600;color:#FF6F00'>&#8594; {label} {price:,.0f}</span>")
+            parts.append(
+                f"<span class='tp-active'>&#8594; {label} {price:,.0f}"
+                f" <span class='tp-sub'>({r_label}){qty_text}</span></span>"
+            )
         else:
             dist = (price - cp) / cp * 100
-            parts.append(f"<span style='color:#999'>{label} {price:,.0f}（{dist:+.1f}%）</span>")
-    return "<br>".join(parts) if parts else "—"
+            parts.append(
+                f"<span class='tp-pending'>{label} {price:,.0f}"
+                f" <span class='tp-sub'>({r_label}) あと{dist:+.1f}%{qty_text}</span></span>"
+            )
+    return "<br>".join(parts) if len(parts) > 1 else "—"
 _COND_A_LABELS = [
     ("cond_a_ma200_rising",  "MA200上昇"),
     ("cond_a_ma_aligned",    "MA整列"),
@@ -214,45 +264,6 @@ def report():
             """,
             (today_str,),
         )
-        # 惜しかった銘柄（watch ラベル, スコア30以上）
-        _latest_sig_date = "(SELECT MAX(date) FROM daily_signals)"
-        near_misses = fetch_all(
-            conn,
-            f"""
-            SELECT d.ticker, u.name, d.market, d.pattern, d.label,
-                   d.cond_a_ma200_rising, d.cond_a_ma_aligned,
-                   d.cond_a_52w_high_near, d.cond_a_volume_surge,
-                   d.cond_a_rsi_ok, d.cond_a_above_ma25,
-                   d.cond_b_ma200_rising, d.cond_b_ma_aligned,
-                   d.cond_b_pullback_touched, d.cond_b_bounced,
-                   d.cond_b_ma25_rising, d.cond_b_rsi_ok,
-                   d.close, d.rsi14, d.atr14, d.vol_ratio,
-                   d.final_score, d.recommend_rank, d.recommend_reason,
-                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.liquidity_score,
-                   d.market_mode,
-                   CASE
-                     WHEN d.label = 'candidate' THEN 'filtered'
-                     WHEN d.market_mode IN ('caution', 'full_caution') AND d.final_score >= 50
-                          THEN 'demoted'
-                     ELSE 'score_short'
-                   END AS near_miss_type
-            FROM daily_signals d
-            LEFT JOIN universe_master u ON u.ticker = d.ticker
-            WHERE d.date = {_latest_sig_date}
-              AND (
-                (d.label = 'candidate'
-                 AND d.ticker NOT IN (
-                   SELECT ticker FROM trade_signal_log
-                   WHERE signal_date = {_latest_sig_date}
-                 ))
-                OR
-                (d.label = 'watch' AND d.final_score >= 30)
-              )
-            ORDER BY d.final_score DESC
-            LIMIT 5
-            """,
-        )
-
         # 市場環境タイムライン: 直近60日
         market_history = fetch_all(
             conn,
@@ -305,7 +316,14 @@ def report():
         except Exception:
             data_insufficient = 0
 
-    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, near_misses, last_batch, data_insufficient)
+    # 最新ポートフォリオスナップショット
+    try:
+        from src.portfolio_snapshot import get_latest_snapshot
+        latest_snapshot = get_latest_snapshot()
+    except Exception:
+        latest_snapshot = None
+
+    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, last_batch, data_insufficient, snapshot=latest_snapshot)
 
 
 # ============================================================
@@ -468,10 +486,16 @@ def performance():
 def screening():
     """スクリーニング銘柄一覧ページ"""
     with get_connection() as conn:
-        latest = fetch_one(conn, "SELECT MAX(date) AS d FROM daily_signals")
-        target_date = dict(latest)["d"] if latest else None
-        if not target_date:
+        # JP/US それぞれの最新日付を取得（バッチ実行タイミングの差で日付がずれるため）
+        market_dates = fetch_all(
+            conn,
+            "SELECT market, MAX(date) AS d FROM daily_signals GROUP BY market",
+        )
+        date_map = {dict(r)["market"]: dict(r)["d"] for r in market_dates}
+        if not date_map:
             return "<h3>スクリーニングデータがありません</h3>", 404
+
+        target_dates = sorted(set(date_map.values()))
 
         rows = fetch_all(
             conn,
@@ -486,12 +510,20 @@ def screening():
                       d.final_score, d.recommend_rank, d.recommend_reason
                FROM daily_signals d
                LEFT JOIN universe_master u ON u.ticker = d.ticker
-               WHERE d.date = ?
+               WHERE (d.market, d.date) IN (
+                   SELECT market, MAX(date) FROM daily_signals GROUP BY market
+               )
                ORDER BY d.final_score DESC""",
-            (target_date,),
         )
 
-    return _render_screening(target_date, [dict(r) for r in rows])
+    # 表示用日付文字列
+    if len(target_dates) == 1:
+        display_date = target_dates[0]
+    else:
+        parts = [f"{m}: {d}" for m, d in sorted(date_map.items())]
+        display_date = " / ".join(parts)
+
+    return _render_screening(display_date, [dict(r) for r in rows])
 
 
 # ============================================================
@@ -846,17 +878,173 @@ def api_sector_alloc():
     })
 
 
+@app.route("/api/portfolio-risk")
+def api_portfolio_risk():
+    """ポートフォリオ全体のリスク指標（加重平均）"""
+    today_str = date.today().isoformat()
+    usdjpy = _get_usdjpy()
+
+    with get_connection() as conn:
+        holdings = fetch_all(
+            conn,
+            """SELECT h.ticker, h.market, h.entry_price, h.quantity,
+                      ph.adj_close AS current_price
+               FROM holdings h
+               LEFT JOIN (
+                   SELECT ticker, adj_close FROM price_history
+                   WHERE (ticker, date) IN (
+                       SELECT ticker, MAX(date) FROM price_history GROUP BY ticker
+                   )
+               ) ph ON ph.ticker = h.ticker
+               WHERE h.is_closed = 0""",
+        )
+        if not holdings:
+            return jsonify({"var_99_1d": None, "beta": None, "sharpe": None,
+                            "total_positions": 0})
+
+        total_value = 0.0
+        weighted_var = 0.0
+        weighted_beta = 0.0
+        weighted_sharpe = 0.0
+        valid_count = 0
+
+        for h in holdings:
+            h = dict(h)
+            cp = float(h.get("current_price") or h.get("entry_price") or 0)
+            qty = float(h.get("quantity") or 1)
+            market = h.get("market", "JP")
+            fx = usdjpy if market != "JP" else 1.0
+            pos_val = cp * qty * fx
+
+            risk = _get_or_calc_risk(conn, h["ticker"], today_str, market)
+            var_val = risk.get("var_99_1d")
+            beta_val = risk.get("beta_60d")
+            sharpe_val = risk.get("sharpe_60d")
+
+            if var_val is not None:
+                weighted_var += abs(var_val) * pos_val
+                total_value += pos_val
+                valid_count += 1
+            if beta_val is not None:
+                weighted_beta += beta_val * pos_val
+            if sharpe_val is not None:
+                weighted_sharpe += sharpe_val * pos_val
+
+    if total_value > 0:
+        avg_var = round(weighted_var / total_value * 100, 2)
+        avg_beta = round(weighted_beta / total_value, 2)
+        avg_sharpe = round(weighted_sharpe / total_value, 2)
+    else:
+        avg_var = avg_beta = avg_sharpe = None
+
+    return jsonify({
+        "var_99_1d": avg_var,
+        "beta": avg_beta,
+        "sharpe": avg_sharpe,
+        "total_positions": valid_count,
+    })
+
+
+@app.route("/api/system-health")
+def api_system_health():
+    """システムヘルス情報（最終バッチ・エラー数・データ鮮度）"""
+    with get_connection() as conn:
+        last_batch = fetch_one(
+            conn,
+            """SELECT batch_type, status, end_time
+               FROM batch_run_log ORDER BY end_time DESC LIMIT 1""",
+        )
+        error_count = fetch_one(
+            conn,
+            """SELECT COUNT(*) AS cnt FROM error_log
+               WHERE created_at >= datetime('now', '-24 hours')""",
+        )
+        latest_price = fetch_one(
+            conn,
+            "SELECT MAX(date) AS d FROM price_history",
+        )
+
+    result = {"last_batch": None, "errors_24h": 0, "data_date": None}
+    if last_batch:
+        lb = dict(last_batch)
+        _BTYPES = {"evening_jp": "夜(JP)", "morning_all": "朝(全)", "monthly": "月次"}
+        result["last_batch"] = {
+            "type": _BTYPES.get(lb.get("batch_type", ""), lb.get("batch_type", "")),
+            "status": lb.get("status", ""),
+            "time": lb.get("end_time", ""),
+        }
+    if error_count:
+        result["errors_24h"] = dict(error_count).get("cnt", 0)
+    if latest_price:
+        result["data_date"] = dict(latest_price).get("d")
+    return jsonify(result)
+
+
+@app.route("/api/earnings-calendar")
+def api_earnings_calendar():
+    """保有銘柄の今後30日間の決算予定"""
+    today_str = date.today().isoformat()
+    with get_connection() as conn:
+        rows = fetch_all(
+            conn,
+            """SELECT es.ticker, es.announcement_date,
+                      COALESCE(h.name, u.name, es.ticker) AS name
+               FROM earnings_schedule es
+               INNER JOIN holdings h ON h.ticker = es.ticker AND h.is_closed = 0
+               LEFT JOIN universe_master u ON u.ticker = es.ticker
+               WHERE es.announcement_date >= ?
+                 AND es.announcement_date <= date(?, '+30 days')
+               ORDER BY es.announcement_date ASC""",
+            (today_str, today_str),
+        )
+    events = []
+    for r in rows:
+        r = dict(r)
+        ann_date = r.get("announcement_date", "")
+        try:
+            days_until = (datetime.strptime(ann_date, "%Y-%m-%d").date() - date.today()).days
+        except ValueError:
+            days_until = 99
+        events.append({
+            "ticker": r.get("ticker", ""),
+            "name": r.get("name", ""),
+            "date": ann_date,
+            "days_until": days_until,
+        })
+    return jsonify({"events": events, "today": today_str})
+
+
 @app.route("/api/screening-funnel")
 def api_screening_funnel():
     """スクリーニングファネル統計（直近バッチ分）"""
     target = request.args.get("date")
 
     with get_connection() as conn:
-        if not target:
-            row = fetch_one(conn, "SELECT MAX(date) AS d FROM daily_signals")
-            target = dict(row)["d"] if row else None
-        if not target:
-            return jsonify({"error": "no data"}), 404
+        # 特定日付が指定された場合はその日付のみ、
+        # 未指定の場合は JP/US それぞれの最新日付を使う
+        if target:
+            date_filter = "date = ?"
+            date_params: tuple = (target,)
+            signal_date_filter = "signal_date = ?"
+            signal_date_params: tuple = (target,)
+        else:
+            market_dates = fetch_all(
+                conn,
+                "SELECT market, MAX(date) AS d FROM daily_signals GROUP BY market",
+            )
+            date_map = {dict(r)["market"]: dict(r)["d"] for r in market_dates}
+            if not date_map:
+                return jsonify({"error": "no data"}), 404
+            target_dates = sorted(set(date_map.values()))
+            target = " / ".join(
+                f"{m}: {d}" for m, d in sorted(date_map.items())
+            ) if len(target_dates) > 1 else target_dates[0]
+            date_filter = "(market, date) IN (SELECT market, MAX(date) FROM daily_signals GROUP BY market)"
+            date_params = ()
+            signal_date_filter = "signal_date IN ({})".format(
+                ",".join("?" for _ in target_dates)
+            )
+            signal_date_params = tuple(target_dates)
 
         universe = fetch_one(
             conn,
@@ -867,31 +1055,31 @@ def api_screening_funnel():
 
         screened = fetch_one(
             conn,
-            "SELECT COUNT(*) AS cnt FROM daily_signals WHERE date = ?",
-            (target,),
+            f"SELECT COUNT(*) AS cnt FROM daily_signals WHERE {date_filter}",
+            date_params,
         )
         screened_cnt = dict(screened)["cnt"] if screened else 0
 
         label_counts = fetch_all(
             conn,
-            "SELECT label, COUNT(*) AS cnt FROM daily_signals "
-            "WHERE date = ? GROUP BY label",
-            (target,),
+            f"SELECT label, COUNT(*) AS cnt FROM daily_signals "
+            f"WHERE {date_filter} GROUP BY label",
+            date_params,
         )
         labels = {dict(r)["label"]: dict(r)["cnt"] for r in label_counts}
 
         notified = fetch_one(
             conn,
-            "SELECT COUNT(*) AS cnt FROM trade_signal_log WHERE signal_date = ?",
-            (target,),
+            f"SELECT COUNT(*) AS cnt FROM trade_signal_log WHERE {signal_date_filter}",
+            signal_date_params,
         )
         notified_cnt = dict(notified)["cnt"] if notified else 0
 
         by_market_rows = fetch_all(
             conn,
-            "SELECT market, label, COUNT(*) AS cnt FROM daily_signals "
-            "WHERE date = ? GROUP BY market, label",
-            (target,),
+            f"SELECT market, label, COUNT(*) AS cnt FROM daily_signals "
+            f"WHERE {date_filter} GROUP BY market, label",
+            date_params,
         )
         by_market: dict = {}
         for r in by_market_rows:
@@ -904,40 +1092,40 @@ def api_screening_funnel():
 
         cond_a = fetch_one(
             conn,
-            """SELECT COUNT(*) AS total,
+            f"""SELECT COUNT(*) AS total,
                       SUM(cond_a_ma200_rising)  AS c1, SUM(cond_a_ma_aligned)    AS c2,
                       SUM(cond_a_52w_high_near) AS c3, SUM(cond_a_volume_surge)  AS c4,
                       SUM(cond_a_rsi_ok)        AS c5, SUM(cond_a_above_ma25)    AS c6
                FROM daily_signals
-               WHERE date = ? AND cond_a_ma200_rising IS NOT NULL""",
-            (target,),
+               WHERE {date_filter} AND cond_a_ma200_rising IS NOT NULL""",
+            date_params,
         )
         cond_a = dict(cond_a) if cond_a else {}
 
         cond_b = fetch_one(
             conn,
-            """SELECT COUNT(*) AS total,
+            f"""SELECT COUNT(*) AS total,
                       SUM(cond_b_ma200_rising)     AS c1, SUM(cond_b_ma_aligned)       AS c2,
                       SUM(cond_b_pullback_touched) AS c3, SUM(cond_b_bounced)          AS c4,
                       SUM(cond_b_ma25_rising)      AS c5, SUM(cond_b_rsi_ok)           AS c6
                FROM daily_signals
-               WHERE date = ? AND cond_b_ma200_rising IS NOT NULL""",
-            (target,),
+               WHERE {date_filter} AND cond_b_ma200_rising IS NOT NULL""",
+            date_params,
         )
         cond_b = dict(cond_b) if cond_b else {}
 
         score_dist = fetch_all(
             conn,
-            """SELECT
+            f"""SELECT
                  CASE WHEN final_score >= 80 THEN '80-100'
                       WHEN final_score >= 60 THEN '60-79'
                       WHEN final_score >= 40 THEN '40-59'
                       WHEN final_score >= 20 THEN '20-39'
                       ELSE '0-19' END AS bucket,
                  COUNT(*) AS cnt
-               FROM daily_signals WHERE date = ? AND final_score IS NOT NULL
+               FROM daily_signals WHERE {date_filter} AND final_score IS NOT NULL
                GROUP BY bucket ORDER BY bucket DESC""",
-            (target,),
+            date_params,
         )
         score_buckets = {dict(r)["bucket"]: dict(r)["cnt"] for r in score_dist}
 
@@ -1037,7 +1225,7 @@ def _get_or_calc_risk(conn, ticker: str, today_str: str, market: str) -> dict:
 # HTML レンダリング: /report
 # ============================================================
 
-def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, near_misses=None, last_batch=None, data_insufficient=0):
+def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None):
     market_env = dict(market_env) if market_env else {}
     holdings = [dict(h) for h in holdings]
     candidates = [dict(c) for c in candidates]
@@ -1046,7 +1234,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
     mode = market_env.get("mode", "unknown")
     mode_label = _MODE_LABEL.get(mode, mode)
-    mode_color = _MODE_COLOR.get(mode, "#999")
+    mode_css = _MODE_CSS.get(mode, "mode-normal")
 
     # --- サマリー計算（円換算） ---
     usdjpy = _get_usdjpy()
@@ -1075,8 +1263,23 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
     total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
     pnl_color_cls = "trend-up" if total_pnl >= 0 else "trend-down"
+
+    # --- 総資産（スナップショット or フォールバック） ---
+    if snapshot:
+        total_assets = float(snapshot["total_assets_combined_jpy"])
+        total_assets_source = "snapshot"
+        snapshot_cash_jpy = float(snapshot.get("cash_jpy") or 0)
+        snapshot_cash_usd = float(snapshot.get("cash_usd") or 0)
+    else:
+        # フォールバック: 保有銘柄の時価合計（on-the-fly 計算済み）
+        total_assets = total_market_val
+        total_assets_source = "fallback"
+        snapshot_cash_jpy = 0.0
+        snapshot_cash_usd = 0.0
+    total_cash_jpy_equiv = snapshot_cash_jpy + snapshot_cash_usd * usdjpy
+
     no_price_warn = (
-        f'<div style="font-size:0.7rem;color:#E65100;margin-top:4px">'
+        f'<div class="freshness-warn" style="margin-top:4px">'
         f'⚠ 株価未取得のため除外: {", ".join(no_price_tickers)}</div>'
         if no_price_tickers else ""
     )
@@ -1104,13 +1307,14 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         batch_time = lb.get("end_time", "不明")
         batch_status = lb.get("status", "")
         batch_status_mark = "✅" if batch_status == "success" else "⚠️"
-        freshness_html = f'<div style="font-size:0.75rem;color:#666">最終バッチ: {batch_label} {batch_status_mark} {escape(str(batch_time))}</div>'
+        freshness_html = f'<div class="freshness">最終バッチ: {batch_label} {batch_status_mark} {escape(str(batch_time))}</div>'
     else:
-        freshness_html = '<div style="font-size:0.75rem;color:#E65100">⚠ バッチ実行履歴なし</div>'
+        freshness_html = '<div class="freshness-warn">⚠ バッチ実行履歴なし</div>'
 
     # --- 今日の行動セクション構築 ---
     action_items = []
-    for h in holdings:
+    for _ha in holdings:
+        h = dict(_ha)
         cp = float(h["current_price"] or 0) if h["current_price"] else 0
         sl = float(h["stop_loss_price"] or 0)
         ep = float(h["entry_price"] or 0)
@@ -1127,19 +1331,26 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         # 利確ターゲット到達チェック
         _pt = h.get("profit_type")
         if _pt in ("I", "II") and cp > 0:
-            _tp_items = []
+            from src.take_profit import _split_quantity
+            _r_val = float(h.get("r_value") or 0)
+            _qty_total = int(float(h.get("quantity") or 1)) or 1
+            _t1_pct = float(h.get("t1_pct") or 50)
+            _t2_pct = float(h.get("t2_pct") or 30)
+            _t3_pct = float(h.get("t3_pct") or 20)
+            _sq1, _sq2, _sq3 = _split_quantity(_qty_total, _t1_pct, _t2_pct, _t3_pct)
+            _sell_map = {"t1": _sq1, "t2": _sq2, "t3": _sq3}
             for stage, label_str in [("t1", "T1"), ("t2", "T2"), ("t3", "T3")]:
                 t_price = h.get(f"{stage}_price")
                 t_reached = h.get(f"{stage}_reached")
                 if t_price and not t_reached and cp >= t_price:
-                    _tp_items.append(label_str)
-            if _tp_items:
-                _qty = h.get("quantity") or 1
-                action_items.append((
-                    "info",
-                    f"🎯 {h['ticker']} {h.get('name', '')} — "
-                    f"{'・'.join(_tp_items)}到達。利確を検討してください"
-                ))
+                    _r_mult = f"+{(t_price - ep) / _r_val:.1f}R" if _r_val > 0 else ""
+                    _sell_n = _sell_map.get(stage, 0)
+                    _sell_str = f"{_sell_n}株売却" if _sell_n > 0 else "売却検討"
+                    action_items.append((
+                        "info",
+                        f"🎯 {h['ticker']} {h.get('name', '')} — "
+                        f"{label_str}到達（{_r_mult}）。{_sell_str}を検討"
+                    ))
             # SL引き上げ推奨
             _adj = h.get("adjusted_stop")
             if _adj and _adj > sl:
@@ -1208,7 +1419,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
     # --- 保有銘柄テーブル行リスト構築 ---
     holding_rows = []
-    for h in holdings:
+    for _h in holdings:
+        h = dict(_h)  # sqlite3.Row → dict（.get() を使えるようにする）
         ep = float(h["entry_price"] or 0)
         cp = float(h["current_price"] or 0) if h["current_price"] else None
         sl = float(h["stop_loss_price"] or 0)
@@ -1217,42 +1429,67 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
         pnl_pct = 0.0
         pnl_str = "—"
+        pnl_jpy_str = ""
         pnl_color = ""
+        market = h.get("market") or "JP"
+        fx = usdjpy if market != "JP" else 1.0
         if cp and ep:
             pnl_pct = (cp - ep) / ep * 100
-            pnl_color = "color:#4CAF50" if pnl_pct >= 0 else "color:#D32F2F"
+            pnl_color = "text-profit" if pnl_pct >= 0 else "text-loss"
             pnl_str = f"{pnl_pct:+.1f}%"
+            pnl_jpy = (cp - ep) * float(qty or 1) * fx
+            pnl_jpy_str = f"¥{pnl_jpy:+,.0f}"
 
         cp_str = f"{cp:,.2f}" if cp else "—"
 
         # 利確ターゲット表示の構築
         profit_type = h.get("profit_type")
+        # profit_type 未設定の場合、signal_pattern から推定
+        if not profit_type:
+            sp = h.get("signal_pattern")
+            if sp == "A":
+                profit_type = "I"
+            elif sp == "B":
+                profit_type = "II"
+            else:
+                profit_type = "III"
         target_str = "—"
         target_html = "—"
         if profit_type in ("I", "II") and cp:
             target_html = _build_tp_target_html(h, cp)
+        elif profit_type == "III":
+            target_html = "<span class='tp-type-label'>手動管理</span>"
+            if tp and cp:
+                dist = (tp - cp) / cp * 100
+                target_html += f"<br><span class='tp-pending'>目安 {tp:,.2f}（{dist:+.1f}%）</span>"
         elif tp and cp:
             dist = (tp - cp) / cp * 100
             target_html = f"{tp:,.2f}（{dist:+.1f}%）"
         target_str = target_html
 
         days_str = "—"
+        days_css = ""
         if h["entry_date"]:
             try:
                 entry_dt = datetime.strptime(h["entry_date"], "%Y-%m-%d").date()
-                days_str = f"{(date.today() - entry_dt).days}日"
+                holding_days = (date.today() - entry_dt).days
+                days_str = f"{holding_days}日"
+                if holding_days > 60:
+                    days_css = "text-loss"
+                elif holding_days > 30:
+                    days_css = "trend-flat"
             except ValueError:
                 pass
 
         # テクニカル指標
         rsi = h.get("rsi14")
         rsi_str = f"{rsi:.0f}" if rsi is not None else "—"
-        rsi_color = ""
+        rsi_css = ""
         if rsi is not None:
             if rsi >= 70:
-                rsi_color = "color:#D32F2F"
+                rsi_css = "rsi-high"
             elif rsi <= 30:
-                rsi_color = "color:#4CAF50"
+                rsi_css = "rsi-low"
 
         atr = h.get("atr14")
         atr_str = f"{atr:.1f}" if atr is not None else "—"
@@ -1270,8 +1507,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         fscore = h.get("final_score")
         frank = h.get("recommend_rank")
         score_str = f"{fscore:.0f}" if fscore is not None else "—"
-        rank_color = _RANK_COLOR.get(frank, "#999")
-        rank_html = f"<span class='rank-badge' style='background:{rank_color}'>{escape(frank or '—')}</span>"
+        rank_css = _RANK_CSS.get(frank, "rank-default")
+        rank_html = f"<span class='rank-badge {rank_css}'>{escape(frank or '—')}</span>"
 
         # トレンド矢印
         ma5 = h.get("ma5")
@@ -1318,16 +1555,18 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "ticker": h["ticker"],
             "name": h.get("name") or "",
             "cp_str": cp_str,
-            "pnl_color": pnl_color,
+            "pnl_css": pnl_color,
             "pnl_str": pnl_str,
+            "pnl_jpy_str": pnl_jpy_str,
             "status_cls": status_cls,
             "status_label": status_label,
             "sl_str": f"{sl:,.2f}",
             "target_str": target_str,
             "days_str": days_str,
+            "days_css": days_css,
             "market": h.get("market") or "",
             "qty_str": f"{qty:.0f}" if qty else "—",
-            "rsi_color": rsi_color,
+            "rsi_css": rsi_css,
             "rsi_str": rsi_str,
             "atr_str": atr_str,
             "ma25_dev_str": ma25_dev_str,
@@ -1364,108 +1603,6 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "qty_str": qty_str,
         })
 
-    # 惜しかった銘柄カードリスト構築（card_html を pre-render）
-    near_misses = [dict(nm) for nm in near_misses] if near_misses else []
-    _NM_TYPE_BADGE = {
-        "filtered": ("🚫 見送り", "#D32F2F"),
-        "demoted":  ("⚠️ 警戒モードで降格", "#FF5722"),
-        "score_short": ("", "#FF9800"),
-    }
-    near_miss_cards = []
-    for nm in near_misses:
-        nm_ticker = escape(nm.get("ticker") or "")
-        nm_name = escape(nm.get("name") or str(nm_ticker))
-        nm_market = escape(nm.get("market") or "")
-        nm_pattern = nm.get("pattern") or "A"
-        nm_p_name = escape(_PATTERN_NAME.get(nm_pattern, nm_pattern))
-        nm_score = int(nm.get("final_score") or 0)
-        nm_type = nm.get("near_miss_type", "score_short")
-        _, nm_border_color = _NM_TYPE_BADGE.get(nm_type, ("", "#FF9800"))
-
-        # --- filtered タイプ: 具体的な見送り理由を再計算 ---
-        skip_detail_html = ""
-        if nm_type == "filtered":
-            _nm_close = float(nm.get("close") or 0)
-            _nm_atr = float(nm.get("atr14") or 0)
-            if _nm_close > 0 and _nm_atr > 0:
-                _nm_sl = _nm_close - _nm_atr * _SKIP_ATR_MULT
-                _nm_sl_pct = (_nm_close - _nm_sl) / _nm_close * 100
-                # filtered の見送り理由は「損切り幅が狭すぎる」のみ
-                skip_detail_html = (
-                    f'<div style="background:#FFEBEE;border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:0.8rem">'
-                    f'<strong>🚫 見送り理由: 損切り幅が狭すぎる</strong><br>'
-                    f'損切り幅 <strong>{_nm_sl_pct:.2f}%</strong> ＜ 最低ライン <strong>{_SKIP_SL_MIN_PCT}%</strong><br>'
-                    f'<span style="color:#888">終値 {_nm_close:,.0f} / ATR14 {_nm_atr:,.1f} / '
-                    f'SL計算値 {_nm_sl:,.0f}（ATR×{_SKIP_ATR_MULT:.0f}）</span>'
-                    f'</div>'
-                )
-
-        # スコア表示: typeに応じて変更
-        if nm_type == "score_short":
-            nm_gap = 50 - nm_score
-            nm_gap_str = f"あと{nm_gap}点"
-        elif nm_type == "filtered":
-            nm_gap_str = "🚫 見送り"
-        else:
-            nm_gap_str = _NM_TYPE_BADGE.get(nm_type, ("", "#FF9800"))[0]
-
-        nm_pct = min(nm_score, 100)  # 0-100 でバー表示
-        nm_reason = escape(nm.get("recommend_reason") or "")
-
-        # サブスコアミニバー
-        sub_bars = ""
-        for sub_key, sub_label in [("trend_score", "トレンド"), ("pattern_a_score", "ブレイクアウト"),
-                                    ("pattern_b_score", "押し目"), ("liquidity_score", "流動性")]:
-            sv = int(nm.get(sub_key) or 0)
-            sc = "#4CAF50" if sv >= 60 else "#FF9800" if sv >= 30 else "#E0E0E0"
-            sub_bars += f"""<div class="col-3">
-              <div style="font-size:0.7rem;color:#666">{sub_label}</div>
-              <div style="background:#f0f0f0;border-radius:4px;height:8px">
-                <div style="background:{sc};width:{sv}%;height:100%;border-radius:4px"></div>
-              </div>
-              <span style="font-size:0.7rem">{sv}点</span>
-            </div>"""
-
-        # 条件チェックリスト
-        cond_labels = _COND_A_LABELS if nm_pattern == "A" else _COND_B_LABELS
-        cond_rows = ""
-        for col, desc in cond_labels:
-            val = nm.get(col)
-            if val == 1:
-                dot = "#4CAF50"
-                hint = ""
-            elif val == 0:
-                dot = "#D32F2F"
-                hint = "<span style='color:#D32F2F;font-size:0.7rem;margin-left:4px'>← 未達</span>"
-            else:
-                dot = "#E0E0E0"
-                hint = ""
-            cond_rows += f"""<div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
-              <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:{dot}"></span>
-              <span style="font-size:0.8rem">{escape(desc)}</span>{hint}
-            </div>"""
-
-        card_html = f"""
-        <div class="summary-card" style="border-left:4px solid {nm_border_color};margin-bottom:12px">
-          <div class="d-flex align-items-center gap-2 mb-2">
-            <a class="ticker-link" href="/stock/{nm_ticker}">{nm_ticker}</a>
-            <span>{nm_name}</span>
-            <span style="font-size:0.75rem;color:#999">{nm_market}</span>
-            <span class="rank-badge" style="background:#FF9800">{nm_p_name}</span>
-            <span style="margin-left:auto;font-weight:700;font-size:1.1rem">{nm_score}点</span>
-            <span style="color:{nm_border_color};font-size:0.8rem">{nm_gap_str}</span>
-          </div>
-          {skip_detail_html}
-          <div style="background:#f0f0f0;border-radius:8px;height:20px;margin-bottom:8px;position:relative">
-            <div style="background:linear-gradient(90deg,#FF9800,#FFC107);width:{nm_pct}%;height:100%;border-radius:8px"></div>
-            <span style="position:absolute;right:8px;top:2px;font-size:0.7rem;color:#666">50点ライン</span>
-          </div>
-          <div class="row g-2 mb-2">{sub_bars}</div>
-          <div style="margin-bottom:4px">{cond_rows}</div>
-          <div style="font-size:0.8rem;color:#666">💡 {nm_reason}</div>
-        </div>"""
-        near_miss_cards.append({"card_html": card_html})
-
     # 市場環境タイムラインの JSON データ
     mh_dates = json.dumps([m["date"] for m in market_history])
     mh_n225 = json.dumps([m["n225_close"] for m in market_history])
@@ -1485,7 +1622,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         pnl_color_cls=pnl_color_cls,
         no_price_warn=no_price_warn,
         mode_label=mode_label,
-        mode_color=mode_color,
+        mode_css=mode_css,
         env_date=env_date,
         jp_str=jp_str,
         us_str=us_str,
@@ -1500,7 +1637,6 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         llm_cards=llm_cards,
         holding_rows=holding_rows,
         signal_rows=signal_rows,
-        near_miss_cards=near_miss_cards,
         sector_labels=sector_labels,
         sector_values=sector_values,
         mh_dates=mh_dates,
@@ -1516,6 +1652,9 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         skip_risk_pct=_SKIP_RISK_PCT,
         skip_max_holdings=_SKIP_MAX_HOLDINGS,
         usdjpy_rate=usdjpy,
+        total_assets=total_assets,
+        total_assets_source=total_assets_source,
+        total_cash_jpy_equiv=total_cash_jpy_equiv,
     )
 
 
@@ -1547,7 +1686,7 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
 
     rsi = tech.get("rsi14")
     rsi_str = f"{rsi:.1f}" if rsi is not None else "—"
-    rsi_bar_color = "#D32F2F" if rsi and rsi >= 70 else ("#4CAF50" if rsi and rsi <= 30 else "#1976D2")
+    rsi_bar_color = "var(--color-danger)" if rsi and rsi >= 70 else ("var(--color-success)" if rsi and rsi <= 30 else "var(--color-primary)")
     rsi_width = rsi if rsi is not None else 0
 
     vol = tech.get("vol_20d_avg")
@@ -1557,7 +1696,7 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
     fscore = score.get("final_score")
     frank = score.get("recommend_rank") or "—"
     reason = score.get("recommend_reason") or "—"
-    rank_color = _RANK_COLOR.get(frank, "#999")
+    rank_css = _RANK_CSS.get(frank, "rank-default")
 
     # ファンダメンタルズ
     has_fundamentals = bool(fundamentals and fundamentals.get("per"))
@@ -1621,7 +1760,7 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
         l52_str=l52_str,
         fscore=fscore,
         frank=frank,
-        rank_color=rank_color,
+        rank_css=rank_css,
         reason=reason,
         rsi_str=rsi_str,
         rsi_width=rsi_width,
@@ -1713,12 +1852,8 @@ def _render_performance(summary, pattern_stats, all_trades):
 
 def _cond_dot(value: int | None, label: str) -> str:
     """条件フラグを色付きドットで描画する。"""
-    color = "#4CAF50" if value else "#E0E0E0"
-    return (
-        f'<span class="tip" data-tip="{label}" '
-        f'style="display:inline-block;width:14px;height:14px;'
-        f'border-radius:50%;background:{color};margin:0 1px"></span>'
-    )
+    css = "cond-dot-met" if value else "cond-dot-na"
+    return f'<span class="tip cond-dot {css}" data-tip="{label}"></span>'
 
 
 def _render_screening(target_date: str, rows: list[dict]) -> str:
@@ -1743,11 +1878,11 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         sector = r.get("sector") or "—"
 
         # ラベルバッジ
-        lbl_color = _LABEL_COLOR.get(label, "#9E9E9E")
+        lbl_css = _LABEL_CSS.get(label, "label-skip")
         lbl_text = _LABEL_DISPLAY.get(label, label)
 
         # ランクバッジ
-        rank_color = _RANK_COLOR.get(frank, "#999")
+        rank_css = _RANK_CSS.get(frank, "rank-default")
 
         # 条件フラグドット
         conds_html = ""
@@ -1768,31 +1903,31 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         total_conds = len(cond_labels)
         failed_names = [tip for col, tip in cond_labels if r.get(col) == 0]
         if label == "candidate":
-            verdict_html = '<span style="color:#4CAF50;font-weight:600">買い候補</span>'
+            verdict_html = '<span class="verdict-candidate">買い候補</span>'
         elif label == "watch":
-            verdict_html = '<span style="color:#FF9800;font-weight:600">監視</span>'
+            verdict_html = '<span class="verdict-watch">監視</span>'
         else:
-            verdict_html = '<span style="color:#9E9E9E">対象外</span>'
+            verdict_html = '<span class="verdict-skip">対象外</span>'
         # 未達条件を赤で表示
         if failed_names:
             failed_html = ", ".join(
-                f'<span style="color:#D32F2F">{escape(n)}</span>' for n in failed_names
+                f'<span class="verdict-failed">{escape(n)}</span>' for n in failed_names
             )
-            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})<br><span style="font-size:0.75rem">未達: {failed_html}</span>'
+            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})<br><span class="reason-text">未達: {failed_html}</span>'
         else:
             verdict_detail = f'{verdict_html} ({met_count}/{total_conds})'
         # 理由
-        reason_html = f'<span style="font-size:0.75rem;color:#666">{escape(reason_text)}</span>' if reason_text else "—"
+        reason_html = f'<span class="reason-text">{escape(reason_text)}</span>' if reason_text else "—"
 
         # 詳細列
         close_str = f"{close:,.2f}" if close else "—"
         rsi_str = f"{rsi:.0f}" if rsi is not None else "—"
-        rsi_color = ""
+        rsi_css = ""
         if rsi is not None:
             if rsi >= 70:
-                rsi_color = "color:#D32F2F"
+                rsi_css = "rsi-high"
             elif rsi <= 30:
-                rsi_color = "color:#4CAF50"
+                rsi_css = "rsi-low"
         vr_str = f"{vol_ratio:.1f}x" if vol_ratio is not None else "—"
 
         row_html = (
@@ -1802,14 +1937,14 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
             f'<td class="mobile-hide">{escape(name)}</td>'
             f'<td class="mobile-hide">{escape(market)}</td>'
             f"<td>{pat_html}</td>"
-            f'<td><span class="rank-badge" style="background:{lbl_color}">{lbl_text}</span></td>'
+            f'<td><span class="rank-badge {lbl_css}">{lbl_text}</span></td>'
             f'<td class="mobile-hide" style="white-space:nowrap">{conds_html}</td>'
             f"<td>{score_str}</td>"
-            f'<td><span class="rank-badge" style="background:{rank_color}">{escape(frank)}</span></td>'
+            f'<td><span class="rank-badge {rank_css}">{escape(frank)}</span></td>'
             f'<td class="mobile-hide">{verdict_detail}</td>'
             f'<td class="mobile-hide">{reason_html}</td>'
             f'<td class="detail-col">{close_str}</td>'
-            f'<td class="detail-col" style="{rsi_color}">{rsi_str}</td>'
+            f'<td class="detail-col {rsi_css}">{rsi_str}</td>'
             f'<td class="detail-col">{vr_str}</td>'
             f'<td class="detail-col">{escape(sector)}</td>'
             f"</tr>"
@@ -1829,6 +1964,359 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
 
 
 # ============================================================
+# ルーティング: /settings（設定ページ）
+# ============================================================
+
+# ダッシュボードから編集可能な設定項目の定義
+# (section, key, label, type, default, min, max, step, help)
+_EDITABLE_SETTINGS: list[dict] = [
+    # --- 資金管理 ---
+    {"section": "capital", "key": "total_capital_jpy", "label": "総資金（円）",
+     "type": "int", "default": 200000, "min": 0, "max": 100_000_000, "step": 10000,
+     "help": "日本株の推奨投入額計算に使用", "group": "capital"},
+    {"section": "capital", "key": "total_capital_usd", "label": "総資金（USD）",
+     "type": "int", "default": 1500, "min": 0, "max": 1_000_000, "step": 100,
+     "help": "米国株の推奨投入額計算に使用", "group": "capital"},
+    {"section": "capital", "key": "max_risk_per_trade_pct", "label": "1トレードあたりリスク（%）",
+     "type": "float", "default": 2.0, "min": 0.1, "max": 10.0, "step": 0.1,
+     "help": "推奨投入額 = 総資金 × この値 ÷ 損切り幅", "group": "capital"},
+    {"section": "capital", "key": "max_concurrent_holdings", "label": "最大同時保有数",
+     "type": "int", "default": 3, "min": 1, "max": 50, "step": 1,
+     "help": "これを超えると新規シグナルが見送りになる", "group": "capital"},
+    {"section": "capital", "key": "default_stop_loss_pct", "label": "デフォルト損切り（%）",
+     "type": "float", "default": 8.0, "min": 1.0, "max": 30.0, "step": 0.5,
+     "help": "holdings.csv で stop_loss_price 省略時に使用", "group": "capital"},
+    {"section": "capital", "key": "usdjpy_fallback", "label": "USD/JPY フォールバック",
+     "type": "float", "default": 150.0, "min": 50.0, "max": 300.0, "step": 0.1,
+     "help": "為替レート取得失敗時の代替値", "group": "capital"},
+    # --- シグナル パターンA ---
+    {"section": "signal", "key": "pattern_a_rsi_min", "label": "パターンA RSI下限",
+     "type": "int", "default": 50, "min": 0, "max": 100, "step": 1,
+     "help": "", "group": "signal_a"},
+    {"section": "signal", "key": "pattern_a_rsi_max", "label": "パターンA RSI上限",
+     "type": "int", "default": 70, "min": 0, "max": 100, "step": 1,
+     "help": "", "group": "signal_a"},
+    {"section": "signal", "key": "pattern_a_volume_ratio_min", "label": "パターンA 出来高倍率",
+     "type": "float", "default": 1.2, "min": 0.5, "max": 10.0, "step": 0.1,
+     "help": "20日平均出来高に対する倍率", "group": "signal_a"},
+    {"section": "signal", "key": "pattern_a_52w_high_pct", "label": "パターンA 52週高値近傍（%）",
+     "type": "float", "default": 0.92, "min": 0.5, "max": 1.0, "step": 0.01,
+     "help": "終値 ≥ 52週高値 × この値 で条件成立", "group": "signal_a"},
+    # --- シグナル パターンB ---
+    {"section": "signal", "key": "pattern_b_rsi_min", "label": "パターンB RSI下限",
+     "type": "int", "default": 40, "min": 0, "max": 100, "step": 1,
+     "help": "", "group": "signal_b"},
+    {"section": "signal", "key": "pattern_b_rsi_max", "label": "パターンB RSI上限",
+     "type": "int", "default": 60, "min": 0, "max": 100, "step": 1,
+     "help": "", "group": "signal_b"},
+    {"section": "signal", "key": "pattern_b_ma25_touch_pct", "label": "パターンB MA25タッチ閾値",
+     "type": "float", "default": 0.98, "min": 0.9, "max": 1.0, "step": 0.01,
+     "help": "安値 ≤ MA25 × (1/この値) で押し目タッチ判定", "group": "signal_b"},
+    {"section": "signal", "key": "pattern_b_lookback_days", "label": "パターンB ルックバック日数",
+     "type": "int", "default": 5, "min": 1, "max": 20, "step": 1,
+     "help": "直近N日以内にMA25タッチを検索", "group": "signal_b"},
+    # --- シグナル 共通 ---
+    {"section": "signal", "key": "atr_stop_multiplier", "label": "ATR損切り倍率",
+     "type": "float", "default": 2.0, "min": 0.5, "max": 5.0, "step": 0.1,
+     "help": "損切りライン = エントリー価格 − ATR14 × この値", "group": "signal_common"},
+    {"section": "signal", "key": "risk_reward_ratio", "label": "リスクリワード比",
+     "type": "float", "default": 2.0, "min": 1.0, "max": 10.0, "step": 0.1,
+     "help": "利確目安 = 損切り幅 × この値", "group": "signal_common"},
+    {"section": "signal", "key": "max_candidates_per_pattern", "label": "パターンあたり最大候補数",
+     "type": "int", "default": 3, "min": 1, "max": 20, "step": 1,
+     "help": "スコア上位N銘柄のみ通知", "group": "signal_common"},
+    {"section": "signal", "key": "stop_loss_warning_min_pct", "label": "損切り幅 下限警告（%）",
+     "type": "float", "default": 1.0, "min": 0.1, "max": 5.0, "step": 0.1,
+     "help": "損切り幅がこの値未満の場合は見送り", "group": "signal_common"},
+    {"section": "signal", "key": "stop_loss_warning_max_pct", "label": "損切り幅 上限警告（%）",
+     "type": "float", "default": 15.0, "min": 5.0, "max": 30.0, "step": 0.5,
+     "help": "損切り幅がこの値超の場合は見送り", "group": "signal_common"},
+    # --- スクリーニング ---
+    {"section": "screening", "key": "jp_min_price", "label": "JP 最低株価（円）",
+     "type": "int", "default": 300, "min": 0, "max": 100000, "step": 100,
+     "help": "", "group": "screening"},
+    {"section": "screening", "key": "jp_min_turnover", "label": "JP 最低売買代金（円）",
+     "type": "int", "default": 300_000_000, "min": 0, "max": 10_000_000_000, "step": 100_000_000,
+     "help": "20日平均売買代金", "group": "screening"},
+    {"section": "screening", "key": "jp_min_market_cap", "label": "JP 最低時価総額（円）",
+     "type": "int", "default": 30_000_000_000, "min": 0, "max": 1_000_000_000_000, "step": 1_000_000_000,
+     "help": "", "group": "screening"},
+    {"section": "screening", "key": "us_min_price", "label": "US 最低株価（USD）",
+     "type": "int", "default": 5, "min": 0, "max": 10000, "step": 1,
+     "help": "", "group": "screening"},
+    {"section": "screening", "key": "us_min_turnover", "label": "US 最低売買代金（USD）",
+     "type": "int", "default": 20_000_000, "min": 0, "max": 1_000_000_000, "step": 1_000_000,
+     "help": "20日平均売買代金", "group": "screening"},
+    {"section": "screening", "key": "us_min_market_cap", "label": "US 最低時価総額（USD）",
+     "type": "int", "default": 2_000_000_000, "min": 0, "max": 100_000_000_000, "step": 100_000_000,
+     "help": "", "group": "screening"},
+    {"section": "screening", "key": "min_active_days_of_30", "label": "最低取引日数（30日中）",
+     "type": "int", "default": 20, "min": 1, "max": 30, "step": 1,
+     "help": "直近30日でこの日数以上取引がある銘柄のみ対象", "group": "screening"},
+    # --- ペーパーモード ---
+    {"section": "paper_mode", "key": "enabled", "label": "ペーパーモード",
+     "type": "bool", "default": False, "min": None, "max": None, "step": None,
+     "help": "有効にするとシグナル発生時に仮想エントリーを記録し検証する", "group": "paper_mode"},
+]
+
+_GROUP_LABELS = {
+    "capital": "資金管理",
+    "signal_a": "シグナル — パターンA（モメンタムブレイクアウト）",
+    "signal_b": "シグナル — パターンB（押し目買い）",
+    "signal_common": "シグナル — 共通",
+    "screening": "スクリーニング",
+    "paper_mode": "ペーパーモード",
+}
+
+_CONFIG_PATH = _PROJECT_ROOT / "config.json"
+
+
+@app.route("/settings")
+def settings_page():
+    """設定ページ"""
+    return render_template("settings.html", active_page="settings")
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    """現在の設定値を返す"""
+    result = []
+    for item in _EDITABLE_SETTINGS:
+        section = CONFIG.get(item["section"], {})
+        current = section.get(item["key"], item["default"])
+        result.append({
+            "section": item["section"],
+            "key": item["key"],
+            "label": item["label"],
+            "type": item["type"],
+            "value": current,
+            "default": item["default"],
+            "min": item["min"],
+            "max": item["max"],
+            "step": item["step"],
+            "help": item["help"],
+            "group": item["group"],
+        })
+    return jsonify({"settings": result, "group_labels": _GROUP_LABELS})
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_post():
+    """設定値を更新して config.json に書き戻す"""
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "無効なリクエスト"}), 400
+
+    updates = data.get("settings")
+    if not isinstance(updates, dict):
+        return jsonify({"error": "settings フィールドが必要です"}), 400
+
+    # 編集可能なキーのセットを構築
+    allowed = {(s["section"], s["key"]): s for s in _EDITABLE_SETTINGS}
+
+    # バリデーション
+    errors = []
+    validated: list[tuple[str, str, object]] = []
+    for compound_key, raw_value in updates.items():
+        parts = compound_key.split(".", 1)
+        if len(parts) != 2:
+            errors.append(f"不正なキー形式: {compound_key}")
+            continue
+        section, key = parts
+        spec = allowed.get((section, key))
+        if spec is None:
+            errors.append(f"編集不可のキー: {compound_key}")
+            continue
+
+        try:
+            if spec["type"] == "bool":
+                value = bool(raw_value)
+            elif spec["type"] == "int":
+                value = int(float(raw_value))
+                if spec["min"] is not None and value < spec["min"]:
+                    errors.append(f"{spec['label']}: 最小値は {spec['min']}")
+                    continue
+                if spec["max"] is not None and value > spec["max"]:
+                    errors.append(f"{spec['label']}: 最大値は {spec['max']}")
+                    continue
+            elif spec["type"] == "float":
+                value = round(float(raw_value), 4)
+                if spec["min"] is not None and value < spec["min"]:
+                    errors.append(f"{spec['label']}: 最小値は {spec['min']}")
+                    continue
+                if spec["max"] is not None and value > spec["max"]:
+                    errors.append(f"{spec['label']}: 最大値は {spec['max']}")
+                    continue
+            else:
+                errors.append(f"不明な型: {spec['type']}")
+                continue
+        except (ValueError, TypeError):
+            errors.append(f"{spec['label']}: 値が不正です")
+            continue
+
+        validated.append((section, key, value))
+
+    if errors:
+        return jsonify({"error": "バリデーションエラー", "details": errors}), 400
+
+    # config.json を読み直して更新（他セクションを壊さない）
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            full_config = json.load(f)
+    except Exception as e:
+        logger.error(f"config.json 読み込み失敗: {e}")
+        return jsonify({"error": "config.json の読み込みに失敗しました"}), 500
+
+    for section, key, value in validated:
+        if section not in full_config:
+            full_config[section] = {}
+        full_config[section][key] = value
+
+    # ファイルに書き戻し
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(full_config, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"config.json 書き込み失敗: {e}")
+        return jsonify({"error": "config.json の書き込みに失敗しました"}), 500
+
+    # メモリ上の CONFIG も同期
+    for section, key, value in validated:
+        if section not in CONFIG:
+            CONFIG[section] = {}
+        CONFIG[section][key] = value
+
+    logger.info(f"設定を更新しました: {len(validated)} 項目")
+    return jsonify({"success": True, "updated": len(validated)})
+
+
+# ============================================================
+# バッチ手動実行
+# ============================================================
+
+@dataclass
+class _BatchTask:
+    batch_type: str
+    status: str = "running"  # running / success / partial / failed / locked / timeout
+    started_at: str = ""
+    finished_at: str = ""
+    return_code: int | None = None
+    error: str = ""
+    current_step: int = 0
+    total_steps: int = 0
+    step_label: str = ""
+
+
+_batch_tasks: dict[str, _BatchTask] = {}
+_batch_lock = threading.Lock()
+
+_RC_STATUS = {0: "success", 1: "partial", 2: "failed", 3: "locked", 4: "timeout"}
+
+
+def _run_batch_async(batch_type: str) -> bool:
+    """バッチをバックグラウンドスレッドで起動する。成功時 True。"""
+    with _batch_lock:
+        existing = _batch_tasks.get(batch_type)
+        if existing and existing.status == "running":
+            return False
+        task = _BatchTask(
+            batch_type=batch_type,
+            status="running",
+            started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        _batch_tasks[batch_type] = task
+
+    def _on_progress(step: int, total: int, label: str) -> None:
+        with _batch_lock:
+            task.current_step = step
+            task.total_steps = total
+            task.step_label = label
+
+    def _worker():
+        try:
+            if batch_type == "evening_jp":
+                from scripts.batch_evening_jp import run_manual
+            else:
+                from scripts.batch_morning_all import run_manual
+            rc = run_manual(skip_llm=True, on_progress=_on_progress)
+            with _batch_lock:
+                task.return_code = rc
+                task.status = _RC_STATUS.get(rc, "failed")
+                task.finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            logger.error(f"バッチ手動実行エラー ({batch_type}): {e}", exc_info=True)
+            with _batch_lock:
+                task.status = "failed"
+                task.error = str(e)
+                task.finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    thread = threading.Thread(target=_worker, name=f"batch-{batch_type}", daemon=True)
+    thread.start()
+    return True
+
+
+@app.route("/api/batch/trigger", methods=["POST"])
+def api_batch_trigger():
+    """バッチ手動実行をトリガーする"""
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "無効なリクエスト"}), 400
+
+    batch_type = data.get("batch_type", "")
+    if batch_type not in ("evening_jp", "morning_all"):
+        return jsonify({"error": "無効なバッチタイプ"}), 400
+
+    with _batch_lock:
+        existing = _batch_tasks.get(batch_type)
+        if existing and existing.status == "running":
+            return jsonify({"error": "既に実行中です", "status": "running"}), 409
+
+    ok = _run_batch_async(batch_type)
+    if not ok:
+        return jsonify({"error": "既に実行中です", "status": "running"}), 409
+
+    return jsonify({"success": True, "batch_type": batch_type, "status": "running"})
+
+
+@app.route("/api/batch/status")
+def api_batch_status():
+    """バッチ実行状態を返す（ポーリング用）"""
+    batch_type = request.args.get("batch_type", "")
+
+    with _batch_lock:
+        if batch_type:
+            task = _batch_tasks.get(batch_type)
+            if not task:
+                return jsonify({"batch_type": batch_type, "status": "idle"})
+            return jsonify({
+                "batch_type": task.batch_type,
+                "status": task.status,
+                "started_at": task.started_at,
+                "finished_at": task.finished_at,
+                "return_code": task.return_code,
+                "error": task.error,
+                "current_step": task.current_step,
+                "total_steps": task.total_steps,
+                "step_label": task.step_label,
+            })
+        else:
+            result = {}
+            for bt, task in _batch_tasks.items():
+                result[bt] = {
+                    "status": task.status,
+                    "started_at": task.started_at,
+                    "finished_at": task.finished_at,
+                    "return_code": task.return_code,
+                    "current_step": task.current_step,
+                    "total_steps": task.total_steps,
+                    "step_label": task.step_label,
+                }
+            return jsonify(result)
+
+
+# ============================================================
 # エントリーポイント
 # ============================================================
 
@@ -1837,9 +2325,10 @@ def main():
     logger.info("  /report       - メインダッシュボード")
     logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
+    logger.info("  /settings     - 設定")
     logger.info("  /stock/<ticker> - 個別銘柄詳細")
     logger.info("  Ctrl+C で停止")
-    app.run(host=_HOST, port=_PORT, debug=False)
+    app.run(host=_HOST, port=_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

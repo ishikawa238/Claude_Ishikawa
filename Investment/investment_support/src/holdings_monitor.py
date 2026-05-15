@@ -228,16 +228,16 @@ def evaluate_holdings(target_date: date) -> list[dict]:
         pnl_pct    = (current_price - entry_price) / entry_price * 100
         pnl_amount = (current_price - entry_price) * quantity if quantity else None
 
+        entry_date_str = h["entry_date"]
         label, reasons = _judge_holding(
             ticker, target_str, current_price,
-            entry_price, stop_loss_price, pnl_pct
+            entry_price, stop_loss_price, pnl_pct, entry_date_str,
         )
 
         next_earnings = _get_next_earnings(ticker, target_str)
 
         # 保有日数（entry_date が設定されている場合のみ）
         holding_days = None
-        entry_date_str = h["entry_date"]
         if entry_date_str:
             try:
                 entry_dt = datetime.strptime(entry_date_str, "%Y-%m-%d").date()
@@ -349,6 +349,7 @@ def _judge_holding(
     entry_price: float,
     stop_loss_price: float,
     pnl_pct: float,
+    entry_date_str: str | None = None,
 ) -> tuple[str, list[str]]:
     """
     1銘柄の保有ラベルと理由リストを返す。
@@ -368,7 +369,9 @@ def _judge_holding(
         return "sl_near", reasons
 
     # ③ 売り検討条件チェック
-    sell_reasons = _check_sell_conditions(ticker, target_str, current_price, entry_price, pnl_pct)
+    sell_reasons = _check_sell_conditions(
+        ticker, target_str, current_price, entry_price, pnl_pct, entry_date_str,
+    )
     if sell_reasons:
         return "sell_watch", sell_reasons
 
@@ -383,6 +386,7 @@ def _check_sell_conditions(
     current_price: float,
     entry_price: float,
     pnl_pct: float,
+    entry_date_str: str | None = None,
 ) -> list[str]:
     """
     売り検討条件をチェックし、該当する理由のリストを返す。
@@ -412,7 +416,7 @@ def _check_sell_conditions(
         reasons.append(f"損益率が{pnl_pct:.1f}%（早期警戒水準）")
 
     # 利益確定圏（+10%以上）到達後、+5%以下に失速
-    if _check_profit_fade(ticker, target_str, entry_price, pnl_pct):
+    if _check_profit_fade(ticker, target_str, entry_price, pnl_pct, entry_date_str):
         reasons.append(f"利益確定圏到達後に失速（現在 +{pnl_pct:.1f}%）")
 
     return reasons
@@ -423,21 +427,31 @@ def _check_profit_fade(
     target_str: str,
     entry_price: float,
     current_pnl_pct: float,
+    entry_date_str: str | None = None,
 ) -> bool:
     """
-    過去に +10% 以上到達していて、現在 +5% 以下に低下していれば True。
+    エントリー後に +10% 以上到達していて、現在 +5% 以下に低下していれば True。
+    entry_date_str を指定すると、エントリー日以降の最高値のみを参照する。
     """
     if current_pnl_pct > 5.0:
         return False
 
-    # price_history から最高終値を取得
-    with get_connection() as conn:
-        row = fetch_one(
-            conn,
+    # price_history からエントリー以降の最高終値を取得
+    if entry_date_str:
+        sql = (
             "SELECT MAX(adj_close) as max_close FROM price_history "
-            "WHERE ticker = ? AND date <= ? AND is_holiday = 0",
-            (ticker, target_str),
+            "WHERE ticker = ? AND date >= ? AND date <= ? AND is_holiday = 0"
         )
+        params = (ticker, entry_date_str, target_str)
+    else:
+        sql = (
+            "SELECT MAX(adj_close) as max_close FROM price_history "
+            "WHERE ticker = ? AND date <= ? AND is_holiday = 0"
+        )
+        params = (ticker, target_str)
+
+    with get_connection() as conn:
+        row = fetch_one(conn, sql, params)
     if not row or not row["max_close"]:
         return False
 

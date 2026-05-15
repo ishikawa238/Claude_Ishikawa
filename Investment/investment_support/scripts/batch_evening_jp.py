@@ -19,9 +19,11 @@
 10. バッチ実行ログ更新
 """
 
+import atexit
 import sys
 import os
 import signal
+from collections.abc import Callable
 import threading
 from datetime import date, timedelta
 from pathlib import Path
@@ -103,13 +105,17 @@ def main() -> int:
         logger.warning("[夜バッチ] 既に別プロセスが実行中のためスキップします")
         return 3
 
+    # atexit でロック解放を保証（タイムアウト時の sys.exit でも実行される）
+    atexit.register(_release_lock, lock_fp)
+
     # バッチ全体タイムアウト
     timeout_event = threading.Event()
 
     def _on_timeout():
         timeout_event.set()
         logger.error(f"[夜バッチ] タイムアウト（{_BATCH_TIMEOUT_SEC}秒）に到達しました")
-        os._exit(4)
+        # os._exit ではなく sys.exit を使い、atexit ハンドラでロックを解放する
+        sys.exit(4)
 
     timer = threading.Timer(_BATCH_TIMEOUT_SEC, _on_timeout)
     timer.daemon = True
@@ -122,8 +128,40 @@ def main() -> int:
         _release_lock(lock_fp)
 
 
-def _run_batch() -> int:
+def run_manual(
+    skip_llm: bool = True,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> int:
+    """
+    手動実行用エントリーポイント。ロック取得・タイムアウト管理を含む。
+    order_server から別スレッドで呼び出される。
+    """
+    lock_fp = _acquire_lock()
+    if lock_fp is None:
+        logger.warning("[夜バッチ] 既に別プロセスが実行中のためスキップします")
+        return 3
+
+    timer = threading.Timer(_BATCH_TIMEOUT_SEC, lambda: None)
+    timer.daemon = True
+    timer.start()
+    try:
+        return _run_batch(skip_llm=skip_llm, on_progress=on_progress)
+    finally:
+        timer.cancel()
+        _release_lock(lock_fp)
+
+
+def _run_batch(
+    skip_llm: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> int:
     """夜バッチの本体処理。"""
+    _TOTAL = 8 if skip_llm else 9  # LLMスキップ時はニュース取得+通知で1ステップ減
+
+    def _progress(step: int, label: str) -> None:
+        if on_progress:
+            on_progress(step, _TOTAL, label)
+
     with get_connection() as conn:
         batch_id = start_batch_log(conn, _BATCH_TYPE, _TODAY.strftime("%Y-%m-%d"),
                                    {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
@@ -134,6 +172,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 1: 日本株 + JP インデックス 価格取得
         # ────────────────────────────────────────
+        _progress(1, "JP価格データ取得")
         logger.info("=" * 60)
         logger.info(f"[夜バッチ] 開始: {_TODAY}")
         logger.info("=" * 60)
@@ -167,6 +206,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 2: テクニカル指標計算（インデックスMA）
         # ────────────────────────────────────────
+        _progress(2, "テクニカル指標計算")
         logger.info("STEP 2: テクニカル指標計算")
         calculate_and_save_index_mas("N225", _TODAY)
         calculate_and_save_index_mas("TOPIX", _TODAY)
@@ -174,6 +214,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 3: 市場環境判定（JP のみ）
         # ────────────────────────────────────────
+        _progress(3, "市場環境判定")
         logger.info("STEP 3: 市場環境判定")
         market_env = judge_market_environment(_TODAY, market="JP")
         mode = market_env["mode"]
@@ -181,6 +222,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
         # ────────────────────────────────────────
+        _progress(4, "スクリーニング・シグナル検出")
         if failed_count == len(tickers_with_market):
             # 全銘柄の価格取得に失敗 → 古いデータでの誤シグナルを防ぐ
             logger.warning(
@@ -200,6 +242,7 @@ def _run_batch() -> int:
             candidates = detect_and_save_signals(screened, _TODAY, mode)
             signals_count = len(candidates)
 
+            _progress(5, "エントリーセット計算")
             logger.info("STEP 6: エントリーセット計算")
             entry_sets = save_entry_sets(candidates, mode)
 
@@ -216,6 +259,7 @@ def _run_batch() -> int:
         # ────────────────────────────────────────
         # STEP 7: 保有銘柄判定
         # ────────────────────────────────────────
+        _progress(6, "保有銘柄判定")
         logger.info("STEP 7: 保有銘柄判定")
         try:
             from src.moomoo_sync import sync_from_moomoo, sync_trade_results
@@ -228,9 +272,18 @@ def _run_batch() -> int:
         _update_earnings_schedule_for_holdings()
         holdings = evaluate_holdings(_TODAY)
 
+        # STEP 7.1: ポートフォリオスナップショット保存
+        try:
+            from src.portfolio_snapshot import compute_and_save_snapshot
+            snapshot = compute_and_save_snapshot("evening_jp", _TODAY)
+            logger.info(f"ポートフォリオスナップショット保存完了: 総資産 ¥{snapshot['total_assets_combined_jpy']:,.0f}")
+        except Exception as e:
+            logger.warning(f"ポートフォリオスナップショット保存スキップ: {e}")
+
         # ────────────────────────────────────────
         # STEP 7.5: ニュース取得 + LLM アドバイザー（有効時のみ）
         # ────────────────────────────────────────
+        _progress(7, "ニュース取得")
         news = []
         try:
             from src.news_fetcher import fetch_market_news, fetch_ticker_news
@@ -244,15 +297,19 @@ def _run_batch() -> int:
             logger.warning(f"ニュース取得をスキップ: {e}")
 
         llm_feedback = []
-        try:
-            from src.llm_advisor import get_llm_feedback
-            llm_feedback = get_llm_feedback(entry_sets, holdings, market_env, "evening", news=news)
-        except Exception as e:
-            logger.warning(f"LLMアドバイザーをスキップ: {e}")
+        if not skip_llm:
+            try:
+                from src.llm_advisor import get_llm_feedback
+                llm_feedback = get_llm_feedback(entry_sets, holdings, market_env, "evening", news=news)
+            except Exception as e:
+                logger.warning(f"LLMアドバイザーをスキップ: {e}")
+        else:
+            logger.info("STEP 7.5: LLMアドバイザーをスキップ（手動実行モード）")
 
         # ────────────────────────────────────────
         # STEP 8: 夜通知送信
         # ────────────────────────────────────────
+        _progress(_TOTAL, "Slack通知送信")
         logger.info("STEP 8: 夜通知送信")
         data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ma200", "ma25", "rsi14")))
         screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(entry_sets), "data_insufficient": data_insufficient}

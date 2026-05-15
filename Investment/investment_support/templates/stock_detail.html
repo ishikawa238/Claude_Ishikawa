@@ -35,12 +35,12 @@
   <div class="col-md-4">
     <div class="summary-card">
       <div class="label">スコア: {{ fscore if fscore is not none else "—" }}
-        <span class="rank-badge ms-2" style="background:{{ rank_color }}">{{ frank }}</span>
+        <span class="rank-badge {{ rank_css }} ms-2">{{ frank }}</span>
       </div>
       <div class="chart-container" style="height:200px">
         <canvas id="stockRadar"></canvas>
       </div>
-      <div class="mt-2" style="font-size:0.8rem; color:#666">{{ reason }}</div>
+      <div class="mt-2 meta-medium">{{ reason }}</div>
     </div>
   </div>
 </div>
@@ -97,7 +97,7 @@
           <td>{{ sharpe_str }}</td>
         </tr>
       </table>
-      <div style="font-size:0.7rem;color:#888;margin-top:8px">
+      <div class="meta-small" style="margin-top:8px">
         ※ 過去60日の値動きから計算した参考値です
       </div>
     </div>
@@ -123,7 +123,7 @@
           <td>{{ s.market_mode }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6" style="text-align:center;color:#999">シグナルなし</td></tr>
+        <tr><td colspan="6" class="text-center text-muted-custom">シグナルなし</td></tr>
         {% endfor %}
       </tbody>
     </table>

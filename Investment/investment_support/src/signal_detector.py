@@ -28,6 +28,7 @@ _PB_RSI_MIN       = float(_SIG["pattern_b_rsi_min"])
 _PB_RSI_MAX       = float(_SIG["pattern_b_rsi_max"])
 _PB_MA25_TOUCH    = float(_SIG["pattern_b_ma25_touch_pct"])
 _PB_LOOKBACK      = int(_SIG["pattern_b_lookback_days"])
+_PB_BOUNCE_DAYS   = int(_SIG.get("pattern_b_bounce_confirm_days", 1))
 _MAX_CANDIDATES   = int(_SIG["max_candidates_per_pattern"])
 
 
@@ -83,16 +84,21 @@ def detect_and_save_signals(
         best = _pick_best(row_a, row_b)
 
         # --- スコアベースのラベル決定 ---
-        # final_score >= 50 → candidate に昇格（既存 AND 条件を緩和）
+        # candidate には2種類ある:
+        #   strict: パターン条件をすべて満たした候補
+        #   score:  一部未達だが final_score >= 50 で昇格した候補
+        candidate_source = "strict" if best["label"] == "candidate" else None
         final_score = scores["final_score"]
         if final_score >= 50 and best["label"] != "candidate":
             best["label"] = "candidate"
+            candidate_source = "score"
         elif final_score >= 30 and best["label"] == "skip":
             best["label"] = "watch"
 
         # 警戒モード時は新規買い候補を停止（分析ログとしては watch で保存）
         if market_mode in ("caution", "full_caution") and best["label"] == "candidate":
             best["label"] = "watch"
+            candidate_source = None
 
         # スコアフィールドを行に追加
         best["trend_score"]      = scores["trend_score"]
@@ -105,6 +111,7 @@ def detect_and_save_signals(
         best["recommend_rank"]   = scores["recommend_rank"]
         best["recommend_reason"] = scores["recommend_reason"]
         best["market_mode"]      = market_mode
+        best["_candidate_source"] = candidate_source
 
         all_rows.append(best)
         if best["label"] == "candidate":
@@ -125,10 +132,13 @@ def detect_and_save_signals(
     for row in all_rows:
         row["rs_rank"] = rank_map.get(row["ticker"])
 
-    # DB 保存（500件ずつ）— _notify_extras は daily_signals に無いため除外
+    # DB 保存（500件ずつ）— _ プレフィックスは通知用の一時フィールド
     chunk = 500
     for i in range(0, len(all_rows), chunk):
-        save_rows = [{k: v for k, v in r.items() if k != "_notify_extras"} for r in all_rows[i:i + chunk]]
+        save_rows = [
+            {k: v for k, v in r.items() if not k.startswith("_")}
+            for r in all_rows[i:i + chunk]
+        ]
         with get_connection() as conn:
             upsert(conn, "daily_signals", save_rows)
 
@@ -237,6 +247,8 @@ def _eval_pattern_a(tk: dict, target_str: str, market: str) -> dict:
         "atr14":     tk.get("atr14"),
         "vol_ratio": vol_ratio,
         "rs_rank":   None,
+        "_conditions_met_count": met,
+        "_conditions_total": total,
     }
 
 
@@ -316,6 +328,8 @@ def _eval_pattern_b(tk: dict, target_str: str, market: str) -> dict:
         "atr14":     tk.get("atr14"),
         "vol_ratio": vol_ratio,
         "rs_rank":   None,
+        "_conditions_met_count": met,
+        "_conditions_total": total,
     }
 
 
@@ -326,6 +340,7 @@ def _check_pullback(
 ) -> tuple[int, int]:
     """
     直近 _PB_LOOKBACK 日間に MA25 へのタッチと反発があるか確認する。
+    反発は直近 _PB_BOUNCE_DAYS 日間連続で終値が MA25 以上であることを要求する。
     返り値: (pullback_touched: int, bounced: int)
     """
     if not ma25:
@@ -344,7 +359,6 @@ def _check_pullback(
         return 0, 0
 
     rows_asc = list(reversed(rows))  # 昇順に直す
-    today_close = float(rows_asc[-1]["adj_close"] or 0)
 
     # 直近 _PB_LOOKBACK 日以内（今日を除く）に安値が MA25 × _PB_MA25_TOUCH 以下
     touched = False
@@ -354,7 +368,14 @@ def _check_pullback(
             touched = True
             break
 
-    bounced = _flag(today_close >= ma25) if touched else 0
+    # 反発確認: 直近 _PB_BOUNCE_DAYS 日間連続で終値 >= MA25
+    bounced = 0
+    if touched:
+        tail = rows_asc[-_PB_BOUNCE_DAYS:]  # 直近N日
+        if len(tail) >= _PB_BOUNCE_DAYS and all(
+            float(r["adj_close"] or 0) >= ma25 for r in tail
+        ):
+            bounced = 1
     return _flag(touched), bounced
 
 

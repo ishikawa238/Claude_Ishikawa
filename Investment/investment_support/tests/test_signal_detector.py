@@ -4,7 +4,7 @@ signal_detector モジュールのテスト
 テスト対象:
 - detect_and_save_signals(): 市場環境モードに関わらず検出を実施すること
 - スコアリング統合: upsert に渡される行に final_score 等が含まれること
-- ラベル昇格: final_score >= 50 の watch → candidate 昇格
+- ラベル昇格: final_score >= 50 の watch → score candidate 昇格
 """
 
 import unittest
@@ -21,6 +21,7 @@ _CONFIG_MOCK = {
         "pattern_b_rsi_max": "60",
         "pattern_b_ma25_touch_pct": "0.98",
         "pattern_b_lookback_days": "5",
+        "pattern_b_bounce_confirm_days": "1",
         "max_candidates_per_pattern": "3",
     },
     "database": {"db_path": ":memory:", "backup_dir": "/tmp", "backup_retention_days": "7"},
@@ -161,7 +162,7 @@ class ScoringIntegrationTests(unittest.TestCase):
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
 
-        # MA整列・52w近傍・出来高で高スコアだが、1〜2条件不足で既存ラベルは watch
+        # MA整列・52w近傍・出来高で高スコアだが、RSI条件不足で既存ラベルは watch
         ticker = {
             "ticker": "6758", "market": "JP",
             "close": 3000.0, "adj_close": 3000.0,
@@ -169,7 +170,7 @@ class ScoringIntegrationTests(unittest.TestCase):
             "ma5_5d_ago": 2950.0, "ma25_5d_ago": 2870.0, "ma200_5d_ago": 2560.0,
             "volume": 2000000, "vol_20d_avg": 1000000,
             "high_52w": 3100.0, "low_52w": 2000.0,
-            "rsi14": 60.0, "atr14": 80.0,
+            "rsi14": 78.0, "atr14": 80.0,
             "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
         }
         result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
@@ -181,10 +182,11 @@ class ScoringIntegrationTests(unittest.TestCase):
 
         # final_score が計算されていること
         self.assertIsNotNone(row.get("final_score"))
-        # スコアが 50 以上なら candidate に昇格しているはず
+        # スコアが 50 以上なら candidate に昇格し、score 候補として区別される
         if row["final_score"] >= 50:
             self.assertEqual(row["label"], "candidate")
             self.assertEqual(len(result), 1)
+            self.assertEqual(result[0].get("_candidate_source"), "score")
 
 
 if __name__ == "__main__":

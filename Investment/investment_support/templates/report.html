@@ -6,39 +6,39 @@
 
 <!-- サマリーカード -->
 <div class="row g-3 mb-4">
-  <div class="col-6 col-md">
+  <div class="col-6 col-md animate-in stagger-1">
     <div class="summary-card">
-      <div class="label">資産総額（時価・円換算）</div>
-      <div class="value">¥{{ "{:,.0f}".format(total_market_val) }}</div>
-      <div style="font-size:0.75rem;color:#666">投入額: ¥{{ "{:,.0f}".format(total_cost) }}</div>
+      <div class="label"><span class="tip" data-tip="保有銘柄の時価合計 + moomoo口座の現金残高（円換算）">資産総額（時価・円換算）</span></div>
+      <div class="value">¥{{ "{:,.0f}".format(total_assets) }}</div>
+      <div class="meta-medium">投入額: ¥{{ "{:,.0f}".format(total_cost) }}{% if total_cash_jpy_equiv > 0 %} / 現金: ¥{{ "{:,.0f}".format(total_cash_jpy_equiv) }}{% endif %}</div>
       {% if us_count > 0 %}
-      <div style="font-size:0.7rem;color:#999;margin-top:2px">USD/JPY: {{ "{:.1f}".format(usdjpy_rate) }}</div>
+      <div class="meta-small" style="margin-top:2px">USD/JPY: {{ "{:.1f}".format(usdjpy_rate) }}</div>
       {% endif %}
     </div>
   </div>
-  <div class="col-6 col-md">
+  <div class="col-6 col-md animate-in stagger-2">
     <div class="summary-card">
       <div class="label"><span class="tip" data-tip="（現在値 − 購入価格）× 数量 の合計（円換算）">損益合計（含み損益）</span></div>
       <div class="value {{ pnl_color_cls }}">¥{{ "{:+,.0f}".format(total_pnl) }}</div>
-      <div style="font-size:0.85rem" class="{{ pnl_color_cls }}">{{ "{:+.1f}".format(total_pnl_pct) }}%</div>
+      <div class="{{ pnl_color_cls }}" style="font-size:0.85rem">{{ "{:+.1f}".format(total_pnl_pct) }}%</div>
       {{ no_price_warn|safe }}
     </div>
   </div>
-  <div class="col-6 col-md">
+  <div class="col-6 col-md animate-in stagger-3">
     <div class="summary-card">
       <div class="label">市場環境 ({{ env_date }})</div>
-      <div class="mb-1"><span class="mode-badge" style="background:{{ mode_color }}">{{ mode_label }}</span></div>
-      <div style="font-size:0.8rem">{{ jp_str|safe }}<br>{{ us_str|safe }}</div>
+      <div class="mb-1"><span class="mode-badge {{ mode_css }}">{{ mode_label }}</span></div>
+      <div class="meta-medium">{{ jp_str|safe }}<br>{{ us_str|safe }}</div>
       {{ freshness_html|safe }}
     </div>
   </div>
-  <div class="col-6 col-md">
+  <div class="col-6 col-md animate-in stagger-4">
     <div class="summary-card">
       <div class="label">保有銘柄数</div>
       <div class="value">{{ holdings|length }}<span class="fs-6 ms-2">JP:{{ jp_count }} / US:{{ us_count }}</span></div>
     </div>
   </div>
-  <div class="col-6 col-md">
+  <div class="col-6 col-md animate-in stagger-5">
     <div class="summary-card">
       <div class="label">直近7日シグナル</div>
       <div class="value">{{ candidates|length }}<span class="fs-6 ms-2">A:{{ sig_a }} / B:{{ sig_b }}</span></div>
@@ -46,22 +46,107 @@
   </div>
 </div>
 
+<!-- ポートフォリオ リスクサマリー -->
+<div class="row g-3 mb-4 animate-in" id="riskWidget" style="display:none">
+  <div class="col-4">
+    <div class="summary-card">
+      <div class="label"><span class="tip" data-tip="明日最悪ケースでポートフォリオ全体が1日にどれだけ下がりうるか（99%の確率でこの範囲）">VaR (99%, 1日)</span></div>
+      <div class="value" id="riskVar">—</div>
+      <div class="meta-small">最大想定下落率</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="summary-card">
+      <div class="label"><span class="tip" data-tip="市場全体と比べた値動きの大きさ。1.0なら市場と同程度、1.5なら1.5倍動く">Beta（市場連動度）</span></div>
+      <div class="value" id="riskBeta">—</div>
+      <div class="meta-small" id="riskBetaHint">市場との比較</div>
+    </div>
+  </div>
+  <div class="col-4">
+    <div class="summary-card">
+      <div class="label"><span class="tip" data-tip="リスクに見合ったリターンの効率。高いほど良い。0未満は損失、0〜1は低効率、1以上は良好">Sharpe Ratio</span></div>
+      <div class="value" id="riskSharpe">—</div>
+      <div class="meta-small" id="riskSharpeHint">リスク効率</div>
+    </div>
+  </div>
+</div>
+
 <!-- 今日の行動 -->
-<div class="summary-card mb-4">
-  <h2>📋 今日の行動</h2>
+<div class="summary-card mb-4 animate-in">
+  <h2>今日の行動</h2>
   {% for level, msg in action_items %}
-  {% if level == "danger" %}{% set bg = "#FFEBEE" %}
-  {% elif level == "warn" %}{% set bg = "#FFF3E0" %}
-  {% elif level == "info" %}{% set bg = "#E3F2FD" %}
-  {% else %}{% set bg = "#E8F5E9" %}{% endif %}
-  <div style="padding:8px 12px;border-radius:8px;background:{{ bg }};margin-bottom:6px;font-size:0.9rem">{{ msg }}</div>
+  {% if level == "danger" %}{% set cls = "action-danger" %}
+  {% elif level == "warn" %}{% set cls = "action-warn" %}
+  {% elif level == "info" %}{% set cls = "action-info" %}
+  {% else %}{% set cls = "action-success" %}{% endif %}
+  <div class="action-item {{ cls }}">{{ msg }}</div>
   {% endfor %}
+</div>
+
+<!-- バッチ手動実行 -->
+<div class="summary-card mb-4 animate-in">
+  <h2>バッチ手動実行</h2>
+  <p class="meta-medium mb-3">LLMアドバイザーを除外して手動でバッチを実行します。</p>
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <div class="summary-card" style="border-left:3px solid var(--color-primary)">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <strong><i data-lucide="moon" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>夜バッチ（JP）</strong>
+          <button id="btnBatchEvening" class="btn btn-primary btn-sm" onclick="triggerBatch('evening_jp')">実行</button>
+        </div>
+        <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
+          <li>JP価格データ取得（N225/TOPIX + 約3,600銘柄）</li>
+          <li>テクニカル指標計算（MA, RSI, ATR等）</li>
+          <li>市場環境判定（通常/警戒/全面警戒）</li>
+          <li>スクリーニング・シグナル検出（パターンA/B）</li>
+          <li>エントリーセット計算（価格・損切り・利確・投入額）</li>
+          <li>保有銘柄判定（損切り・利確チェック）</li>
+          <li>ニュース取得</li>
+          <li>Slack通知送信 + DBバックアップ</li>
+        </ol>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="summary-card" style="border-left:3px solid var(--color-warning)">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <strong><i data-lucide="sun" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>朝バッチ（US+統合）</strong>
+          <button id="btnBatchMorning" class="btn btn-primary btn-sm" onclick="triggerBatch('morning_all')">実行</button>
+        </div>
+        <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
+          <li>US価格データ取得（SP500/NASDAQ + 約51,000銘柄）</li>
+          <li>テクニカル指標計算（MA, RSI, ATR等）</li>
+          <li>市場環境モード確定（JP+USを統合判定）</li>
+          <li>USシグナル検出・エントリーセット計算</li>
+          <li>保有銘柄判定（JP+US全体）</li>
+          <li>ニュース取得</li>
+          <li>Slack通知送信</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+  <div id="batchProgress" style="display:none">
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <span id="batchStatus" class="meta-medium fw-bold"></span>
+      <span id="batchElapsed" class="meta-small text-muted"></span>
+    </div>
+    <div class="progress" style="height:8px">
+      <div id="batchProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+    </div>
+    <div id="batchStepLabel" class="meta-small text-muted mt-1"></div>
+  </div>
+  <div id="batchResult" class="mt-2" style="display:none"></div>
+</div>
+
+<!-- 決算カレンダー -->
+<div id="earningsCalendar" class="summary-card mb-4 animate-in" style="display:none">
+  <h2>決算カレンダー</h2>
+  <div id="earningsContent"></div>
 </div>
 
 <!-- LLM アドバイザー -->
 {% if llm_cards %}
-<div class="section">
-  <h2>🤖 AIアドバイザー意見 <span class="text-muted fs-6">({{ llm_cards[0].feedback_date }})</span></h2>
+<div class="section animate-in">
+  <h2>AIアドバイザー意見 <span class="text-muted fs-6">({{ llm_cards[0].feedback_date }})</span></h2>
   <div class="row g-3">
     {% for fb in llm_cards %}
     <div class="col-md-4">
@@ -142,14 +227,14 @@
           <td><a class="ticker-link" href="/stock/{{ h.ticker }}">{{ h.ticker }}</a></td>
           <td>{{ h.name or "" }}</td>
           <td>{{ h.cp_str }}</td>
-          <td style="{{ h.pnl_color }}">{{ h.pnl_str }}</td>
+          <td class="{{ h.pnl_css }}">{{ h.pnl_str }}{% if h.pnl_jpy_str %}<br><span class="meta-small">{{ h.pnl_jpy_str }}</span>{% endif %}</td>
           <td><span class="status-badge {{ h.status_cls }}">{{ h.status_label }}</span></td>
           <td>{{ h.sl_str }}</td>
           <td class="mobile-hide">{{ h.target_str|safe }}</td>
-          <td class="mobile-hide">{{ h.days_str }}</td>
+          <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
           <td class="detail-col">{{ h.market or "" }}</td>
           <td class="detail-col">{{ h.qty_str }}</td>
-          <td class="detail-col" style="{{ h.rsi_color }}">{{ h.rsi_str }}</td>
+          <td class="detail-col {{ h.rsi_css }}">{{ h.rsi_str }}</td>
           <td class="detail-col">{{ h.atr_str }}</td>
           <td class="detail-col">{{ h.ma25_dev_str }}</td>
           <td class="detail-col">{{ h.score_str }}</td>
@@ -157,7 +242,7 @@
           <td class="detail-col">{{ h.trend_str|safe }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="8" style="text-align:center;color:#999">保有銘柄なし</td></tr>
+        <tr><td colspan="8" class="text-center text-muted-custom">保有銘柄なし</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -167,9 +252,9 @@
 <!-- シグナル履歴 -->
 <div class="section">
   <h2>直近7日間のシグナル履歴（{{ candidates|length }}件）</h2>
-  <div class="table-responsive">
+  <div class="table-responsive table-scroll-y">
     <table class="table table-bordered table-sm table-hover bg-white">
-      <thead class="table-light">
+      <thead class="table-light sticky-thead">
         <tr>
           <th>日付</th><th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th><th class="mobile-hide">パターン</th>
           <th>エントリー</th><th>損切りSL</th><th class="mobile-hide">利確目安</th><th>推奨投入額</th>
@@ -186,64 +271,50 @@
           <td>{{ s.entry_str }}</td>
           <td>{{ s.sl_str }}</td>
           <td class="mobile-hide">{{ s.target_str }}</td>
-          <td>{{ s.amt_str }}<br><span style="font-size:0.75rem;color:#666">{{ s.qty_str }}</span></td>
+          <td>{{ s.amt_str }}<br><span class="reason-text">{{ s.qty_str }}</span></td>
         </tr>
         {% else %}
-        <tr><td colspan="9" style="text-align:center;color:#999">直近7日間のシグナルなし</td></tr>
+        <tr><td colspan="9" class="text-center text-muted-custom">直近7日間のシグナルなし</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
 
-<!-- 惜しかった銘柄 -->
-{% if near_miss_cards %}
-<div class="section">
-  <h2>👀 惜しかった銘柄（{{ near_miss_cards|length }}件）</h2>
-  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
-    通知対象にならなかった注目銘柄です。スコア不足・損切り条件・警戒モード降格などの理由が確認できます。
-    <a href="/screening?filter=watch" style="margin-left:8px">📋 Screeningで全件を見る →</a>
-  </p>
-  {% for nm in near_miss_cards %}
-  {{ nm.card_html|safe }}
-  {% endfor %}
-</div>
-{% endif %}
-
 <!-- 見送り条件リファレンス（折りたたみ） -->
 <details class="section">
-  <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">📏 見送り条件リファレンス</summary>
-  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
+  <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">見送り条件リファレンス</summary>
+  <p class="meta-medium" style="margin-bottom:12px">
     パターン検出で候補（candidate）になっても、以下の条件に該当するとシグナル通知から除外されます。
   </p>
   <div class="row g-3">
     <div class="col-md-6">
-      <div class="summary-card" style="border-left:4px solid #D32F2F">
-        <div style="font-weight:700;margin-bottom:8px">🚫 損切り幅が狭すぎる</div>
-        <table style="font-size:0.8rem;width:100%">
-          <tr><td style="color:#666;width:40%">判定</td>
+      <div class="summary-card" style="border-left:4px solid var(--color-danger)">
+        <div style="font-weight:700;margin-bottom:8px">損切り幅が狭すぎる</div>
+        <table class="meta-medium" style="width:100%">
+          <tr><td class="text-secondary-custom" style="width:40%">判定</td>
               <td>損切り幅(%) ＜ <strong>{{ skip_sl_min_pct }}%</strong></td></tr>
-          <tr><td style="color:#666">損切り幅の計算</td>
+          <tr><td class="text-secondary-custom">損切り幅の計算</td>
               <td>(終値 − SL) ÷ 終値 × 100</td></tr>
-          <tr><td style="color:#666">SLの計算</td>
+          <tr><td class="text-secondary-custom">SLの計算</td>
               <td>終値 − ATR14 × <strong>{{ "{:.0f}".format(skip_atr_mult) }}</strong></td></tr>
-          <tr><td style="color:#666">該当しやすい銘柄</td>
+          <tr><td class="text-secondary-custom">該当しやすい銘柄</td>
               <td>値動きが小さい（ATRが低い）銘柄</td></tr>
         </table>
       </div>
     </div>
     <div class="col-md-6">
-      <div class="summary-card" style="border-left:4px solid #1976D2">
-        <div style="font-weight:700;margin-bottom:8px">💰 推奨投入額の計算</div>
-        <table style="font-size:0.8rem;width:100%">
-          <tr><td style="color:#666;width:40%">計算式</td>
+      <div class="summary-card" style="border-left:4px solid var(--color-primary)">
+        <div style="font-weight:700;margin-bottom:8px">推奨投入額の計算</div>
+        <table class="meta-medium" style="width:100%">
+          <tr><td class="text-secondary-custom" style="width:40%">計算式</td>
               <td>総資金 × リスク{{ "{:.0f}".format(skip_risk_pct * 100) }}% ÷ 損切り幅(%)</td></tr>
-          <tr><td style="color:#666">投入額の上限</td>
+          <tr><td class="text-secondary-custom">投入額の上限</td>
               <td>min(総資金, 総資金÷最大保有数)</td></tr>
-          <tr><td style="color:#666">現在の設定値</td>
+          <tr><td class="text-secondary-custom">現在の設定値</td>
               <td>JP: <strong>{{ "{:,.0f}".format(skip_capital_jpy) }}円</strong> / US: <strong>${{ "{:,.0f}".format(skip_capital_usd) }}</strong> / 最大<strong>{{ skip_max_holdings }}</strong>銘柄<br>
                   → JP 1銘柄上限 <strong>{{ "{:,.0f}".format(skip_capital_jpy / skip_max_holdings) }}円</strong> / US <strong>${{ "{:,.0f}".format(skip_capital_usd / skip_max_holdings) }}</strong></td></tr>
-          <tr><td style="color:#666">取引単位</td>
+          <tr><td class="text-secondary-custom">取引単位</td>
               <td>端株対応（moomoo証券）— 1株未満でも購入可能</td></tr>
         </table>
       </div>
@@ -254,7 +325,7 @@
 <!-- スクリーニングファネル（折りたたみ） -->
 <details class="section">
   <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">スクリーニングファネル <span class="text-muted fs-6" id="funnelDate"></span></summary>
-  <p style="font-size:0.8rem;color:#666;margin-bottom:12px">
+  <p class="meta-medium" style="margin-bottom:12px">
     全銘柄がどの段階で絞り込まれたかを示します。
     <span class="tip" data-tip="ユニバース→流動性フィルタ→シグナル検出→最終候補の順に絞り込まれます">詳細</span>
   </p>
@@ -272,13 +343,13 @@
         <div class="col-6">
           <div class="summary-card">
             <div class="label">パターンA 条件充足率</div>
-            <div id="condATable" style="font-size:0.8rem">読み込み中...</div>
+            <div id="condATable" class="meta-medium">読み込み中...</div>
           </div>
         </div>
         <div class="col-6">
           <div class="summary-card">
             <div class="label">パターンB 条件充足率</div>
-            <div id="condBTable" style="font-size:0.8rem">読み込み中...</div>
+            <div id="condBTable" class="meta-medium">読み込み中...</div>
           </div>
         </div>
         <div class="col-12">
@@ -331,5 +402,138 @@
     {{ mh_sp500_ma|safe }},
     {{ mh_modes|safe }}
   );
+</script>
+<script>
+// --- Batch Manual Trigger ---
+var _batchPollingInterval = null;
+var _batchStartTime = null;
+
+function _setBtnsDisabled(v) {
+  document.getElementById('btnBatchEvening').disabled = v;
+  document.getElementById('btnBatchMorning').disabled = v;
+}
+
+function triggerBatch(batchType) {
+  var label = batchType === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
+  if (!confirm(label + ' を実行しますか？\n（LLMアドバイザーは除外されます）')) return;
+
+  var progressEl = document.getElementById('batchProgress');
+  var resultEl = document.getElementById('batchResult');
+  _setBtnsDisabled(true);
+  document.getElementById('batchStatus').textContent = '起動中...';
+  document.getElementById('batchProgressBar').style.width = '0%';
+  document.getElementById('batchStepLabel').textContent = '';
+  progressEl.style.display = 'block';
+  resultEl.style.display = 'none';
+
+  fetch('/api/batch/trigger', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({batch_type: batchType}),
+  }).then(function(resp) {
+    return resp.json().then(function(data) { return {status: resp.status, data: data}; });
+  }).then(function(r) {
+    if (r.status === 409) {
+      document.getElementById('batchStatus').textContent = label + ' 実行中...';
+      startBatchPolling(batchType);
+      return;
+    }
+    if (!r.data.success) {
+      document.getElementById('batchStatus').textContent = 'エラー: ' + (r.data.error || '起動失敗');
+      progressEl.style.display = 'none';
+      _setBtnsDisabled(false);
+      return;
+    }
+    document.getElementById('batchStatus').textContent = label + ' 実行中...';
+    _batchStartTime = Date.now();
+    startBatchPolling(batchType);
+  }).catch(function() {
+    document.getElementById('batchStatus').textContent = '通信エラー';
+    progressEl.style.display = 'none';
+    _setBtnsDisabled(false);
+  });
+}
+
+function startBatchPolling(batchType) {
+  if (_batchPollingInterval) clearInterval(_batchPollingInterval);
+  pollBatchStatus(batchType);
+  _batchPollingInterval = setInterval(function() { pollBatchStatus(batchType); }, 3000);
+}
+
+function pollBatchStatus(batchType) {
+  fetch('/api/batch/status?batch_type=' + batchType).then(function(r) { return r.json(); }).then(function(data) {
+    var statusEl = document.getElementById('batchStatus');
+    var elapsedEl = document.getElementById('batchElapsed');
+    var barEl = document.getElementById('batchProgressBar');
+    var stepEl = document.getElementById('batchStepLabel');
+    var label = batchType === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
+
+    // 経過時間
+    if (_batchStartTime && elapsedEl) {
+      var sec = Math.floor((Date.now() - _batchStartTime) / 1000);
+      var min = Math.floor(sec / 60);
+      elapsedEl.textContent = '（' + min + '分' + (sec % 60) + '秒経過）';
+    }
+
+    // プログレスバー更新
+    if (data.total_steps > 0) {
+      var pct = Math.round((data.current_step / data.total_steps) * 100);
+      barEl.style.width = pct + '%';
+      stepEl.textContent = data.current_step + ' / ' + data.total_steps + '  ' + (data.step_label || '');
+      statusEl.textContent = label + ' 実行中...';
+    }
+
+    if (data.status !== 'running') {
+      clearInterval(_batchPollingInterval);
+      _batchPollingInterval = null;
+      barEl.style.width = '100%';
+      barEl.classList.remove('progress-bar-animated');
+
+      var resultEl = document.getElementById('batchResult');
+      resultEl.style.display = 'block';
+      if (data.status === 'success') {
+        barEl.classList.remove('progress-bar-striped');
+        barEl.classList.add('bg-success');
+        resultEl.innerHTML = '<div class="action-item action-success">' + label + ' 完了しました（ページを更新中...）</div>';
+        setTimeout(function() { location.reload(); }, 1500);
+      } else if (data.status === 'partial') {
+        barEl.classList.add('bg-warning');
+        resultEl.innerHTML = '<div class="action-item action-warn">' + label + ' 部分完了（一部エラーあり・ページを更新中...）</div>';
+        setTimeout(function() { location.reload(); }, 1500);
+      } else if (data.status === 'locked') {
+        resultEl.innerHTML = '<div class="action-item action-warn">別プロセスが実行中のためスキップしました</div>';
+        document.getElementById('batchProgress').style.display = 'none';
+      } else {
+        barEl.classList.add('bg-danger');
+        resultEl.innerHTML = '<div class="action-item action-danger">' + label + ' 失敗: ' + (data.error || 'コード ' + data.return_code) + '</div>';
+      }
+      statusEl.textContent = '';
+      stepEl.textContent = '';
+      _setBtnsDisabled(false);
+    }
+  }).catch(function() {});
+}
+
+// ページ読込時: 実行中バッチがあればポーリング再開
+(function() {
+  fetch('/api/batch/status').then(function(r) { return r.json(); }).then(function(data) {
+    for (var bt in data) {
+      if (data[bt].status === 'running') {
+        _setBtnsDisabled(true);
+        var lbl = bt === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
+        document.getElementById('batchStatus').textContent = lbl + ' 実行中...';
+        document.getElementById('batchProgress').style.display = 'block';
+        if (data[bt].total_steps > 0) {
+          var pct = Math.round((data[bt].current_step / data[bt].total_steps) * 100);
+          document.getElementById('batchProgressBar').style.width = pct + '%';
+          document.getElementById('batchStepLabel').textContent = data[bt].current_step + ' / ' + data[bt].total_steps + '  ' + (data[bt].step_label || '');
+        }
+        try { _batchStartTime = new Date(data[bt].started_at.replace(' ', 'T')).getTime(); } catch(e) { _batchStartTime = Date.now(); }
+        startBatchPolling(bt);
+        break;
+      }
+    }
+  }).catch(function() {});
+})();
 </script>
 {% endblock %}

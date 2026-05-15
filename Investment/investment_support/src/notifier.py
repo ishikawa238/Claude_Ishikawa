@@ -68,6 +68,26 @@ _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
+# 条件チェックの短縮ラベル（インライン表示用）
+_COND_SHORT_LABELS: dict[str, dict[str, str]] = {
+    "A": {
+        "cond_a_ma200_rising":  "MA200↑",
+        "cond_a_ma_aligned":    "MA整列",
+        "cond_a_52w_high_near": "52w高値",
+        "cond_a_volume_surge":  "出来高",
+        "cond_a_rsi_ok":        "RSI",
+        "cond_a_above_ma25":    "MA25上",
+    },
+    "B": {
+        "cond_b_ma200_rising":  "MA200↑",
+        "cond_b_ma_aligned":    "MA整列",
+        "cond_b_pullback_touched": "MA25タッチ",
+        "cond_b_bounced":       "MA25反発",
+        "cond_b_ma25_rising":   "MA25↑",
+        "cond_b_rsi_ok":        "RSI",
+    },
+}
+
 _BATCH_TYPE_LABEL = {
     "evening_jp": "夜バッチ(JP)",
     "morning_all": "朝バッチ(全体)",
@@ -123,8 +143,15 @@ def send_morning_report(
     today_str = target_date.strftime("%Y-%m-%d (%a)")
     blocks = []
 
-    # ヘッダー
-    blocks.append(_section(f"📅 *朝の投資チェック｜{today_str}*"))
+    # ヘッダー + 市場環境（1ブロックに統合）
+    env_emoji = _MODE_EMOJI[mode]
+    env_label = _MODE_LABEL[mode]
+    jp_str = _index_str("日経", market_env.get("n225_close"), market_env.get("n225_ma25"))
+    us_str = _index_str("S&P500", market_env.get("sp500_close"), market_env.get("sp500_ma25"))
+    blocks.append(_section(
+        f"📅 *朝の投資チェック｜{today_str}* ｜ {env_emoji}{env_label}\n"
+        f"{jp_str}  /  {us_str}"
+    ))
     blocks.append(_divider())
 
     # 強制損切り（最優先）
@@ -145,10 +172,6 @@ def send_morning_report(
         for h in earnings_alerts:
             blocks.append(_earnings_alert_block(h))
         blocks.append(_divider())
-
-    # 市場環境
-    blocks.append(_market_env_block(market_env))
-    blocks.append(_divider())
 
     # 損切りライン接近
     sl_near = [h for h in holdings if h["label"] == "sl_near"]
@@ -211,9 +234,9 @@ def send_morning_report(
 
     # フッター：データ鮮度 + 詳細レポートリンク
     freshness = _get_data_freshness()
-    footer_text = f"📊 <{_REPORT_URL}|詳細レポートを見る>"
+    footer_text = f"📊 <{_REPORT_URL}|詳細レポート>"
     if freshness:
-        footer_text += f"\n{freshness}"
+        footer_text += f" ｜ {freshness}"
     blocks.append(_section(footer_text))
 
     payload = {"blocks": blocks}
@@ -252,12 +275,16 @@ def send_evening_report(
     today_str = target_date.strftime("%Y-%m-%d (%a)")
     blocks = []
 
-    # ヘッダー
-    blocks.append(_section(f"🌙 *夜の投資レポート｜{today_str}*"))
-    blocks.append(_divider())
-
-    # 市場環境（詳細）
-    blocks.append(_market_env_block(market_env, detail=True))
+    # ヘッダー + 市場環境（1ブロックに統合）
+    env_emoji = _MODE_EMOJI[mode]
+    env_label = _MODE_LABEL[mode]
+    jp_str = _index_str("日経平均", market_env.get("n225_close"), market_env.get("n225_ma25"))
+    us_str = _index_str("S&P500", market_env.get("sp500_close"), market_env.get("sp500_ma25"))
+    header_text = f"🌙 *夜の投資レポート｜{today_str}* ｜ {env_emoji}{env_label}\n{jp_str}\n{us_str}"
+    mode_det = _mode_detail(market_env)
+    if mode_det:
+        header_text += f"\n{mode_det}"
+    blocks.append(_section(header_text))
     blocks.append(_divider())
 
     # 買い候補（市場環境にかかわらずスコア付きで表示）
@@ -270,12 +297,11 @@ def send_evening_report(
     if evening_sets:
         mode_note = ""
         if mode == "caution":
-            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア減点あり\n" + _mode_detail(market_env)
+            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア減点あり"
         elif mode == "full_caution":
-            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア大幅減点あり\n" + _mode_detail(market_env)
+            mode_note = f"\n{_MODE_EMOJI[mode]} {_MODE_LABEL[mode]}中 — スコア大幅減点あり"
         blocks.append(_section(f"📈 *新規検討候補（{len(evening_sets)}件）*{mode_note}" + _data_insuf_note))
-        for i, es in enumerate(evening_sets, start=1):
-            blocks.append(_section(f"━ No.{i} ━━━━━━━━━━━━━━━━━━━━━━━━"))
+        for es in evening_sets:
             blocks.append(_entry_set_block(es, show_conditions=True))
         blocks.extend(_near_miss_section(near_misses))
         blocks.append(_divider())
@@ -338,9 +364,9 @@ def send_evening_report(
 
     # フッター：データ鮮度 + 詳細レポートリンク
     freshness = _get_data_freshness()
-    footer_text = f"📊 <{_REPORT_URL}|詳細レポートを見る>"
+    footer_text = f"📊 <{_REPORT_URL}|詳細レポート>"
     if freshness:
-        footer_text += f"\n{freshness}"
+        footer_text += f" ｜ {freshness}"
     blocks.append(_section(footer_text))
 
     payload = {"blocks": blocks}
@@ -383,26 +409,6 @@ def _llm_feedback_blocks(feedback: list[dict] | None) -> list[dict]:
     return blocks
 
 
-def _market_env_block(env: dict, detail: bool = False) -> dict:
-    mode  = env.get("mode", "caution")
-    emoji = _MODE_EMOJI[mode]
-    label = _MODE_LABEL[mode]
-
-    n225_close = env.get("n225_close")
-    n225_ma25  = env.get("n225_ma25")
-    sp500      = env.get("sp500_close")
-    sp500_ma25 = env.get("sp500_ma25")
-
-    jp_str = _index_str("日経平均", n225_close, n225_ma25)
-    us_str = _index_str("S&P500",   sp500,      sp500_ma25)
-
-    if detail:
-        text = f"{emoji} *市場環境確定値：{label}*\n{jp_str}\n{us_str}"
-    else:
-        text = f"{emoji} *市場環境：{label}*\n{jp_str}  /  {us_str}"
-
-    return _section(text)
-
 
 def _index_str(name: str, close, ma25) -> str:
     if close is None:
@@ -433,23 +439,7 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     pattern = es["pattern"]
     p_name  = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
     rs_rank = es.get("_rs_rank")
-    rank_str = f"  ランク{rs_rank}位" if rs_rank else ""
-
-    warn_str = ""
-    if es.get("_skip_reason"):
-        warn_str = f"\n🚫 {es['_skip_reason']}"
-    elif es.get("_warn_narrow"):
-        warn_str = "\n⚠️ 損切り幅が狭すぎます（ATRが小さい銘柄）"
-    elif es.get("_warn_wide"):
-        warn_str = "\n⚠️ 損切り幅が広めです（高ボラティリティ銘柄）"
-    if es.get("_warn_earnings"):
-        warn_str += f"\n📅 {es['_warn_earnings']} — エントリー判断に注意"
-    if es.get("_warn_at_capacity"):
-        remaining = es.get("_remaining_slots", 0)
-        if remaining <= 0:
-            warn_str += "\n🈵 保有枠が満杯です — 新規エントリーは既存ポジション整理後に検討してください"
-        else:
-            warn_str += f"\n📦 保有枠残り{remaining}枠"
+    rank_str = f" ランク{rs_rank}位" if rs_rank else ""
 
     entry  = es["entry_price"]
     stop   = es["stop_loss_price"]
@@ -459,7 +449,6 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     amount = es.get("recommended_amount")
     amount_str = f"{amount:,.0f}" if amount else "計算不可"
     currency   = "円" if market == "JP" else "USD"
-    # 株数換算（B-4）
     qty_str = ""
     if amount and entry > 0:
         est_qty = amount / entry
@@ -468,66 +457,84 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
         else:
             qty_str = f"（約{est_qty:.2f}株）"
 
-    # RSI・出来高倍率
-    rsi = es.get("_rsi14")
-    vol = es.get("_vol_ratio")
+    # RSI 適正範囲
     if pattern == "A":
         rsi_min = int(float(_SIG.get("pattern_a_rsi_min", 50)))
         rsi_max = int(float(_SIG.get("pattern_a_rsi_max", 70)))
     else:
         rsi_min = int(float(_SIG.get("pattern_b_rsi_min", 40)))
         rsi_max = int(float(_SIG.get("pattern_b_rsi_max", 60)))
-    metrics_parts = []
-    if rsi:
-        metrics_parts.append(f"RSI: {rsi:.0f}（適正 {rsi_min}–{rsi_max}）")
-    if vol:
-        metrics_parts.append(f"出来高: {vol:.1f}倍（平均比）")
-    metrics_str = "\n📊 " + "  ".join(metrics_parts) if metrics_parts else ""
 
-    # スコア表示
+    # スコア・判定種別
     final_score    = es.get("_final_score") or es.get("final_score")
     recommend_rank = es.get("_recommend_rank") or es.get("recommend_rank") or ""
     recommend_reason = es.get("_recommend_reason") or es.get("recommend_reason") or ""
-    score_str = ""
+    source = es.get("_candidate_source")
+    met_count = es.get("_conditions_met_count")
+    total_count = es.get("_conditions_total")
+
+    # --- 行1: ヘッダー + パターン名 ---
+    header = f"*[{pattern}] {ticker} {name} ({market}){rank_str}* — {p_name}"
+
+    # --- 行2: スコア + 判定種別 + サブスコア（1行統合）---
+    score_parts: list[str] = []
     if final_score is not None:
-        fs = int(final_score) if final_score is not None else 0
+        fs = int(final_score)
         stars = "⭐" * (fs // 20) + "☆" * (5 - fs // 20)
-        score_str = f"\n🏅 おすすめ度：{stars} *{final_score}点（{recommend_rank}ランク）*"
-        if recommend_reason:
-            score_str += f"\n💡 {recommend_reason}"
+        score_parts.append(f"🏅 {stars} *{final_score}点（{recommend_rank}ランク）*")
+    if source == "strict":
+        score_parts.append("✅全条件一致")
+    elif source == "score":
+        detail = f"（{met_count}/{total_count}）" if met_count is not None and total_count is not None else ""
+        score_parts.append(f"⚠️スコア候補{detail}")
+    sub_str = _sub_score_line(es)
+    if sub_str:
+        score_parts.append(sub_str)
+    score_line = " ｜ ".join(score_parts) if score_parts else ""
 
-    # サブスコア内訳
-    sub_score_str = _sub_score_line(es)
+    # --- 行3: 推奨理由（あれば）---
+    reason_line = f"💡 {recommend_reason}" if recommend_reason else ""
 
-    # 52週高値との距離
-    high_52w_str = _high_52w_line(es)
-
-    # MA整列の視覚表示
-    ma_align_str = _ma_alignment_line(es)
-
-    text = (
-        f"*[{pattern}] {ticker} {name} ({market}){rank_str}*\n"
-        f"パターン：{p_name}"
-        f"{score_str}"
-        f"{sub_score_str}\n"
-        f"エントリー目安：{entry:,.2f}\n"
-        f"損切りライン：{stop:,.2f}（-{sl_pct:.1f}%）→ 利確目安：{target:,.2f}（+{tg_pct:.1f}%）  リスクリワード2:1"
-        f"{warn_str}\n"
-        f"推奨投入額：{amount_str} {currency}{qty_str}"
-        f"{metrics_str}"
-        f"{high_52w_str}"
-        f"{ma_align_str}"
+    # --- 行4: エントリー → 損切 → 利確（1行統合）---
+    price_line = (
+        f"📍 エントリー: {entry:,.2f} → "
+        f"損切: {stop:,.2f}（-{sl_pct:.1f}%） → "
+        f"利確: {target:,.2f}（+{tg_pct:.1f}%） RR2:1"
     )
 
-    if show_conditions:
-        try:
-            conds = json.loads(es.get("conditions_met") or "[]")
-            if conds:
-                text += "\n" + "\n".join(conds)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # --- 行5: 推奨投入額 + テクニカル指標（1行統合）---
+    rsi = es.get("_rsi14")
+    vol = es.get("_vol_ratio")
+    metrics_parts = [f"💰 推奨: {amount_str}{currency}{qty_str}"]
+    if rsi:
+        metrics_parts.append(f"RSI: {rsi:.0f}（{rsi_min}–{rsi_max}）")
+    if vol:
+        metrics_parts.append(f"出来高: {vol:.1f}倍")
+    close = es.get("_close")
+    high_52w = es.get("_high_52w")
+    if close and high_52w and high_52w > 0:
+        dist_pct = (high_52w - close) / close * 100
+        if dist_pct <= 0:
+            metrics_parts.append("52w高値: 更新中")
+        else:
+            metrics_parts.append(f"52w高値: {dist_pct:.1f}%")
+    metrics_line = " ｜ ".join(metrics_parts)
 
-    return _section(text)
+    # --- 行6: MA整列 ---
+    ma_line = _ma_alignment_line(es)
+
+    # --- 行7: 警告（インライン統合）---
+    warn_line = _build_warn_inline(es)
+
+    # --- 行8: 条件チェック（夜通知のみ、インライン）---
+    cond_line = ""
+    if show_conditions:
+        cond_line = _conditions_met_inline(es.get("conditions_met"))
+
+    # 組み立て（空行は除外）
+    lines = [l for l in [header, score_line, reason_line, price_line,
+                          metrics_line, ma_line, warn_line, cond_line] if l]
+    return _section("\n".join(lines))
 
 
 def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
@@ -540,7 +547,6 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     pnl_pct = h["pnl_pct"]
     pnl_amt = h.get("pnl_amount")
     sl      = h["stop_loss_price"]
-    qty     = h.get("quantity") or 0
     reasons = h.get("reasons") or []
 
     label_names = {
@@ -560,16 +566,18 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
         currency = "円" if market == "JP" else "USD"
         pnl_str += f"（{pnl_amt:+,.0f}{currency}）"
 
-    text = (
-        f"{emoji} *{label_str}* | {ticker} {name} ({market})\n"
-        f"終値: {current:,.2f} ｜ 損益: {pnl_str} ｜ SL: {sl:,.2f}"
+    # 行1: ラベル + ティッカー + 終値 + 損益 + SL
+    line1 = (
+        f"{emoji} *{label_str}* ｜ {ticker} {name} ({market})"
+        f" ｜ 終値: {current:,.2f} ｜ *{pnl_str}* ｜ SL: {sl:,.2f}"
     )
 
-    # 保有日数・利確ターゲット
+    # 行2: 保有日数 + ターゲット + SL引き上げ + テクニカル + 理由
+    sub_parts: list[str] = []
+
     holding_days = h.get("holding_days")
-    detail_parts = []
     if holding_days is not None:
-        detail_parts.append(f"保有: {holding_days}日目")
+        sub_parts.append(f"保有: {holding_days}日")
 
     # 分割ターゲット表示（利確タイプI/IIの場合）
     profit_type = h.get("profit_type")
@@ -590,56 +598,30 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
                 dist = (price - current) / current * 100
                 tp_parts.append(f"{lbl} {price:,.0f}({dist:+.1f}%)")
         if tp_parts:
-            detail_parts.append(" / ".join(tp_parts))
+            sub_parts.append(" / ".join(tp_parts))
     else:
         target_price = h.get("target_price")
         if target_price and current > 0:
             target_dist_pct = (target_price - current) / current * 100
-            detail_parts.append(f"目標まで: {target_dist_pct:+.1f}%（利確目安: {target_price:,.2f}）")
-
-    if detail_parts:
-        text += "\n" + " ｜ ".join(detail_parts)
+            sub_parts.append(f"目標まで: {target_dist_pct:+.1f}%（{target_price:,.2f}）")
 
     # SL引き上げ推奨
     adj_stop = h.get("tp_adjusted_stop")
     if adj_stop and adj_stop > sl:
-        text += f"\n📋 SL引き上げ推奨: {sl:,.2f} → {adj_stop:,.2f}"
+        sub_parts.append(f"SL↑: {sl:,.0f}→{adj_stop:,.0f}")
 
-    if detail and reasons:
-        text += "\n理由: " + " / ".join(reasons)
-
-    # テクニカルスナップショット（detail のみ）
     if detail:
-        tech_str = _holding_tech_line(h, current)
-        text += tech_str
+        tech_str = _holding_tech_inline(h)
+        if tech_str:
+            sub_parts.append(tech_str)
+        if reasons:
+            sub_parts.append("理由: " + " / ".join(reasons))
 
-    return _section(text)
+    line2 = "　 " + " ｜ ".join(sub_parts) if sub_parts else ""
 
+    lines = [l for l in [line1, line2] if l]
+    return _section("\n".join(lines))
 
-def _holding_tech_line(h: dict, current_price: float) -> str:
-    """保有銘柄のテクニカル情報を1〜2行で返す。データがなければ空文字。"""
-    ma5 = h.get("tech_ma5")
-    ma25 = h.get("tech_ma25")
-    rsi14 = h.get("tech_rsi14")
-
-    parts = []
-    # MA25 との位置関係
-    if ma25 is not None and current_price > 0:
-        ma25_diff_pct = (current_price - ma25) / ma25 * 100
-        direction = "上方" if ma25_diff_pct >= 0 else "下方"
-        rsi_part = f" ｜ RSI: {rsi14:.0f}" if rsi14 is not None else ""
-        parts.append(f"📊 MA25: {ma25:,.2f}（{ma25_diff_pct:+.1f}%{direction}）{rsi_part}")
-
-    # MA5 vs MA25 のトレンド状態
-    if ma5 is not None and ma25 is not None:
-        if ma5 >= ma25:
-            parts.append("MA5↑MA25（上昇中）")
-        else:
-            parts.append("MA5↓MA25（下降中）")
-
-    if not parts:
-        return ""
-    return "\n" + "\n".join(parts)
 
 
 def _portfolio_summary(holdings: list[dict]) -> str:
@@ -734,19 +716,8 @@ def _sub_score_line(es: dict) -> str:
         parts.append(f"押し目:{b}")
     if l is not None:
         parts.append(f"流動性:{l}")
-    return "\n📈 " + " / ".join(parts)
+    return "📈 " + " / ".join(parts)
 
-
-def _high_52w_line(es: dict) -> str:
-    """52週高値との距離を表示する。データがなければ空文字。"""
-    close = es.get("_close")
-    high_52w = es.get("_high_52w")
-    if not close or not high_52w or high_52w <= 0:
-        return ""
-    distance_pct = (high_52w - close) / close * 100
-    if distance_pct <= 0:
-        return "\n📍 52w高値: 更新中"
-    return f"\n📍 52w高値まで: {distance_pct:.1f}%"
 
 
 def _ma_alignment_line(es: dict) -> str:
@@ -773,7 +744,65 @@ def _ma_alignment_line(es: dict) -> str:
         ma75 >= ma200
     )
     label = "完全整列" if is_aligned else "部分整列"
-    return f"\n📐 MA: {ma_str} ({label})"
+    return f"📐 MA: {ma_str} ({label})"
+
+
+def _build_warn_inline(es: dict) -> str:
+    """警告フラグを ｜ 区切りで1行にまとめる。警告がなければ空文字。"""
+    parts: list[str] = []
+    if es.get("_skip_reason"):
+        parts.append(f"🚫 {es['_skip_reason']}")
+    elif es.get("_warn_narrow"):
+        parts.append("⚠️ 損切り幅が狭い")
+    elif es.get("_warn_wide"):
+        parts.append("⚠️ 損切り幅が広め")
+    if es.get("_warn_earnings"):
+        parts.append(f"📅 {es['_warn_earnings']} — 注意")
+    if es.get("_warn_at_capacity"):
+        remaining = es.get("_remaining_slots", 0)
+        if remaining <= 0:
+            parts.append("🈵 保有枠満杯")
+        else:
+            parts.append(f"📦 残り{remaining}枠")
+    return " ｜ ".join(parts)
+
+
+def _conditions_met_inline(conditions_json: str | None) -> str:
+    """conditions_met JSON を1行のインライン形式に変換する。"""
+    try:
+        conds = json.loads(conditions_json or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not conds:
+        return ""
+    return " ".join(c.strip().replace(" ← 未達", "") for c in conds)
+
+
+def _conditions_check_inline(data: dict, pattern: str) -> str:
+    """条件チェックを ✅/❌ の短縮ラベルで1行にまとめる。"""
+    labels = _COND_SHORT_LABELS.get(pattern, {})
+    parts: list[str] = []
+    for col, short in labels.items():
+        val = data.get(col)
+        if val == 1:
+            parts.append(f"✅{short}")
+        elif val == 0:
+            parts.append(f"❌{short}")
+    return " ".join(parts)
+
+
+def _holding_tech_inline(h: dict) -> str:
+    """保有銘柄のテクニカル情報を短縮形で返す。データがなければ空文字。"""
+    ma5 = h.get("tech_ma5")
+    ma25 = h.get("tech_ma25")
+    rsi14 = h.get("tech_rsi14")
+    parts: list[str] = []
+    if ma5 is not None and ma25 is not None:
+        arrow = "↑" if ma5 >= ma25 else "↓"
+        parts.append(f"MA5{arrow}MA25")
+    if rsi14 is not None:
+        parts.append(f"RSI:{rsi14:.0f}")
+    return " ".join(parts)
 
 
 def _no_candidates_reason(
@@ -837,17 +866,21 @@ def _near_miss_section(near_misses: list[dict] | None) -> list[dict]:
         final_score = int(nm.get("final_score") or 0)
         nm_type = nm.get("near_miss_type", "score_short")
 
-        # 見送り理由
+        p_name = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
+
+        # 行1: ヘッダー + パターン
+        line1 = f"*{i}. [{pattern}] {ticker} {name} ({market})* — {p_name}"
+
+        # 行2: スコア + サブスコア（1行統合）
         type_label = _NEAR_MISS_TYPE_LABEL.get(nm_type)
         if nm_type == "score_short":
             gap = 50 - final_score
-            status_str = f"スコア: *{final_score}点*（あと{gap}点で候補入り）"
+            score_part = f"*{final_score}点*（あと{gap}点）"
         else:
-            status_str = f"スコア: *{final_score}点*"
+            score_part = f"*{final_score}点*"
             if type_label:
-                status_str += f"\n{type_label}"
+                score_part += f" {type_label}"
 
-        # サブスコア
         sub_parts = []
         t = nm.get("trend_score")
         a = nm.get("pattern_a_score")
@@ -862,31 +895,17 @@ def _near_miss_section(near_misses: list[dict] | None) -> list[dict]:
         if lq is not None:
             sub_parts.append(f"流動性:{int(lq)}")
         sub_str = "📈 " + " / ".join(sub_parts) if sub_parts else ""
+        line2 = f"{score_part} ｜ {sub_str}" if sub_str else score_part
 
-        # 条件チェックリスト
-        cond_labels = _NEAR_MISS_COND_LABELS.get(pattern, {})
-        cond_lines = []
-        for col, desc in cond_labels.items():
-            val = nm.get(col)
-            if val == 1:
-                cond_lines.append(f"  ✅ {desc}")
-            elif val == 0:
-                cond_lines.append(f"  ❌ {desc} ← 未達")
-        cond_str = "\n".join(cond_lines)
+        # 行3: 条件チェック（インライン）
+        line3 = _conditions_check_inline(nm, pattern)
 
+        # 行4: 理由（あれば）
         reason = nm.get("recommend_reason") or ""
-        reason_str = f"\n💡 {reason}" if reason else ""
+        line4 = f"💡 {reason}" if reason else ""
 
-        p_name = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
-        text = (
-            f"━ {i}. [{pattern}] {ticker} {name} ({market}) ━━━━━━━━━\n"
-            f"パターン：{p_name}\n"
-            f"{status_str}\n"
-            f"{sub_str}\n"
-            f"{cond_str}"
-            f"{reason_str}"
-        )
-        blocks.append(_section(text))
+        lines = [l for l in [line1, line2, line3, line4] if l]
+        blocks.append(_section("\n".join(lines)))
 
     blocks.append(_section(
         "📋 <http://127.0.0.1:5100/screening?filter=watch|Screeningで監視銘柄の全件を見る>"

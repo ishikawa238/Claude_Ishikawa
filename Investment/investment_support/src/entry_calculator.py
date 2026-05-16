@@ -134,6 +134,11 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
 
     返り値: 保存したエントリーセットのリスト（通知生成に使用）
     """
+    pause_reason = _get_trade_pause_reason(candidates)
+    if pause_reason:
+        logger.warning(f"新規エントリー停止: {pause_reason}")
+        return []
+
     open_count = _count_open_holdings()
     saved = []
     for sig in candidates:
@@ -152,6 +157,18 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
 
     logger.info(f"エントリーセット保存: {len(saved)} 件")
     return saved
+
+
+def _get_trade_pause_reason(candidates: list[dict]) -> str | None:
+    if not candidates:
+        return None
+    try:
+        from src.risk_control import get_trade_pause_reason
+        target_date = candidates[0].get("date")
+        return get_trade_pause_reason(target_date)
+    except Exception as e:
+        logger.warning(f"運用停止ルールをスキップしました: {e}")
+        return None
 
 
 # ============================================================

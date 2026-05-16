@@ -135,6 +135,9 @@ def _evening_patches(**overrides) -> list:
         "src.moomoo_sync.sync_trade_results": MagicMock(),
         "src.paper_trading.is_paper_mode_enabled": MagicMock(return_value=False),
         "src.signal_detector.fetch_near_misses": MagicMock(return_value=[]),
+        "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),
+        "src.news_fetcher.fetch_ticker_news": MagicMock(return_value=[]),
+        "src.llm_advisor.get_llm_feedback": MagicMock(return_value=[]),
     }
     defaults.update(overrides)
     return [patch(target, mock) for target, mock in defaults.items()]
@@ -151,6 +154,7 @@ def _morning_patches(**overrides) -> list:
         "scripts.batch_morning_all.fetch_all": MagicMock(return_value=[]),
         "scripts.batch_morning_all.fetch_one": MagicMock(return_value=None),
         "scripts.batch_morning_all.upsert": MagicMock(),
+        "scripts.batch_morning_all.fetch_bulk_eod": MagicMock(return_value=[]),
         "scripts.batch_morning_all.fetch_index_history": MagicMock(return_value=[]),
         "scripts.batch_morning_all.fetch_daily_yf": MagicMock(return_value=[]),
         "scripts.batch_morning_all.calculate_and_save_index_mas": MagicMock(),
@@ -170,6 +174,9 @@ def _morning_patches(**overrides) -> list:
         "src.moomoo_sync.sync_trade_results": MagicMock(),
         "src.paper_trading.is_paper_mode_enabled": MagicMock(return_value=False),
         "src.signal_detector.fetch_near_misses": MagicMock(return_value=[]),
+        "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),
+        "src.news_fetcher.fetch_ticker_news": MagicMock(return_value=[]),
+        "src.llm_advisor.get_llm_feedback": MagicMock(return_value=[]),
     }
     defaults.update(overrides)
     return [patch(target, mock) for target, mock in defaults.items()]
@@ -389,6 +396,58 @@ class RateLimitHandlingTests(unittest.TestCase):
             self.assertIn(result, (0, 1))
         finally:
             _stop_patches(patches)
+
+
+# ============================================================
+# T-1-5: 非取引日（土日）スキップ
+# ============================================================
+
+from datetime import date
+
+class WeekendSkipTests(unittest.TestCase):
+    """非取引日（土日）のスキップ動作テスト。"""
+
+    # ── 夜バッチ: 土日はスキップ（return 5） ──
+
+    def test_evening_skips_on_saturday(self):
+        """夜バッチ: 土曜日は非取引日スキップ。"""
+        saturday = date(2026, 5, 16)
+        with patch.object(_evening, "_TODAY", saturday):
+            self.assertEqual(_evening.main(), 5)
+
+    def test_evening_skips_on_sunday(self):
+        """夜バッチ: 日曜日は非取引日スキップ。"""
+        sunday = date(2026, 5, 17)
+        with patch.object(_evening, "_TODAY", sunday):
+            self.assertEqual(_evening.main(), 5)
+
+    # ── 夜バッチ: 月曜は実行する ──
+
+    def test_evening_does_not_skip_on_monday(self):
+        """夜バッチ: 月曜日はスキップしない（JP市場営業日）。"""
+        monday = date(2026, 5, 18)
+        self.assertNotIn(monday.weekday(), (5, 6))
+
+    # ── 朝バッチ: 日月はスキップ（return 5） ──
+
+    def test_morning_skips_on_sunday(self):
+        """朝バッチ: 日曜日は非取引日スキップ。"""
+        sunday = date(2026, 5, 17)
+        with patch.object(_morning, "_TODAY", sunday):
+            self.assertEqual(_morning.main(), 5)
+
+    def test_morning_skips_on_monday(self):
+        """朝バッチ: 月曜日は非取引日スキップ（US金曜データは土曜に取得済み）。"""
+        monday = date(2026, 5, 18)
+        with patch.object(_morning, "_TODAY", monday):
+            self.assertEqual(_morning.main(), 5)
+
+    # ── 朝バッチ: 土曜は実行する（US金曜クローズのデータ処理） ──
+
+    def test_morning_does_not_skip_on_saturday(self):
+        """朝バッチ: 土曜日はスキップしない（US金曜クローズデータを処理）。"""
+        saturday = date(2026, 5, 16)
+        self.assertNotIn(saturday.weekday(), (6, 0))
 
 
 if __name__ == "__main__":

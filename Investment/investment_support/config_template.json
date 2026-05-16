@@ -20,6 +20,16 @@
     "usdjpy_fallback": 150.0
   },
 
+  "investment_goal": {
+    "monthly_deposit_jpy": 10000,
+    "target_monthly_return_pct": 15.0
+  },
+
+  "risk_control": {
+    "monthly_loss_stop_pct": 6.0,
+    "max_consecutive_losses_before_pause": 3
+  },
+
   "signal": {
     "pattern_a_rsi_min": 50,
     "pattern_a_rsi_max": 70,
@@ -44,7 +54,8 @@
     "us_min_price": 5,
     "us_min_turnover": 20000000,
     "us_min_market_cap": 2000000000,
-    "min_active_days_of_30": 20
+    "min_active_days_of_30": 20,
+    "allow_unknown_market_cap": false
   },
 
   "schedule": {
@@ -81,13 +92,19 @@
 
   "_paper_mode_comment": "paper_mode を有効にすると、シグナル発生時に仮想エントリーを記録し、日次で損切り・利確を自動判定する。運用開始前の検証期間（1〜3か月）に使用する。",
   "paper_mode": {
-    "enabled": false
+    "enabled": false,
+    "entry_slippage_pct": 0.0
   },
 
   "_moomoo_comment": "moomoo セクションは任意。moomoo OpenD から保有銘柄を同期する場合のみ設定する。未設定でも holdings.csv による管理で動作する。",
   "moomoo": {
     "host": "127.0.0.1",
     "port": 11111
+  },
+
+  "_paypay_points_comment": "paypay_points セクションは任意。有効にすると、paypay_points.csv のポイント運用残高をポートフォリオに含め、Slack通知にタイミングシグナルを表示する。",
+  "paypay_points": {
+    "enabled": false
   },
 
   "_llm_comment": "llm セクションは任意。有効にすると、バッチ実行時に買い候補・保有銘柄のデータを LLM に送り、フィードバックを Slack 通知に含める。enabled を true にし、使用するプロバイダーの api_key を設定する。",

@@ -312,6 +312,7 @@ class OrderServerTestCase(unittest.TestCase):
         # get_connection をテスト用に差し替え
         cls._patches = [
             patch.object(_server_mod, "get_connection", _get_test_connection),
+            patch.object(_server_mod, "_get_usdjpy", MagicMock(return_value=150.0)),
         ]
         for p in cls._patches:
             p.start()
@@ -378,6 +379,19 @@ class OrderServerTestCase(unittest.TestCase):
         html = resp.data.decode()
         self.assertIn('href="/stock/7203"', html)
         self.assertIn('href="/stock/AAPL"', html)
+
+    # ---- /rules ----
+
+    def test_rules_returns_200(self):
+        resp = self.client.get("/rules")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_rules_contains_investment_rules(self):
+        resp = self.client.get("/rules")
+        html = resp.data.decode()
+        self.assertIn("投資ルール", html)
+        self.assertIn("月15%", html)
+        self.assertIn("1トレード損失上限", html)
 
     # ---- /stock/<ticker> ----
 

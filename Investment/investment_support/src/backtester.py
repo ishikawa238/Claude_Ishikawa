@@ -55,7 +55,9 @@ def run_backtest(
     返り値: 完了したトレードのリスト
     """
     if capital is None:
-        capital = float(_CAP["total_capital_jpy"])
+        capital_key = "total_capital_usd" if market == "US" else "total_capital_jpy"
+        capital = float(_CAP[capital_key])
+    risk_pct = float(_CAP.get("max_risk_per_trade_pct", 2.0)) / 100
 
     # 期間内の営業日（daily_signals が存在する日）を取得
     dates = _get_signal_dates(start_date, end_date, market)
@@ -154,7 +156,7 @@ def run_backtest(
             target = entry_price * (1 + stop_loss_pct / 100 * _RR_RATIO)
 
             # ポジションサイズ
-            risk_amount = equity * 0.02
+            risk_amount = equity * risk_pct
             position_size = min(
                 risk_amount / (stop_loss_pct / 100),
                 equity / _MAX_HOLDINGS,
@@ -366,7 +368,7 @@ def _get_candidates(d: str, market: str) -> list[dict]:
             f"ORDER BY final_score DESC",
             tuple(params),
         )
-    return rows
+    return [dict(r) for r in rows]
 
 
 def _get_market_mode(d: str) -> str:
@@ -383,11 +385,12 @@ def _get_market_mode(d: str) -> str:
 def _get_price(ticker: str, d: str) -> dict | None:
     """指定日の price_history を返す。"""
     with get_connection() as conn:
-        return fetch_one(
+        row = fetch_one(
             conn,
             "SELECT * FROM price_history WHERE ticker = ? AND date = ?",
             (ticker, d),
         )
+    return dict(row) if row else None
 
 
 # ============================================================

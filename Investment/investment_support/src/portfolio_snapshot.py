@@ -108,6 +108,16 @@ def compute_and_save_snapshot(batch_type: str, target_date: date) -> dict:
         usdjpy = _get_usdjpy_rate()
         total_assets_combined_jpy = total_assets_jpy + total_assets_usd * usdjpy
 
+        # PayPay ポイント運用の加算（1pt = 1円）
+        paypay_value = 0
+        if CONFIG.get("paypay_points", {}).get("enabled", False):
+            try:
+                from src.paypay_points import get_total_points_value
+                paypay_value = get_total_points_value()
+                total_assets_combined_jpy += paypay_value
+            except Exception as e:
+                logger.warning(f"PayPayポイント加算スキップ: {e}")
+
         snapshot = {
             "snapshot_date": date_str,
             "batch_type": batch_type,
@@ -124,6 +134,7 @@ def compute_and_save_snapshot(batch_type: str, target_date: date) -> dict:
             "cash_usd": cash_usd,
             "usdjpy_rate": usdjpy,
             "holdings_count": count,
+            "paypay_points_value_jpy": paypay_value,
         }
 
         # INSERT OR REPLACE（UNIQUE(snapshot_date, batch_type) で冪等）
@@ -137,8 +148,9 @@ def compute_and_save_snapshot(batch_type: str, target_date: date) -> dict:
                  total_assets_jpy, total_assets_usd,
                  total_assets_combined_jpy,
                  cash_jpy, cash_usd,
-                 usdjpy_rate, holdings_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 usdjpy_rate, holdings_count,
+                 paypay_points_value_jpy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 date_str, batch_type,
@@ -149,6 +161,7 @@ def compute_and_save_snapshot(batch_type: str, target_date: date) -> dict:
                 total_assets_combined_jpy,
                 cash_jpy, cash_usd,
                 usdjpy, count,
+                paypay_value,
             ),
         )
         conn.commit()

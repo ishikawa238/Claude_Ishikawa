@@ -29,6 +29,7 @@ _CONFIG_MOCK = {
     "slack": {"webhook_url": "https://XXXXX"},
     "jquants": {"earnings_alert_days_warning": "7", "earnings_alert_days_critical": "3"},
     "report_server": {"host": "127.0.0.1", "port": "5100"},
+    "investment_goal": {"monthly_deposit_jpy": 10000, "target_monthly_return_pct": 15.0},
 }
 
 with patch("src.config.CONFIG", _CONFIG_MOCK):
@@ -50,7 +51,7 @@ class BuildBlocksTests(unittest.TestCase):
         }
         blocks = _build_blocks(stats)
         texts = _extract_texts(blocks)
-        self.assertTrue(any("決済済みトレードはありません" in t for t in texts))
+        self.assertTrue(any("??????????????" in t for t in texts))
 
     def test_with_trades(self):
         """トレードありの場合にサマリーが含まれる"""
@@ -102,6 +103,30 @@ class BuildBlocksTests(unittest.TestCase):
         self.assertTrue(any("市場環境" in t for t in texts))
         self.assertTrue(any("シグナル統計" in t for t in texts))
         self.assertTrue(any("損切り実行" in t for t in texts))
+
+
+    def test_monthly_goal_block(self):
+        """???????????????????"""
+        stats = {
+            "year": 2026, "month": 4,
+            "total_trades": 0, "win": 0, "loss": 0,
+            "win_rate": None, "avg_pnl_pct": None,
+            "total_pnl_amount": None,
+            "best_trade": None, "worst_trade": None,
+            "trades": [],
+            "monthly_deposit_jpy": 10000,
+            "monthly_profit_jpy": 20000,
+            "monthly_return_pct": 10.0,
+            "target_monthly_return_pct": 15.0,
+            "target_profit_jpy": 30000,
+            "target_gap_jpy": -10000,
+            "target_achieved": False,
+        }
+        blocks = _build_blocks(stats)
+        texts = _extract_texts(blocks)
+        self.assertTrue(any("+10.00%" in t for t in texts))
+        self.assertTrue(any("+15.00%" in t for t in texts))
+        self.assertTrue(any("-10,000" in t for t in texts))
 
 
 class AppendSystemStatsTests(unittest.TestCase):

@@ -97,8 +97,13 @@ def _release_lock(fp) -> None:
 def main() -> int:
     """
     夜バッチ全体を実行する。
-    返り値: 0=成功 / 1=部分失敗 / 2=致命的エラー / 3=二重起動スキップ / 4=タイムアウト
+    返り値: 0=成功 / 1=部分失敗 / 2=致命的エラー / 3=二重起動スキップ / 4=タイムアウト / 5=非取引日スキップ
     """
+    # 非取引日スキップ（土日: TSE は月〜金のみ）
+    if _TODAY.weekday() in (5, 6):  # 5=Saturday, 6=Sunday
+        logger.info(f"[夜バッチ] 非取引日（{_TODAY}, {_TODAY.strftime('%A')}）のためスキップします")
+        return 5
+
     # 二重起動防止
     lock_fp = _acquire_lock()
     if lock_fp is None:
@@ -280,6 +285,22 @@ def _run_batch(
         except Exception as e:
             logger.warning(f"ポートフォリオスナップショット保存スキップ: {e}")
 
+        # STEP 7.2: PayPay ポイント運用
+        paypay_points_eval = []
+        paypay_signals = []
+        if CONFIG.get("paypay_points", {}).get("enabled", False):
+            try:
+                from src.paypay_points import (
+                    evaluate_paypay_points,
+                    generate_points_signals,
+                    sync_paypay_points_from_csv,
+                )
+                sync_paypay_points_from_csv()
+                paypay_points_eval = evaluate_paypay_points()
+                paypay_signals = generate_points_signals(_TODAY)
+            except Exception as e:
+                logger.warning(f"PayPayポイント運用処理スキップ: {e}")
+
         # ────────────────────────────────────────
         # STEP 7.5: ニュース取得 + LLM アドバイザー（有効時のみ）
         # ────────────────────────────────────────
@@ -316,7 +337,9 @@ def _run_batch(
         try:
             send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count,
                                 llm_feedback=llm_feedback, near_misses=near_misses,
-                                screening_stats=screening_stats)
+                                screening_stats=screening_stats,
+                                paypay_points=paypay_points_eval,
+                                paypay_signals=paypay_signals)
         except Exception as e:
             logger.error(f"Slack通知送信失敗: {e}", exc_info=True)
             log_error(_BATCH_TYPE, "send_evening_report", type(e).__name__, str(e))

@@ -1989,6 +1989,18 @@ _EDITABLE_SETTINGS: list[dict] = [
     {"section": "capital", "key": "usdjpy_fallback", "label": "USD/JPY フォールバック",
      "type": "float", "default": 150.0, "min": 50.0, "max": 300.0, "step": 0.1,
      "help": "為替レート取得失敗時の代替値", "group": "capital"},
+    {"section": "investment_goal", "key": "monthly_deposit_jpy", "label": "毎月の入金額（円）",
+     "type": "int", "default": 10000, "min": 0, "max": 1_000_000, "step": 1000,
+     "help": "月次レポートで入金控除後リターンを計算するために使用", "group": "investment_goal"},
+    {"section": "investment_goal", "key": "target_monthly_return_pct", "label": "月次利益目標（%）",
+     "type": "float", "default": 15.0, "min": 0.0, "max": 100.0, "step": 0.5,
+     "help": "保証ではなく検証目標として扱う", "group": "investment_goal"},
+    {"section": "risk_control", "key": "monthly_loss_stop_pct", "label": "月間損失停止ライン（%）",
+     "type": "float", "default": 6.0, "min": 0.0, "max": 50.0, "step": 0.5,
+     "help": "月間の確定損失がこの割合に達したら新規買いを停止", "group": "risk_control"},
+    {"section": "risk_control", "key": "max_consecutive_losses_before_pause", "label": "連続損失停止回数",
+     "type": "int", "default": 3, "min": 0, "max": 20, "step": 1,
+     "help": "この回数だけ損失が続いたら新規買いを停止", "group": "risk_control"},
     # --- シグナル パターンA ---
     {"section": "signal", "key": "pattern_a_rsi_min", "label": "パターンA RSI下限",
      "type": "int", "default": 50, "min": 0, "max": 100, "step": 1,
@@ -2054,19 +2066,311 @@ _EDITABLE_SETTINGS: list[dict] = [
      "type": "int", "default": 20, "min": 1, "max": 30, "step": 1,
      "help": "直近30日でこの日数以上取引がある銘柄のみ対象", "group": "screening"},
     # --- ペーパーモード ---
+    {"section": "screening", "key": "allow_unknown_market_cap", "label": "時価総額不明を許可",
+     "type": "bool", "default": False, "min": None, "max": None, "step": None,
+     "help": "無効の場合、時価総額が計算できない銘柄は除外", "group": "screening"},
     {"section": "paper_mode", "key": "enabled", "label": "ペーパーモード",
      "type": "bool", "default": False, "min": None, "max": None, "step": None,
      "help": "有効にするとシグナル発生時に仮想エントリーを記録し検証する", "group": "paper_mode"},
+    {"section": "paper_mode", "key": "entry_slippage_pct", "label": "仮想約定スリッページ（%）",
+     "type": "float", "default": 0.0, "min": 0.0, "max": 5.0, "step": 0.1,
+     "help": "翌営業日始値で約定するときに上乗せする仮想コスト", "group": "paper_mode"},
 ]
 
 _GROUP_LABELS = {
     "capital": "資金管理",
+    "investment_goal": "投資目標",
+    "risk_control": "運用停止ルール",
     "signal_a": "シグナル — パターンA（モメンタムブレイクアウト）",
     "signal_b": "シグナル — パターンB（押し目買い）",
     "signal_common": "シグナル — 共通",
     "screening": "スクリーニング",
     "paper_mode": "ペーパーモード",
 }
+
+# ============================================================
+# PayPay ポイント運用ページ
+# ============================================================
+
+# ============================================================
+# 投資ルール確認ページ
+# ============================================================
+
+@app.route("/rules")
+def rules_page():
+    """初心者向けに、システムが守る投資ルールを一覧表示する。"""
+    context = _build_rules_context()
+    return render_template("rules.html", active_page="rules", **context)
+
+
+def _build_rules_context() -> dict:
+    cap = CONFIG.get("capital", {})
+    sig = CONFIG.get("signal", {})
+    screening = CONFIG.get("screening", {})
+    goal = CONFIG.get("investment_goal", {})
+    risk = CONFIG.get("risk_control", {})
+    paper = CONFIG.get("paper_mode", {})
+
+    monthly_deposit = _cfg_float(goal, "monthly_deposit_jpy", 10_000)
+    target_return = _cfg_float(goal, "target_monthly_return_pct", 15.0)
+    risk_pct = _cfg_float(cap, "max_risk_per_trade_pct", 2.0)
+    max_holdings = _cfg_int(cap, "max_concurrent_holdings", 3)
+    rr_ratio = _cfg_float(sig, "risk_reward_ratio", 2.0)
+
+    status_cards = [
+        {"label": "毎月の入金", "value": _yen(monthly_deposit), "tone": "info"},
+        {"label": "月次利益目標", "value": _pct(target_return), "tone": "warning"},
+        {"label": "1トレード損失上限", "value": _pct(risk_pct), "tone": "danger"},
+        {"label": "同時保有上限", "value": f"{max_holdings}銘柄", "tone": "success"},
+    ]
+
+    sections = [
+        {
+            "title": "買ってよい前提",
+            "icon": "shield-check",
+            "rules": [
+                "市場環境が normal のときだけ新規買いを検討します。",
+                "警戒モードでは候補を監視に回し、全体が弱い日は新規買いを止めます。",
+                "スクリーニングは株価、売買代金、時価総額、直近30日の取引日数で足切りします。",
+                f"時価総額が不明な銘柄を通す設定: {'有効' if _cfg_bool(screening, 'allow_unknown_market_cap', False) else '無効'}",
+            ],
+        },
+        {
+            "title": "シグナル条件",
+            "icon": "activity",
+            "rules": [
+                f"パターンAは上昇トレンド、52週高値接近、出来高増、RSI {_cfg_float(sig, 'pattern_a_rsi_min', 50):.0f}-{_cfg_float(sig, 'pattern_a_rsi_max', 70):.0f} を確認します。",
+                f"パターンBは上昇トレンド中の押し目、MA25反発、RSI {_cfg_float(sig, 'pattern_b_rsi_min', 40):.0f}-{_cfg_float(sig, 'pattern_b_rsi_max', 60):.0f} を確認します。",
+                f"各パターンの通知上限は {_cfg_int(sig, 'max_candidates_per_pattern', 3)}件です。",
+            ],
+        },
+        {
+            "title": "資金管理",
+            "icon": "wallet",
+            "rules": [
+                f"総資金は日本株 {_yen(_cfg_float(cap, 'total_capital_jpy', 200000))}、米国株 {_usd(_cfg_float(cap, 'total_capital_usd', 1500))} として計算します。",
+                f"1回の失敗で失ってよい金額は資金の {_pct(risk_pct)} までです。",
+                f"同時に持つ銘柄は最大 {max_holdings}銘柄です。",
+                "損切り幅が狭すぎる、または広すぎる候補は見送ります。",
+            ],
+        },
+        {
+            "title": "出口ルール",
+            "icon": "door-open",
+            "rules": [
+                f"損切りは ATR x {_cfg_float(sig, 'atr_stop_multiplier', 2.0):.1f} を基本にします。",
+                f"利確目標は損切り幅に対して {rr_ratio:.1f}:1 のリスクリワードで置きます。",
+                "損切りと利確の両方に触れた日は、保守的に損切りを優先して検証します。",
+            ],
+        },
+        {
+            "title": "検証ルール",
+            "icon": "flask-conical",
+            "rules": [
+                f"ペーパートレードは {'有効' if _cfg_bool(paper, 'enabled', False) else '無効'} です。",
+                "シグナル当日の終値ではなく、翌営業日の始値で仮想約定します。",
+                "約定日の高値・安値では決済判定をしません。",
+                f"仮想約定のスリッページは {_pct(_cfg_float(paper, 'entry_slippage_pct', 0.0))} です。",
+            ],
+        },
+        {
+            "title": "停止ルール",
+            "icon": "octagon-alert",
+            "rules": [
+                f"月間損失が資金の {_pct(_cfg_float(risk, 'monthly_loss_stop_pct', 6.0))} に達したら新規買いを止めます。",
+                f"連続損失が {_cfg_int(risk, 'max_consecutive_losses_before_pause', 3)}回に達したら新規買いを止めます。",
+                "停止中でも記録と振り返りは続け、設定と実績を確認します。",
+            ],
+        },
+    ]
+
+    warnings = [
+        "月15%は保証ではなく、毎月の検証目標として扱います。",
+        "個別株は元本割れの可能性があります。実弾投入前にペーパートレードで期待値を確認してください。",
+    ]
+    return {"status_cards": status_cards, "sections": sections, "warnings": warnings}
+
+
+def _cfg_float(section: dict, key: str, default: float) -> float:
+    try:
+        return float(section.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _cfg_int(section: dict, key: str, default: int) -> int:
+    try:
+        return int(section.get(key, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _cfg_bool(section: dict, key: str, default: bool) -> bool:
+    value = section.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _yen(value: float) -> str:
+    return f"¥{value:,.0f}"
+
+
+def _usd(value: float) -> str:
+    return f"${value:,.0f}"
+
+
+def _pct(value: float) -> str:
+    return f"{value:.1f}%"
+
+
+@app.route("/paypay")
+def paypay_page():
+    """PayPay ポイント運用ページ"""
+    from src.paypay_points import PAYPAY_COURSES, evaluate_paypay_points, generate_points_signals
+
+    points = []
+    signals = []
+    try:
+        points = evaluate_paypay_points()
+        signals = generate_points_signals(date.today())
+    except Exception as e:
+        logger.warning(f"PayPayポイント評価エラー: {e}")
+
+    # シグナルをコースキーで引けるように dict 化
+    signal_map = {s["course"]: s for s in signals}
+
+    total_current = sum(p["current_points"] for p in points)
+    total_invested = sum(p["invested_points"] for p in points)
+    total_return = total_current - total_invested
+    total_pct = (total_return / total_invested * 100) if total_invested > 0 else 0.0
+
+    # 利用可能なコース一覧（新規追加フォーム用）
+    available_courses = [
+        {"key": k, "name": v["name"]}
+        for k, v in PAYPAY_COURSES.items()
+    ]
+
+    return render_template(
+        "paypay.html",
+        active_page="paypay",
+        points=points,
+        signal_map=signal_map,
+        total_current=total_current,
+        total_invested=total_invested,
+        total_return=total_return,
+        total_pct=total_pct,
+        available_courses=available_courses,
+    )
+
+
+@app.route("/api/paypay-points", methods=["GET"])
+def api_paypay_points_get():
+    """PayPay ポイント運用の全コースデータを返す"""
+    from src.paypay_points import PAYPAY_COURSES, evaluate_paypay_points
+    try:
+        points = evaluate_paypay_points()
+        available = [{"key": k, "name": v["name"]} for k, v in PAYPAY_COURSES.items()]
+        return jsonify({"success": True, "points": points, "available_courses": available})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/paypay-points", methods=["POST"])
+def api_paypay_points_post():
+    """PayPay ポイント運用の残高を更新する（CSV を書き換え → DB 同期）"""
+    import csv
+    from src.paypay_points import PAYPAY_COURSES, sync_paypay_points_from_csv
+
+    data = request.get_json()
+    if not data or "courses" not in data:
+        return jsonify({"success": False, "error": "courses が必要です"}), 400
+
+    courses = data["courses"]
+    errors = []
+    valid_rows = []
+
+    for c in courses:
+        course_key = c.get("course", "").strip()
+        if not course_key:
+            continue
+        if course_key not in PAYPAY_COURSES:
+            errors.append(f"不明なコース: {course_key}")
+            continue
+        try:
+            invested = int(c.get("invested_points", 0))
+            current = int(c.get("current_points", 0))
+        except (ValueError, TypeError):
+            errors.append(f"{course_key}: ポイント値が不正です")
+            continue
+        if invested < 0 or current < 0:
+            errors.append(f"{course_key}: ポイントは0以上にしてください")
+            continue
+        last_updated = c.get("last_updated", "").strip() or date.today().isoformat()
+        valid_rows.append({
+            "course": course_key,
+            "invested_points": invested,
+            "current_points": current,
+            "last_updated": last_updated,
+        })
+
+    if errors:
+        return jsonify({"success": False, "error": "バリデーションエラー", "details": errors}), 400
+
+    # CSV に書き出し
+    csv_path = _PROJECT_ROOT / "paypay_points.csv"
+    try:
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["course", "invested_points", "current_points", "last_updated"])
+            writer.writeheader()
+            writer.writerows(valid_rows)
+        # DB に同期
+        count = sync_paypay_points_from_csv()
+        return jsonify({"success": True, "updated": count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/paypay-points/delete", methods=["POST"])
+def api_paypay_points_delete():
+    """指定コースを削除する（CSV から除去 → DB 同期）"""
+    import csv
+    from src.paypay_points import sync_paypay_points_from_csv
+
+    data = request.get_json()
+    course_key = data.get("course", "").strip() if data else ""
+    if not course_key:
+        return jsonify({"success": False, "error": "course が必要です"}), 400
+
+    csv_path = _PROJECT_ROOT / "paypay_points.csv"
+    # 既存 CSV を読み込んで指定コースを除外して書き戻す
+    remaining = []
+    if csv_path.exists():
+        with open(csv_path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if row.get("course", "").strip() != course_key:
+                    remaining.append(row)
+    try:
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["course", "invested_points", "current_points", "last_updated"])
+            writer.writeheader()
+            writer.writerows(remaining)
+
+        # DB からも削除
+        with get_connection() as conn:
+            conn.execute("DELETE FROM paypay_points WHERE course = ?", (course_key,))
+            conn.commit()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# 設定ページ
+# ============================================================
 
 _CONFIG_PATH = _PROJECT_ROOT / "config.json"
 
@@ -2325,6 +2629,7 @@ def main():
     logger.info("  /report       - メインダッシュボード")
     logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
+    logger.info("  /paypay       - PayPayポイント運用")
     logger.info("  /settings     - 設定")
     logger.info("  /stock/<ticker> - 個別銘柄詳細")
     logger.info("  Ctrl+C で停止")

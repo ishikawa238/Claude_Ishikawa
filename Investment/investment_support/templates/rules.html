@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Investment Rules{% endblock %}
+
+{% block head_extra %}
+<style>
+.rules-page .rule-card { height: 100%; border-top: 3px solid var(--color-primary); }
+.rules-page .rule-icon { color: var(--color-primary); }
+.rules-page .rule-list { margin: 0; padding-left: 1.2rem; color: var(--text-secondary); }
+.rules-page .rule-list li { margin-bottom: 0.55rem; }
+.rules-page .goal-card { border-left: 3px solid var(--color-info); }
+.rules-page .tone-warning { border-left-color: var(--color-warning); }
+.rules-page .tone-danger { border-left-color: var(--color-danger); }
+.rules-page .tone-success { border-left-color: var(--color-success); }
+.rules-page .warning-band {
+  border: 1px solid var(--color-warning-light);
+  border-left: 3px solid var(--color-warning);
+  background: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rules-page">
+  <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
+    <div>
+      <h1 class="h4 mb-1">投資ルール</h1>
+      <div class="meta-medium">毎月1万円を入金し、月15%を検証目標として追うための運用ルールです。</div>
+    </div>
+    <a class="btn btn-outline-primary btn-sm" href="/settings">
+      <i data-lucide="settings" style="width:16px;height:16px;vertical-align:-3px;margin-right:4px"></i>設定
+    </a>
+  </div>
+
+  <div class="row g-3 mb-4">
+    {% for card in status_cards %}
+    <div class="col-6 col-md-3">
+      <div class="summary-card goal-card tone-{{ card.tone }}">
+        <div class="label">{{ card.label }}</div>
+        <div class="value">{{ card.value }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="warning-band mb-4">
+    {% for warning in warnings %}
+    <div class="d-flex gap-2 align-items-start {% if not loop.last %}mb-2{% endif %}">
+      <i data-lucide="triangle-alert" style="width:16px;height:16px;min-width:16px;margin-top:3px;color:var(--color-warning)"></i>
+      <div>{{ warning }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="row g-3">
+    {% for section in sections %}
+    <div class="col-md-6">
+      <div class="summary-card rule-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="rule-icon" data-lucide="{{ section.icon }}" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">{{ section.title }}</h2>
+        </div>
+        <ol class="rule-list">
+          {% for rule in section.rules %}
+          <li>{{ rule }}</li>
+          {% endfor %}
+        </ol>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

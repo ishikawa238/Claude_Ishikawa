@@ -29,7 +29,7 @@ _CONFIG_MOCK = {
     },
     "database": {"db_path": ":memory:", "backup_dir": "/tmp", "backup_retention_days": "7"},
     "slack": {"webhook_url": "https://XXXXX"},
-    "paper_mode": {"enabled": True},
+    "paper_mode": {"enabled": True, "entry_slippage_pct": 0.0},
 }
 
 # paper_trading は data_store 経由で DB にアクセスするため、
@@ -51,6 +51,9 @@ def _setup_test_db():
             market           TEXT    NOT NULL,
             pattern          TEXT,
             entry_price      REAL    NOT NULL,
+            planned_entry_price REAL,
+            actual_entry_date DATE,
+            actual_entry_price REAL,
             stop_loss_price  REAL    NOT NULL,
             target_price     REAL    NOT NULL,
             position_size    REAL,
@@ -59,6 +62,8 @@ def _setup_test_db():
             exit_reason      TEXT,
             pnl_pct          REAL,
             pnl_amount       REAL,
+            is_filled        INTEGER NOT NULL DEFAULT 0,
+            entry_slippage_pct REAL NOT NULL DEFAULT 0,
             status           TEXT    NOT NULL DEFAULT 'open',
             created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -176,6 +181,8 @@ class RecordPaperEntriesTests(ConfigPatchMixin, unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["ticker"], "7203.TSE")
         self.assertIsNotNone(result[0]["id"])
+        self.assertEqual(result[0]["is_filled"], 0)
+        self.assertIsNone(result[0]["actual_entry_date"])
 
     def test_skip_reason_not_recorded(self):
         """_skip_reason がある場合は記録しない"""
@@ -215,19 +222,21 @@ class UpdatePaperTradesTests(ConfigPatchMixin, unittest.TestCase):
         _test_conn.execute(
             "INSERT INTO paper_trades "
             "(signal_date, ticker, name, market, pattern, entry_price, "
-            " stop_loss_price, target_price, position_size, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " planned_entry_price, actual_entry_date, actual_entry_price, "
+            " stop_loss_price, target_price, position_size, is_filled, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("2026-04-28", ticker, "テスト", "JP", "A",
-             entry_price, stop_loss, target, 50000, "open"),
+             entry_price, entry_price, "2026-04-29", entry_price,
+             stop_loss, target, 50000, 1, "open"),
         )
         _test_conn.commit()
 
-    def _insert_price(self, ticker, date_str, high, low, close):
+    def _insert_price(self, ticker, date_str, high, low, close, open_price=None):
         _test_conn.execute(
             "INSERT INTO price_history "
             "(ticker, date, open, high, low, close, adj_close, volume, is_holiday) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ticker, date_str, close, high, low, close, close, 100000, 0),
+            (ticker, date_str, open_price if open_price is not None else close, high, low, close, close, 100000, 0),
         )
         _test_conn.commit()
 
@@ -263,6 +272,34 @@ class UpdatePaperTradesTests(ConfigPatchMixin, unittest.TestCase):
         result = update_paper_trades(date(2026, 4, 30))
         self.assertEqual(len(result["closed"]), 0)
         self.assertEqual(len(result["open"]), 1)
+
+    def test_recorded_trade_not_filled_on_signal_day(self):
+        """シグナル当日は翌営業日始値がないため約定も決済もしない"""
+        record_paper_entries([_make_entry_set()])
+        self._insert_price("7203.TSE", "2026-04-30", high=3000, low=2200, close=2500)
+
+        from datetime import date
+        result = update_paper_trades(date(2026, 4, 30))
+        self.assertEqual(len(result["closed"]), 0)
+        self.assertEqual(len(result["open"]), 1)
+        self.assertEqual(get_paper_trade_summary()["pending"], 1)
+
+    def test_pending_trade_fills_next_day_and_skips_exit_on_fill_day(self):
+        """翌営業日の始値で約定し、その日はSL/TP判定をしない"""
+        record_paper_entries([_make_entry_set()])
+        self._insert_price("7203.TSE", "2026-05-01", high=3100, low=2200, close=3000, open_price=2600)
+
+        from datetime import date
+        result = update_paper_trades(date(2026, 5, 1))
+        self.assertEqual(len(result["closed"]), 0)
+        self.assertEqual(len(result["open"]), 1)
+        self.assertEqual(result["open"][0]["actual_entry_date"], "2026-05-01")
+        self.assertEqual(result["open"][0]["entry_price"], 2600.0)
+
+        self._insert_price("7203.TSE", "2026-05-02", high=3050, low=2600, close=3020)
+        result = update_paper_trades(date(2026, 5, 2))
+        self.assertEqual(len(result["closed"]), 1)
+        self.assertEqual(result["closed"][0]["exit_reason"], "take_profit")
 
     def test_no_open_trades(self):
         """オープンポジションがない場合"""

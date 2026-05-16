@@ -57,12 +57,14 @@ def aggregate_monthly(year: int, month: int) -> dict:
             "ORDER BY actual_exit_date",
             (month_start, month_end),
         )
+        goal_stats = _aggregate_monthly_goal(conn, month_start, month_end)
 
     rows = [dict(r) for r in trades]
+    base = {"year": year, "month": month, **goal_stats}
     total = len(rows)
     if total == 0:
         return {
-            "year": year, "month": month,
+            **base,
             "total_trades": 0,
             "win": 0, "loss": 0,
             "win_rate": None,
@@ -87,8 +89,7 @@ def aggregate_monthly(year: int, month: int) -> dict:
     worst_row = min(rows, key=lambda r: r["pnl_pct"] or 999)
 
     return {
-        "year":             year,
-        "month":            month,
+        **base,
         "total_trades":     total,
         "win":              len(wins),
         "loss":             len(losses),
@@ -98,6 +99,60 @@ def aggregate_monthly(year: int, month: int) -> dict:
         "best_trade":       {"ticker": best_row["ticker"],  "pnl_pct": best_row["pnl_pct"]},
         "worst_trade":      {"ticker": worst_row["ticker"], "pnl_pct": worst_row["pnl_pct"]},
         "trades":           rows,
+    }
+
+
+def _aggregate_monthly_goal(conn, month_start: str, month_end: str) -> dict:
+    """portfolio_snapshot から、入金控除後の月次リターンを計算する。"""
+    goal_cfg = CONFIG.get("investment_goal", {})
+    monthly_deposit = _to_float(goal_cfg.get("monthly_deposit_jpy", 10_000), 0.0)
+    target_pct = _to_float(goal_cfg.get("target_monthly_return_pct", 15.0), 15.0)
+
+    try:
+        first = fetch_one(
+            conn,
+            "SELECT total_assets_combined_jpy FROM portfolio_snapshot "
+            "WHERE snapshot_date >= ? AND snapshot_date < ? "
+            "ORDER BY snapshot_date ASC, created_at ASC LIMIT 1",
+            (month_start, month_end),
+        )
+        last = fetch_one(
+            conn,
+            "SELECT total_assets_combined_jpy FROM portfolio_snapshot "
+            "WHERE snapshot_date >= ? AND snapshot_date < ? "
+            "ORDER BY snapshot_date DESC, created_at DESC LIMIT 1",
+            (month_start, month_end),
+        )
+    except Exception as e:
+        logger.warning(f"月次目標集計をスキップしました: {e}")
+        first = None
+        last = None
+
+    beginning = _to_float(first["total_assets_combined_jpy"], None) if first else None
+    ending = _to_float(last["total_assets_combined_jpy"], None) if last else None
+
+    profit = None
+    return_pct = None
+    target_profit = None
+    target_gap = None
+    achieved = None
+    if beginning is not None and ending is not None and beginning > 0:
+        profit = ending - beginning - monthly_deposit
+        return_pct = profit / beginning * 100
+        target_profit = beginning * target_pct / 100
+        target_gap = profit - target_profit
+        achieved = return_pct >= target_pct
+
+    return {
+        "beginning_assets_jpy": round(beginning, 0) if beginning is not None else None,
+        "ending_assets_jpy": round(ending, 0) if ending is not None else None,
+        "monthly_deposit_jpy": round(monthly_deposit, 0),
+        "monthly_profit_jpy": round(profit, 0) if profit is not None else None,
+        "monthly_return_pct": round(return_pct, 2) if return_pct is not None else None,
+        "target_monthly_return_pct": round(target_pct, 2),
+        "target_profit_jpy": round(target_profit, 0) if target_profit is not None else None,
+        "target_gap_jpy": round(target_gap, 0) if target_gap is not None else None,
+        "target_achieved": achieved,
     }
 
 
@@ -226,9 +281,9 @@ def aggregate_system_stats(year: int, month: int) -> dict:
         sl_total_loss = sl_savings_row["total_loss"] if sl_savings_row and sl_savings_row["total_loss"] else 0
 
     # コスト比率（月額コスト ÷ 総資金）
-    capital_jpy = CONFIG.get("capital", {}).get("total_capital_jpy", 0)
-    capital_usd = CONFIG.get("capital", {}).get("total_capital_usd", 0)
-    usdjpy = CONFIG.get("capital", {}).get("usdjpy_fallback", 150.0)
+    capital_jpy = _to_float(CONFIG.get("capital", {}).get("total_capital_jpy", 0), 0)
+    capital_usd = _to_float(CONFIG.get("capital", {}).get("total_capital_usd", 0), 0)
+    usdjpy = _to_float(CONFIG.get("capital", {}).get("usdjpy_fallback", 150.0), 150.0)
     total_capital = capital_jpy + capital_usd * usdjpy
     monthly_cost = 19.99 * usdjpy  # EODHD $19.99/月
     cost_ratio = round(monthly_cost / total_capital * 100, 2) if total_capital > 0 else None
@@ -267,14 +322,35 @@ def send_monthly_report(year: int, month: int) -> None:
         logger.warning("月次レポートの Slack 送信に失敗しました。")
 
 
+def _to_float(value, default: float | None) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _fmt_yen(value) -> str:
+    number = _to_float(value, None)
+    if number is None:
+        return "???"
+    return f"{number:+,.0f}?" if number < 0 else f"{number:,.0f}?"
+
+
+def _fmt_pct(value) -> str:
+    number = _to_float(value, None)
+    if number is None:
+        return "???"
+    return f"{number:+.2f}%"
+
+
 def _build_blocks(stats: dict, sys_stats: dict | None = None) -> list:
-    year  = stats["year"]
+    year = stats["year"]
     month = stats["month"]
 
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"📊 {year}年{month}月 月次レポート"}
+            "text": {"type": "plain_text", "text": f"?? {year}?{month}? ??????"},
         },
         {"type": "divider"},
     ]
@@ -282,12 +358,14 @@ def _build_blocks(stats: dict, sys_stats: dict | None = None) -> list:
     if stats["total_trades"] == 0:
         blocks.append({
             "type": "section",
-            "text": {"type": "mrkdwn", "text": "今月の決済済みトレードはありません。"}
+            "text": {"type": "mrkdwn", "text": "??????????????????"},
         })
     else:
         _append_trade_summary(blocks, stats)
 
-    # ── システム運用統計 ──────────────────────────
+    if stats.get("target_monthly_return_pct") is not None:
+        _append_monthly_goal(blocks, stats)
+
     if sys_stats:
         _append_system_stats(blocks, sys_stats)
 
@@ -339,6 +417,47 @@ def _append_trade_summary(blocks: list, stats: dict) -> None:
             "type": "section",
             "text": {"type": "mrkdwn", "text": "*決済明細*\n" + "\n".join(lines)}
         })
+
+
+def _append_monthly_goal(blocks: list, stats: dict) -> None:
+    """月15%目標と毎月入金を踏まえた実績を追加する。"""
+    return_pct = stats.get("monthly_return_pct")
+    profit = stats.get("monthly_profit_jpy")
+    target_pct = stats.get("target_monthly_return_pct")
+    target_profit = stats.get("target_profit_jpy")
+    target_gap = stats.get("target_gap_jpy")
+    achieved = stats.get("target_achieved")
+
+    if return_pct is None:
+        status = "スナップショット不足"
+        return_text = "未計算"
+        target_text = f"目標 {_fmt_pct(target_pct)}"
+        gap_text = "未計算"
+    else:
+        status = "達成" if achieved else "未達"
+        return_text = _fmt_pct(return_pct)
+        target_text = _fmt_yen(target_profit)
+        gap_text = _fmt_yen(target_gap)
+
+    blocks.append({"type": "divider"})
+    blocks.append({
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": "*月次目標チェック*\n月15%は保証ではなく、入金を除いた実績を確認する検証目標です。",
+        },
+    })
+    blocks.append({
+        "type": "section",
+        "fields": [
+            {"type": "mrkdwn", "text": f"*入金控除後リターン*\n{return_text}"},
+            {"type": "mrkdwn", "text": f"*判定*\n{status}"},
+            {"type": "mrkdwn", "text": f"*入金額*\n{_fmt_yen(stats.get('monthly_deposit_jpy'))}"},
+            {"type": "mrkdwn", "text": f"*入金控除後損益*\n{_fmt_yen(profit)}"},
+            {"type": "mrkdwn", "text": f"*目標利益 ({_fmt_pct(target_pct)})*\n{target_text}"},
+            {"type": "mrkdwn", "text": f"*目標との差*\n{gap_text}"},
+        ],
+    })
 
 
 def _append_system_stats(blocks: list, ss: dict) -> None:

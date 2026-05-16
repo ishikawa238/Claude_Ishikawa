@@ -16,6 +16,15 @@ from src.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 _SC = CONFIG["screening"]
 _JP_MIN_PRICE      = float(_SC["jp_min_price"])
 _JP_MIN_TURNOVER   = float(_SC["jp_min_turnover"])
@@ -24,6 +33,7 @@ _US_MIN_PRICE      = float(_SC["us_min_price"])
 _US_MIN_TURNOVER   = float(_SC["us_min_turnover"])
 _US_MIN_MARKET_CAP = float(_SC["us_min_market_cap"])
 _MIN_ACTIVE_DAYS   = int(_SC["min_active_days_of_30"])
+_ALLOW_UNKNOWN_MARKET_CAP = _as_bool(_SC.get("allow_unknown_market_cap", False))
 
 
 # ============================================================
@@ -157,9 +167,14 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
     min_price      = _JP_MIN_PRICE      if market == "JP" else _US_MIN_PRICE
     min_turnover   = _JP_MIN_TURNOVER   if market == "JP" else _US_MIN_TURNOVER
     min_market_cap = _JP_MIN_MARKET_CAP if market == "JP" else _US_MIN_MARKET_CAP
+    market_cap_condition = (
+        "(t.est_market_cap IS NULL OR t.est_market_cap >= ?)"
+        if _ALLOW_UNKNOWN_MARKET_CAP
+        else "t.est_market_cap >= ?"
+    )
 
     # technical_snapshot と universe_master を結合してフィルタ適用
-    sql = """
+    sql = f"""
         SELECT
             t.ticker, t.date, u.market, u.name,
             t.ma5, t.ma25, t.ma75, t.ma200,
@@ -180,7 +195,7 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
             AND t.ma200       IS NOT NULL
             AND p.adj_close   >= ?
             AND t.est_turnover   >= ?
-            AND (t.est_market_cap IS NULL OR t.est_market_cap >= ?)
+            AND {market_cap_condition}
     """
     # est_market_cap が NULL の場合はフィルタをパスさせる
     # （発行済株式数が取得できない銘柄への対応）

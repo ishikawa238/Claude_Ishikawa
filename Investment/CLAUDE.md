@@ -81,6 +81,7 @@ External APIs → price_history / index_snapshot (SQLite)
 | `llm_advisor.py` | Sends stock data + news to OpenAI/Anthropic/Gemini APIs and returns feedback for Slack notifications (config: `llm` section) |
 | `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
 | `portfolio_snapshot.py` | Computes and persists total assets (holdings value + moomoo cash) per batch run → `portfolio_snapshot` |
+| `paypay_points.py` | PayPay point investment tracking — CSV sync, return calculation, timing signals based on MA25 (config: `paypay_points`) |
 | `report_generator.py` | Monthly Slack report |
 | `logger.py` | Logging setup — use `get_logger(__name__)` in every module; outputs to console + `logs/batch_YYYYMMDD.log` |
 
@@ -89,7 +90,7 @@ External APIs → price_history / index_snapshot (SQLite)
 - `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → portfolio snapshot → LLM advisor → Slack → DB backup
 - `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → portfolio snapshot → LLM advisor → Slack
 - `batch_monthly.py` — Universe master refresh + J-Quants fundamentals + monthly Slack report
-- `order_server.py` — Flask server that serves the daily report page (`/report`), settings page (`/settings`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. Additional API endpoints: `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
+- `order_server.py` — Flask server that serves the daily report page (`/report`), settings page (`/settings`), PayPay points page (`/paypay`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. PayPay page allows viewing/editing point balances via `GET/POST /api/paypay-points`. Additional API endpoints: `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
 
 ### Database (`data/investment.db`)
 
@@ -104,7 +105,8 @@ SQLite with WAL mode. Tables:
 - `trade_signal_log` — notified entry sets (entry/stop/target/amount)
 - `take_profit_targets` — staged take-profit targets per holding (T1/T2/T3 prices, reach status, adjusted stop-loss)
 - `trade_result_log` — trade outcomes (moomoo auto-sync or dashboard form or CLI)
-- `portfolio_snapshot` — total assets snapshot per batch run (holdings value, moomoo cash, unrealized P&L, USD/JPY rate)
+- `portfolio_snapshot` — total assets snapshot per batch run (holdings value, moomoo cash, PayPay points, unrealized P&L, USD/JPY rate)
+- `paypay_points` — PayPay point investment balances per course (synced from `paypay_points.csv`)
 - `earnings_schedule` — JP earnings announcement dates from J-Quants
 - `fundamentals_snapshot` — JP financial data from J-Quants
 - `llm_feedback_log` — LLM advisor responses (date, provider, model, tokens, response text)

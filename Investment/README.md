@@ -13,6 +13,7 @@
 - 市場全体のトレンドを判定し、警戒時は新規買いを自動停止
 - 朝（07:30）と夜（20:30）の2回、Slackで通知
 - Webダッシュボード（`http://127.0.0.1:5100/report`）で保有状況・シグナル履歴・チャートを確認
+- 初心者向けルール確認ダッシュボード（`http://127.0.0.1:5100/rules`）で、買ってよい条件・資金管理・出口・検証・停止ルールを確認
 - 朝・夜バッチで資産総額（保有時価合計）を自動スナップショットし、ダッシュボードに表示
 - ポートフォリオ全体のリスク指標（VaR/Beta/Sharpe）をダッシュボードに表示
 - 保有銘柄の決算カレンダー（今後30日）を自動表示、3日以内は警告色で強調
@@ -20,7 +21,11 @@
 - ダークモード対応（OS設定自動検出 + 手動切替トグル）
 - スクリーニングファネルで全銘柄→最終候補への絞り込み過程・各条件の充足率を可視化
 - Webダッシュボード上で資金管理・シグナル・スクリーニングの各パラメータを変更可能（`http://127.0.0.1:5100/settings`）
+- 月次レポートで毎月の入金額を控除したリターンと、月15%目標との差を確認
+- 月間損失・連続損失が設定ラインに達した場合、新規エントリーを自動停止
+- ペーパートレードはシグナル当日の終値ではなく、翌営業日の始値で仮想約定し、約定当日は利確・損切り判定を行わない
 - LLMアドバイザー（任意）：検討候補・保有銘柄のデータに加え、直近の市場ニュースをChatGPT・Claude・Geminiに自動送信し、フィードバックをSlack通知に表示
+- PayPayポイント運用トラッキング（任意）：コース別のポイント残高・損益率をSlack通知に表示、S&P 500/NASDAQのMA25に基づく追加・引き出しタイミングシグナルを提供。ダッシュボード（`http://127.0.0.1:5100/paypay`）から残高の確認・編集が可能
 
 ## セットアップ
 
@@ -48,6 +53,26 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 | OpenAI（任意） | LLMアドバイザー（ChatGPT） | `llm.openai.api_key` | 従量制（月額約$0.15） |
 | Anthropic（任意） | LLMアドバイザー（Claude） | `llm.anthropic.api_key` | 従量制（月額約$1.50） |
 | Google Gemini（任意） | LLMアドバイザー（Gemini） | `llm.gemini.api_key` | 無料枠あり（月額約$0.05） |
+
+### 目標・停止ルールの主要設定
+
+`config.json` の以下を、実際の運用前に確認してください。
+
+```json
+"investment_goal": {
+  "monthly_deposit_jpy": 10000,
+  "target_monthly_return_pct": 15.0
+},
+"risk_control": {
+  "monthly_loss_stop_pct": 6.0,
+  "max_consecutive_losses_before_pause": 3
+}
+```
+
+- `monthly_deposit_jpy`: 毎月追加する入金額。月次レポートではこの入金分を除いてリターンを計算する
+- `target_monthly_return_pct`: 検証目標。利益保証ではなく、実績との差を確認するための基準
+- `monthly_loss_stop_pct`: 月間の確定損失がこの割合に達したら新規買いを停止する
+- `max_consecutive_losses_before_pause`: 損失トレードが連続したときの停止ライン
 
 ## 日常の使い方
 
@@ -93,6 +118,25 @@ AAPL,Apple Inc,US,185.5,2025-01-10,5,170.0,
 
 - `stop_loss_price` を省略すると `entry_price × 0.92`（-8%）が自動設定される
 - `quantity` を省略すると 1 として計算される
+
+### PayPayポイント運用のトラッキング
+
+`config.json` で `"paypay_points": {"enabled": true}` を設定し、`investment_support/paypay_points.csv` にPayPayアプリで確認したポイント残高を入力する。
+
+```csv
+course,invested_points,current_points,last_updated
+standard,5000,5230,2026-05-16
+technology,3000,2850,2026-05-16
+gold,1000,1015,2026-05-16
+tech_challenge,2000,2340,2026-05-16
+```
+
+- `course`: コースキー（standard / technology / challenge / tech_challenge / gold 等）
+- `invested_points`: 累計投入ポイント（追加合計 - 引き出し合計）
+- `current_points`: PayPayアプリに表示されている現在のポイント残高
+- `last_updated`: アプリで確認した日（3日以上前だと通知に⏳マークが付く）
+- バッチ実行時にポートフォリオ総資産に自動加算され、Slack通知にコース別損益とタイミングシグナルが表示される
+- PayPayポイント運用にはAPIがないため、残高の更新は手動で行う
 
 ### トレード結果の記録
 
@@ -164,6 +208,7 @@ investment_support/
 ├── config.json               # 設定ファイル（APIキー等）※Git管理外
 ├── config_template.json      # 設定テンプレート
 ├── holdings.csv              # 保有銘柄（手動 or moomoo同期）
+├── paypay_points.csv         # PayPayポイント運用残高（手動入力）
 ├── requirements.txt
 ├── SETUP.md
 │
@@ -182,9 +227,11 @@ investment_support/
 │   ├── holdings_monitor.py   # 保有銘柄の損益計算・損切り判定
 │   ├── moomoo_sync.py        # moomoo OpenD からの保有銘柄同期
 │   ├── risk.py               # リスク指標（VaR, Beta, Sharpe Ratio）
+│   ├── risk_control.py       # 月間損失・連続損失による新規買い停止ルール
 │   ├── portfolio_snapshot.py # バッチ実行時の総資産スナップショット
 │   ├── backtester.py         # バックテスト（過去シグナルの期待値検証）
 │   ├── paper_trading.py      # ペーパートレード（仮想売買記録・日次更新）
+│   ├── paypay_points.py      # PayPayポイント運用トラッキング
 │   ├── notifier.py           # Slack通知生成・送信
 │   ├── llm_advisor.py        # LLMアドバイザー（ChatGPT/Claude/Gemini自動フィードバック）
 │   ├── news_fetcher.py       # ニュース取得（Google News RSS）
@@ -222,11 +269,13 @@ investment_support/
 | `daily_signals` | 日次判定結果 |
 | `trade_signal_log` | 通知済みエントリーセット |
 | `trade_result_log` | トレード実績（手動記録） |
+| `paper_trades` | ペーパートレードの仮想約定・決済履歴 |
 | `fundamentals_snapshot` | JP財務データ（J-Quants） |
 | `earnings_schedule` | JP決算発表予定日 |
 | `take_profit_targets` | 値動きタイプ別の分割利確・トレーリング管理 |
 | `portfolio_snapshot` | バッチ実行時の総資産スナップショット |
 | `llm_feedback_log` | LLMアドバイザーの応答ログ |
+| `paypay_points` | PayPayポイント運用コース別残高（paypay_points.csv から同期） |
 
 `init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [detailed_design.md](detailed_design.md) セクション2を参照。
 
@@ -253,12 +302,14 @@ python -m unittest tests.test_notifier      # 個別テスト
 
 - [ ] `python -m unittest discover -s tests` が全件パスする
 - [ ] `config.json` の `total_capital_jpy` / `total_capital_usd` が実際の運用資金と一致している
+- [ ] `config.json` の `investment_goal` / `risk_control` を確認し、`/rules` 画面で投資ルールを理解している
 - [ ] `holdings.csv` に重複行がない（同一銘柄が2行以上ないこと）
 - [ ] Slack通知のテスト送信ができる（`python -m scripts.batch_evening_jp` を手動実行して通知を確認）
 - [ ] 警戒モード時に新規検討候補が通知されないことを確認済み
 - [ ] `data/backup/` にDBバックアップが作成されている
 - [ ] `config.json` に `"paper_mode": {"enabled": true}` を設定し、最低1か月はペーパートレードで検証する
 - [ ] ペーパートレード結果（`python -m scripts.update_paper_trades --summary`）で期待値がプラスであることを確認
+- [ ] `python -m scripts.backtest_signals --start 2024-01-01 --end YYYY-MM-DD` で過去シグナルの期待値を確認
 
 ## 既知の制約
 

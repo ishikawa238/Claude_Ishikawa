@@ -377,6 +377,9 @@ DDL_STATEMENTS = [
         market           TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
         pattern          TEXT    CHECK(pattern IN ('A', 'B', NULL)),
         entry_price      REAL    NOT NULL,
+        planned_entry_price REAL,
+        actual_entry_date DATE,
+        actual_entry_price REAL,
         stop_loss_price  REAL    NOT NULL,
         target_price     REAL    NOT NULL,
         position_size    REAL,
@@ -385,6 +388,8 @@ DDL_STATEMENTS = [
         exit_reason      TEXT    CHECK(exit_reason IN ('stop_loss', 'take_profit', 'manual', NULL)),
         pnl_pct          REAL,
         pnl_amount       REAL,
+        is_filled        INTEGER NOT NULL DEFAULT 0,
+        entry_slippage_pct REAL NOT NULL DEFAULT 0,
         status           TEXT    NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'closed')),
         created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -392,6 +397,7 @@ DDL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_status ON paper_trades(status)",
     "CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker ON paper_trades(ticker, status)",
+    "CREATE INDEX IF NOT EXISTS idx_paper_trades_fill ON paper_trades(status, is_filled)",
 
     # ----------------------------------------------------------
     # LLM フィードバックログ
@@ -458,12 +464,29 @@ DDL_STATEMENTS = [
         total_assets_combined_jpy REAL    NOT NULL DEFAULT 0,
         cash_jpy                  REAL    NOT NULL DEFAULT 0,
         cash_usd                  REAL    NOT NULL DEFAULT 0,
+        paypay_points_value_jpy   REAL    NOT NULL DEFAULT 0,
         usdjpy_rate               REAL    NOT NULL,
         holdings_count            INTEGER NOT NULL DEFAULT 0,
         created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_ps_date_batch ON portfolio_snapshot(snapshot_date, batch_type)",
+
+    # ----------------------------------------------------------
+    # PayPay ポイント運用
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS paypay_points (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        course          TEXT    NOT NULL UNIQUE,
+        course_name     TEXT    NOT NULL,
+        invested_points INTEGER NOT NULL,
+        current_points  INTEGER NOT NULL,
+        last_updated    DATE    NOT NULL,
+        created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 # 既存DBへのカラム追加（ALTER TABLE は IF NOT EXISTS 非対応のため try/except で処理）
@@ -488,6 +511,14 @@ MIGRATION_STATEMENTS = [
     # portfolio_snapshot: 口座現金残高カラム追加
     "ALTER TABLE portfolio_snapshot ADD COLUMN cash_jpy REAL NOT NULL DEFAULT 0",
     "ALTER TABLE portfolio_snapshot ADD COLUMN cash_usd REAL NOT NULL DEFAULT 0",
+    # portfolio_snapshot: PayPay ポイント運用残高カラム追加
+    "ALTER TABLE portfolio_snapshot ADD COLUMN paypay_points_value_jpy REAL NOT NULL DEFAULT 0",
+    # paper_trades: シグナル翌営業日の始値で約定させるための実約定カラム
+    "ALTER TABLE paper_trades ADD COLUMN planned_entry_price REAL",
+    "ALTER TABLE paper_trades ADD COLUMN actual_entry_date DATE",
+    "ALTER TABLE paper_trades ADD COLUMN actual_entry_price REAL",
+    "ALTER TABLE paper_trades ADD COLUMN is_filled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE paper_trades ADD COLUMN entry_slippage_pct REAL NOT NULL DEFAULT 0",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）

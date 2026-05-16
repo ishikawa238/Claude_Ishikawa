@@ -62,9 +62,14 @@ def record_paper_entries(entry_sets: list[dict]) -> list[dict]:
             "market":          es["market"],
             "pattern":         es.get("pattern"),
             "entry_price":     es["entry_price"],
+            "planned_entry_price": es["entry_price"],
+            "actual_entry_date": None,
+            "actual_entry_price": None,
             "stop_loss_price": es["stop_loss_price"],
             "target_price":    es["target_price"],
             "position_size":   es.get("recommended_amount") or 0,
+            "is_filled":       0,
+            "entry_slippage_pct": _entry_slippage_pct(),
             "status":          "open",
         }
 
@@ -104,8 +109,22 @@ def update_paper_trades(target_date: date) -> dict:
     still_open = []
 
     for trade in open_trades:
+        trade = dict(trade)
         ticker = trade["ticker"]
-        price_row = _get_latest_price(ticker, target_str)
+
+        if not _is_filled(trade):
+            filled_trade = _fill_trade_if_possible(trade, target_str)
+            if not filled_trade:
+                still_open.append(trade)
+                continue
+            trade = filled_trade
+
+        actual_entry_date = trade.get("actual_entry_date") or trade.get("signal_date")
+        if actual_entry_date >= target_str:
+            still_open.append(trade)
+            continue
+
+        price_row = _get_latest_price_after_entry(ticker, target_str, actual_entry_date)
 
         if not price_row:
             still_open.append(trade)
@@ -154,17 +173,19 @@ def get_paper_trade_summary() -> dict:
     全ペーパートレードの統計サマリーを返す。
     """
     with get_connection() as conn:
-        all_trades = fetch_all(conn, "SELECT * FROM paper_trades ORDER BY signal_date")
-        open_trades = fetch_all(
+        all_trades = [dict(t) for t in fetch_all(conn, "SELECT * FROM paper_trades ORDER BY signal_date")]
+        open_trades = [dict(t) for t in fetch_all(
             conn, "SELECT * FROM paper_trades WHERE status = 'open' ORDER BY signal_date"
-        )
+        )]
 
     closed = [t for t in all_trades if t["status"] == "closed"]
+    pending_count = sum(1 for t in open_trades if not _is_filled(t))
 
     if not closed:
         return {
             "total": len(all_trades),
             "open": len(open_trades),
+            "pending": pending_count,
             "closed": 0,
             "wins": 0,
             "losses": 0,
@@ -186,13 +207,14 @@ def get_paper_trade_summary() -> dict:
     return {
         "total": len(all_trades),
         "open": len(open_trades),
+        "pending": pending_count,
         "closed": len(closed),
         "wins": len(wins),
         "losses": len(losses),
         "win_rate": round(win_rate, 1),
         "avg_pnl_pct": round(avg_pnl_pct, 2),
         "total_pnl": round(total_pnl, 2),
-        "open_trades": [dict(t) for t in open_trades],
+        "open_trades": open_trades,
     }
 
 
@@ -204,6 +226,7 @@ def format_summary(summary: dict) -> str:
         "=" * 50,
         f"  全トレード数:   {summary['total']}",
         f"  オープン中:     {summary['open']}",
+        f"  未約定:         {summary.get('pending', 0)}",
         f"  クローズ済み:   {summary['closed']}",
     ]
 
@@ -253,6 +276,105 @@ def _get_open_trades() -> list[dict]:
         return fetch_all(
             conn, "SELECT * FROM paper_trades WHERE status = 'open' ORDER BY signal_date"
         )
+
+
+def _get_latest_price_after_entry(ticker: str, date_str: str, entry_date: str) -> dict | None:
+    """指定日以前、かつ実際の約定日より後の最新価格を返す。"""
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT * FROM price_history "
+            "WHERE ticker = ? AND date <= ? AND date > ? AND is_holiday = 0 "
+            "ORDER BY date DESC LIMIT 1",
+            (ticker, date_str, entry_date),
+        )
+    return dict(row) if row else None
+
+
+def _get_next_entry_price(ticker: str, signal_date: str, target_str: str) -> dict | None:
+    """シグナル日の次に来る取引日の始値を返す。"""
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT * FROM price_history "
+            "WHERE ticker = ? AND date > ? AND date <= ? "
+            "  AND open IS NOT NULL AND is_holiday = 0 "
+            "ORDER BY date ASC LIMIT 1",
+            (ticker, signal_date, target_str),
+        )
+    return dict(row) if row else None
+
+
+def _fill_trade_if_possible(trade: dict, target_str: str) -> dict | None:
+    """未約定のペーパートレードを次取引日の始値で約定させる。"""
+    entry_row = _get_next_entry_price(trade["ticker"], trade["signal_date"], target_str)
+    if not entry_row:
+        return None
+
+    slippage_pct = float(trade.get("entry_slippage_pct") or _entry_slippage_pct())
+    actual_entry = float(entry_row["open"]) * (1 + slippage_pct / 100)
+    planned_entry = float(trade.get("planned_entry_price") or trade.get("entry_price") or actual_entry)
+    old_stop = float(trade["stop_loss_price"])
+    old_target = float(trade["target_price"])
+
+    if planned_entry > 0:
+        stop_pct = max((planned_entry - old_stop) / planned_entry, 0)
+        target_pct = max((old_target / planned_entry) - 1, 0)
+    else:
+        stop_pct = 0
+        target_pct = 0
+
+    actual_stop = actual_entry * (1 - stop_pct)
+    actual_target = actual_entry * (1 + target_pct)
+    actual_date = entry_row["date"]
+
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE paper_trades SET "
+            "  planned_entry_price = ?, entry_price = ?, "
+            "  actual_entry_date = ?, actual_entry_price = ?, "
+            "  stop_loss_price = ?, target_price = ?, "
+            "  is_filled = 1, entry_slippage_pct = ?, "
+            "  updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (
+                round(planned_entry, 4),
+                round(actual_entry, 4),
+                actual_date,
+                round(actual_entry, 4),
+                round(actual_stop, 4),
+                round(actual_target, 4),
+                slippage_pct,
+                trade["id"],
+            ),
+        )
+        conn.commit()
+
+    updated = dict(trade)
+    updated.update({
+        "planned_entry_price": round(planned_entry, 4),
+        "entry_price": round(actual_entry, 4),
+        "actual_entry_date": actual_date,
+        "actual_entry_price": round(actual_entry, 4),
+        "stop_loss_price": round(actual_stop, 4),
+        "target_price": round(actual_target, 4),
+        "is_filled": 1,
+        "entry_slippage_pct": slippage_pct,
+    })
+    logger.info(
+        f"ペーパートレード約定: {trade['ticker']} {actual_date} open={actual_entry:.2f}"
+    )
+    return updated
+
+
+def _is_filled(trade: dict) -> bool:
+    if "is_filled" not in trade:
+        return True
+    return int(trade.get("is_filled") or 0) == 1
+
+
+def _entry_slippage_pct() -> float:
+    return float(config_module.CONFIG.get("paper_mode", {}).get("entry_slippage_pct", 0.0))
 
 
 def _get_latest_price(ticker: str, date_str: str) -> dict | None:

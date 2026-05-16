@@ -1,0 +1,345 @@
+{% extends "base.html" %}
+{% block title %}PayPay Points{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="h4 mb-0">PayPay Point Investment</h1>
+  <button class="btn btn-primary btn-sm" onclick="showAddModal()">
+    <i data-lucide="plus" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"></i>Add Course
+  </button>
+</div>
+
+<div id="alertArea" style="display:none" class="alert mb-4" role="alert"></div>
+
+<!-- Summary Cards -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="summary-card">
+      <div class="label">Total Balance</div>
+      <div class="value">{{ "{:,}".format(total_current) }}pt</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="summary-card">
+      <div class="label">Total Invested</div>
+      <div class="value">{{ "{:,}".format(total_invested) }}pt</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="summary-card">
+      <div class="label">Return</div>
+      <div class="value {% if total_return >= 0 %}text-profit{% else %}text-loss{% endif %}">
+        {{ "{:+,}".format(total_return) }}pt
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="summary-card">
+      <div class="label">Return %</div>
+      <div class="value {% if total_pct >= 0 %}text-profit{% else %}text-loss{% endif %}">
+        {{ "{:+.1f}".format(total_pct) }}%
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Course Table -->
+<div class="section">
+  <h2>Course Details</h2>
+  {% if points %}
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>Course</th>
+          <th class="text-end">Invested</th>
+          <th class="text-end">Current</th>
+          <th class="text-end">Return</th>
+          <th class="text-end">Return %</th>
+          <th>Signal</th>
+          <th>Updated</th>
+          <th style="width:120px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in points %}
+        <tr>
+          <td>
+            <strong>{{ p.course_name }}</strong>
+            <span class="text-muted" style="font-size:var(--text-xs)">{{ p.course }}</span>
+            {% if p.leverage > 1 %}<span class="badge bg-warning text-dark ms-1">{{ p.leverage }}x</span>{% endif %}
+            {% if p.inverse %}<span class="badge bg-secondary ms-1">Inverse</span>{% endif %}
+          </td>
+          <td class="text-end">{{ "{:,}".format(p.invested_points) }}</td>
+          <td class="text-end">{{ "{:,}".format(p.current_points) }}</td>
+          <td class="text-end {% if p.return_points >= 0 %}text-profit{% else %}text-loss{% endif %}">
+            {{ "{:+,}".format(p.return_points) }}
+          </td>
+          <td class="text-end {% if p.return_pct >= 0 %}text-profit{% else %}text-loss{% endif %}">
+            {{ "{:+.1f}".format(p.return_pct) }}%
+          </td>
+          <td>
+            {% set sig = signal_map.get(p.course) %}
+            {% if sig %}
+              {% if sig.signal == 'good' %}
+                <span class="badge bg-success">Good</span>
+              {% elif sig.signal == 'caution' %}
+                <span class="badge bg-warning text-dark">Caution</span>
+              {% else %}
+                <span class="badge bg-secondary">Neutral</span>
+              {% endif %}
+              <span class="text-muted" style="font-size:var(--text-xs);display:block;max-width:200px">{{ sig.reason }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {{ p.last_updated }}
+            {% if p.stale %}<span title="3 days since update" style="cursor:help">&#9203;</span>{% endif %}
+          </td>
+          <td class="text-end">
+            <button class="btn btn-outline-primary btn-sm" onclick="showEditModal('{{ p.course }}', '{{ p.course_name }}', {{ p.invested_points }}, {{ p.current_points }})">
+              <i data-lucide="edit-2" style="width:12px;height:12px"></i>
+            </button>
+            <button class="btn btn-outline-danger btn-sm ms-1" onclick="deleteCourse('{{ p.course }}', '{{ p.course_name }}')">
+              <i data-lucide="trash-2" style="width:12px;height:12px"></i>
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-center py-5 text-muted">
+    <p>No courses registered yet.</p>
+    <p>Click <strong>Add Course</strong> to start tracking your PayPay point investments.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Signals Section -->
+{% if signal_map %}
+<div class="section mt-4">
+  <h2>Timing Signals</h2>
+  <div class="summary-card">
+    {% for course, sig in signal_map.items() %}
+    <div class="d-flex align-items-start gap-2 {% if not loop.first %}mt-2 pt-2{% endif %}" {% if not loop.first %}style="border-top:1px solid var(--border-color)"{% endif %}>
+      {% if sig.signal == 'good' %}
+        <span class="badge bg-success mt-1">Good</span>
+      {% elif sig.signal == 'caution' %}
+        <span class="badge bg-warning text-dark mt-1">Caution</span>
+      {% else %}
+        <span class="badge bg-secondary mt-1">Neutral</span>
+      {% endif %}
+      <div>
+        <strong>{{ sig.course_name }}</strong><br>
+        <span class="text-muted" style="font-size:var(--text-sm)">{{ sig.reason }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="mt-3 meta-medium text-muted-custom">
+  PayPay app does not provide an API. Update balances manually from your PayPay app.
+  Signals are based on MA25 of the underlying index (S&amp;P 500, NASDAQ, GLD, etc).
+</div>
+
+<!-- Edit Modal -->
+<div id="editModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1050;overflow-y:auto">
+  <div style="max-width:420px;margin:80px auto;background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-lg)">
+    <h3 class="h5 mb-3" id="editModalTitle">Edit Balance</h3>
+    <input type="hidden" id="editCourse">
+    <div class="mb-3">
+      <label class="form-label fw-bold">Course</label>
+      <input type="text" class="form-control" id="editCourseName" readonly>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" for="editInvested">Invested Points</label>
+      <input type="number" class="form-control" id="editInvested" min="0" step="1">
+      <div class="form-text">Cumulative added - withdrawn (net cost basis)</div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" for="editCurrent">Current Points</label>
+      <input type="number" class="form-control" id="editCurrent" min="0" step="1">
+      <div class="form-text">Current balance shown in PayPay app</div>
+    </div>
+    <div class="d-flex gap-2 justify-content-end">
+      <button class="btn btn-outline-secondary" onclick="closeModal('editModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Modal -->
+<div id="addModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1050;overflow-y:auto">
+  <div style="max-width:420px;margin:80px auto;background:var(--bg-card);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-lg)">
+    <h3 class="h5 mb-3">Add Course</h3>
+    <div class="mb-3">
+      <label class="form-label fw-bold" for="addCourseSelect">Course</label>
+      <select class="form-select" id="addCourseSelect">
+        <option value="">Select a course...</option>
+        {% for c in available_courses %}
+        <option value="{{ c.key }}">{{ c.name }} ({{ c.key }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" for="addInvested">Invested Points</label>
+      <input type="number" class="form-control" id="addInvested" min="0" step="1" value="0">
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-bold" for="addCurrent">Current Points</label>
+      <input type="number" class="form-control" id="addCurrent" min="0" step="1" value="0">
+    </div>
+    <div class="d-flex gap-2 justify-content-end">
+      <button class="btn btn-outline-secondary" onclick="closeModal('addModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAdd()">Add</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Current data from server (for rebuilding the full list on save)
+let _currentPoints = {{ points | tojson }};
+
+function showAlert(msg, type) {
+  const el = document.getElementById('alertArea');
+  el.className = 'alert alert-' + type + ' mb-4';
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+function closeModal(id) {
+  document.getElementById(id).style.display = 'none';
+}
+
+// ── Edit ──
+function showEditModal(course, name, invested, current) {
+  document.getElementById('editCourse').value = course;
+  document.getElementById('editCourseName').value = name;
+  document.getElementById('editInvested').value = invested;
+  document.getElementById('editCurrent').value = current;
+  document.getElementById('editModal').style.display = 'block';
+  document.getElementById('editInvested').focus();
+}
+
+async function saveEdit() {
+  const course = document.getElementById('editCourse').value;
+  const invested = parseInt(document.getElementById('editInvested').value, 10);
+  const current = parseInt(document.getElementById('editCurrent').value, 10);
+
+  // Rebuild full course list with updated values
+  const courses = _currentPoints.map(p => {
+    if (p.course === course) {
+      return {
+        course: p.course,
+        invested_points: invested,
+        current_points: current,
+        last_updated: new Date().toISOString().slice(0, 10),
+      };
+    }
+    return {
+      course: p.course,
+      invested_points: p.invested_points,
+      current_points: p.current_points,
+      last_updated: p.last_updated,
+    };
+  });
+
+  await postCourses(courses);
+}
+
+// ── Add ──
+function showAddModal() {
+  document.getElementById('addCourseSelect').value = '';
+  document.getElementById('addInvested').value = 0;
+  document.getElementById('addCurrent').value = 0;
+  document.getElementById('addModal').style.display = 'block';
+}
+
+async function saveAdd() {
+  const course = document.getElementById('addCourseSelect').value;
+  if (!course) { showAlert('Select a course', 'warning'); return; }
+
+  // Check duplicate
+  if (_currentPoints.some(p => p.course === course)) {
+    showAlert('This course already exists. Use Edit instead.', 'warning');
+    return;
+  }
+
+  const invested = parseInt(document.getElementById('addInvested').value, 10) || 0;
+  const current = parseInt(document.getElementById('addCurrent').value, 10) || 0;
+
+  const courses = _currentPoints.map(p => ({
+    course: p.course,
+    invested_points: p.invested_points,
+    current_points: p.current_points,
+    last_updated: p.last_updated,
+  }));
+  courses.push({
+    course: course,
+    invested_points: invested,
+    current_points: current,
+    last_updated: new Date().toISOString().slice(0, 10),
+  });
+
+  await postCourses(courses);
+}
+
+// ── Delete ──
+async function deleteCourse(course, name) {
+  if (!confirm(name + ' を削除しますか？')) return;
+
+  try {
+    const resp = await fetch('/api/paypay-points/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({course: course}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      location.reload();
+    } else {
+      showAlert(data.error || 'Delete failed', 'danger');
+    }
+  } catch (e) {
+    showAlert('Network error: ' + e.message, 'danger');
+  }
+}
+
+// ── Shared POST ──
+async function postCourses(courses) {
+  try {
+    const resp = await fetch('/api/paypay-points', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({courses: courses}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      location.reload();
+    } else {
+      let msg = data.error || 'Save failed';
+      if (data.details) msg += ': ' + data.details.join(', ');
+      showAlert(msg, 'danger');
+    }
+  } catch (e) {
+    showAlert('Network error: ' + e.message, 'danger');
+  }
+}
+
+// Close modals on background click
+['editModal', 'addModal'].forEach(id => {
+  document.getElementById(id).addEventListener('click', function(e) {
+    if (e.target === this) closeModal(id);
+  });
+});
+
+// Re-init lucide icons for dynamically rendered content
+lucide.createIcons();
+</script>
+{% endblock %}

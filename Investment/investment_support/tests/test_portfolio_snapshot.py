@@ -49,6 +49,7 @@ def _setup_test_db():
             cash_usd                  REAL    NOT NULL DEFAULT 0,
             usdjpy_rate               REAL    NOT NULL,
             holdings_count            INTEGER NOT NULL DEFAULT 0,
+            paypay_points_value_jpy   REAL    NOT NULL DEFAULT 0,
             created_at                DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)

@@ -74,12 +74,13 @@
 <!-- 今日の行動 -->
 <div class="summary-card mb-4 animate-in">
   <h2>今日の行動</h2>
-  {% for level, msg in action_items %}
+  {% for item in action_items %}
+  {% set level = item[0] %}{% set msg = item[1] %}
   {% if level == "danger" %}{% set cls = "action-danger" %}
   {% elif level == "warn" %}{% set cls = "action-warn" %}
   {% elif level == "info" %}{% set cls = "action-info" %}
   {% else %}{% set cls = "action-success" %}{% endif %}
-  <div class="action-item {{ cls }}">{{ msg }}</div>
+  <div class="action-item {{ cls }}">{{ msg }}{% if item|length > 2 and item[2] and item[2].type == "sl_update" %} <button class="sl-apply-btn" data-ticker="{{ item[2].ticker }}" data-sl="{{ item[2].new_sl }}">SLを{{ item[2].new_sl }}に変更</button>{% endif %}</div>
   {% endfor %}
 </div>
 
@@ -229,7 +230,14 @@
           <td>{{ h.cp_str }}</td>
           <td class="{{ h.pnl_css }}">{{ h.pnl_str }}{% if h.pnl_jpy_str %}<br><span class="meta-small">{{ h.pnl_jpy_str }}</span>{% endif %}</td>
           <td><span class="status-badge {{ h.status_cls }}">{{ h.status_label }}</span></td>
-          <td>{{ h.sl_str }}</td>
+          <td class="sl-cell" data-ticker="{{ h.ticker }}" data-sl="{{ h.sl_raw }}">
+            <span class="sl-display" title="クリックで編集">{{ h.sl_str }}{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} <span class="sl-hint">↑{{ h.adjusted_stop|int }}</span>{% endif %}</span>
+            <span class="sl-edit" style="display:none">
+              <input type="number" class="sl-input" step="0.01" min="0.01" value="{{ h.sl_raw }}"{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} placeholder="{{ h.adjusted_stop }}"{% endif %}>
+              <button class="sl-save-btn" title="保存">&#10004;</button>
+              <button class="sl-cancel-btn" title="キャンセル">&#10005;</button>
+            </span>
+          </td>
           <td class="mobile-hide">{{ h.target_str|safe }}</td>
           <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
           <td class="detail-col">{{ h.market or "" }}</td>

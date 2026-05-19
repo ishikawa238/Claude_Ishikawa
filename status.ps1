@@ -24,6 +24,7 @@ $tasks = @(
     @{ Name = "EnglishDaily_Reminder_2330";      Group = "EnglishDaily" },
     @{ Name = "PaperWatch_MorningBatch";         Group = "PaperWatch" },
     @{ Name = "Ishikawa238_Watchdog";            Group = "Watchdog" },
+    @{ Name = "Ishikawa238_WatchdogDashboard";   Group = "Watchdog" },
     @{ Name = "Ishikawa238_AutoCommit";          Group = "AutoCommit" }
 )
 
@@ -31,7 +32,8 @@ $tasks = @(
 # 常駐サーバー一覧
 # ---------------------------------------------------------------------------
 $servers = @(
-    @{ Label = "Investment Dashboard"; Url = "http://127.0.0.1:5100/health" }
+    @{ Label = "Investment Dashboard"; Url = "http://127.0.0.1:5100/health" },
+    @{ Label = "Watchdog Dashboard";   Url = "http://127.0.0.1:5200/health" }
 )
 
 # ---------------------------------------------------------------------------

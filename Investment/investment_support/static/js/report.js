@@ -96,6 +96,124 @@ function loadEarningsCalendar() {
 }
 loadEarningsCalendar();
 
+// SL 今日の行動ワンクリック更新
+(function() {
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.sl-apply-btn');
+    if (!btn) return;
+    btn.disabled = true;
+    var ticker = btn.dataset.ticker;
+    var newSl = parseFloat(btn.dataset.sl);
+    btn.textContent = '更新中...';
+    fetch('/api/holdings/update-sl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: ticker, stop_loss_price: newSl })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        btn.textContent = '変更済み ✔';
+        btn.style.background = 'var(--success, #28a745)';
+        btn.style.borderColor = 'var(--success, #28a745)';
+        // 保有銘柄テーブルのSLセルも更新
+        var slCell = document.querySelector('.sl-cell[data-ticker="' + ticker + '"]');
+        if (slCell) {
+          slCell.dataset.sl = newSl;
+          var fmt = newSl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          var display = slCell.querySelector('.sl-display');
+          if (display) display.childNodes[0].textContent = fmt + ' ';
+          var hint = slCell.querySelector('.sl-hint');
+          if (hint) hint.style.display = 'none';
+          slCell.querySelector('.sl-input').value = newSl;
+        }
+      } else {
+        btn.textContent = '失敗: ' + (data.error || '不明');
+        btn.style.background = 'var(--danger, #dc3545)';
+        btn.style.borderColor = 'var(--danger, #dc3545)';
+        btn.disabled = false;
+      }
+    })
+    .catch(function() {
+      btn.textContent = '通信エラー';
+      btn.disabled = false;
+    });
+  });
+})();
+
+// SL インライン編集
+(function() {
+  document.addEventListener('click', function(e) {
+    var display = e.target.closest('.sl-display');
+    if (!display) return;
+    var cell = display.closest('.sl-cell');
+    if (!cell) return;
+    display.style.display = 'none';
+    cell.querySelector('.sl-edit').style.display = '';
+    var input = cell.querySelector('.sl-input');
+    input.focus();
+    input.select();
+  });
+  document.addEventListener('click', function(e) {
+    var cancelBtn = e.target.closest('.sl-cancel-btn');
+    if (!cancelBtn) return;
+    var cell = cancelBtn.closest('.sl-cell');
+    _slRestore(cell);
+  });
+  document.addEventListener('click', function(e) {
+    var saveBtn = e.target.closest('.sl-save-btn');
+    if (!saveBtn) return;
+    var cell = saveBtn.closest('.sl-cell');
+    _slSave(cell);
+  });
+  document.addEventListener('keydown', function(e) {
+    if (!e.target.classList.contains('sl-input')) return;
+    var cell = e.target.closest('.sl-cell');
+    if (e.key === 'Enter') { e.preventDefault(); _slSave(cell); }
+    if (e.key === 'Escape') { _slRestore(cell); }
+  });
+
+  function _slRestore(cell) {
+    var input = cell.querySelector('.sl-input');
+    input.value = cell.dataset.sl;
+    cell.querySelector('.sl-edit').style.display = 'none';
+    cell.querySelector('.sl-display').style.display = '';
+  }
+
+  function _slSave(cell) {
+    var input = cell.querySelector('.sl-input');
+    var val = parseFloat(input.value);
+    if (isNaN(val) || val <= 0) { input.style.borderColor = 'red'; return; }
+    cell.classList.add('sl-saving');
+    fetch('/api/holdings/update-sl', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: cell.dataset.ticker, stop_loss_price: val })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      cell.classList.remove('sl-saving');
+      if (data.success) {
+        cell.dataset.sl = val;
+        var fmt = val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        cell.querySelector('.sl-display').childNodes[0].textContent = fmt + ' ';
+        var hint = cell.querySelector('.sl-hint');
+        if (hint && parseFloat(hint.textContent.replace('↑','')) <= val) hint.style.display = 'none';
+        cell.querySelector('.sl-edit').style.display = 'none';
+        cell.querySelector('.sl-display').style.display = '';
+        cell.classList.add('sl-ok');
+        setTimeout(function() { cell.classList.remove('sl-ok'); }, 700);
+      } else {
+        alert(data.error || '更新に失敗しました');
+      }
+    })
+    .catch(function() {
+      cell.classList.remove('sl-saving');
+      alert('通信エラーが発生しました');
+    });
+  }
+})();
+
 function initReportCharts(sectorLabels, sectorValues, mhDates, mhN225, mhN225Ma, mhSp500, mhSp500Ma, mhModes) {
   // --- 損益推移チャート ---
   fetch('/api/portfolio-pnl').then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function(data) {

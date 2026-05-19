@@ -105,6 +105,57 @@ if (-not (Test-Path $watchdogPython)) {
 }
 
 # ---------------------------------------------------------------------------
+# Watchdog Dashboard タスク登録（ログオン時 — 常駐 Web サーバー）
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== Watchdog Dashboard ===" -ForegroundColor White
+
+$dashboardTaskName = "Ishikawa238_WatchdogDashboard"
+$dashboardPython   = Join-Path $RepoRoot "watchdog\.venv\Scripts\python.exe"
+$dashboardDir      = Join-Path $RepoRoot "watchdog"
+
+if (-not (Test-Path $dashboardPython)) {
+    Write-Host "SKIP: Watchdog Dashboard - python.exe not found ($dashboardPython)" -ForegroundColor Yellow
+    Write-Host "  watchdog/.venv を作成してください" -ForegroundColor Yellow
+    $skipped++
+} else {
+    if (Get-ScheduledTask -TaskName $dashboardTaskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $dashboardTaskName -Confirm:$false
+        Write-Host "Removed existing task: $dashboardTaskName"
+    }
+
+    $action = New-ScheduledTaskAction `
+        -Execute $dashboardPython `
+        -Argument "run_dashboard.py" `
+        -WorkingDirectory $dashboardDir
+
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -RunOnlyIfNetworkAvailable `
+        -DontStopIfGoingOnBatteries `
+        -AllowStartIfOnBatteries
+    $settings.ExecutionTimeLimit = "PT0S"
+
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+        -LogonType S4U `
+        -RunLevel Highest
+
+    Register-ScheduledTask `
+        -TaskName    $dashboardTaskName `
+        -Description "Ishikawa238 - Watchdog Dashboard (system status web UI, port 5200)" `
+        -Action      $action `
+        -Trigger     $trigger `
+        -Settings    $settings `
+        -Principal   $principal `
+        -Force | Out-Null
+
+    Write-Host "Registered: $dashboardTaskName (at logon, persistent)" -ForegroundColor Green
+    $succeeded++
+}
+
+# ---------------------------------------------------------------------------
 # AutoCommit タスク登録（日次 03:00 — 変更自動コミット＆プッシュ）
 # ---------------------------------------------------------------------------
 Write-Host "=== AutoCommit ===" -ForegroundColor White

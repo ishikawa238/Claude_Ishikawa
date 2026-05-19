@@ -111,6 +111,12 @@
       <div class="value trend-down">{{ "{:+.2f}".format(worst) }}%</div>
     </div>
   </div>
+  <div class="col-4 col-md-2">
+    <div class="summary-card">
+      <div class="label">実現損益(円)</div>
+      <div class="value {{ 'trend-up' if total_pnl_jpy >= 0 else 'trend-down' }}">{{ "{:+,.0f}".format(total_pnl_jpy) }}円</div>
+    </div>
+  </div>
 </div>
 
 <!-- チャート -->
@@ -139,7 +145,7 @@
   <div class="table-responsive">
     <table class="table table-bordered table-sm bg-white" style="max-width:600px">
       <thead class="table-light">
-        <tr><th>パターン</th><th>トレード数</th><th>勝ち</th><th>勝率</th><th>平均損益</th></tr>
+        <tr><th>パターン</th><th>トレード数</th><th>勝ち</th><th>勝率</th><th>平均損益</th><th>合計損益(円)</th></tr>
       </thead>
       <tbody>
         {% for p in pat_rows %}
@@ -149,9 +155,10 @@
           <td>{{ p.wins }}</td>
           <td>{{ "{:.1f}".format(p.win_rate) }}%</td>
           <td class="{{ 'text-profit' if p.avg_pnl >= 0 else 'text-loss' }}">{{ "{:+.2f}".format(p.avg_pnl) }}%</td>
+          <td class="{{ 'text-profit' if p.sum_pnl_jpy >= 0 else 'text-loss' }}">{{ "{:+,.0f}".format(p.sum_pnl_jpy) }}円</td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted-custom">データなし</td></tr>
+        <tr><td colspan="6" class="text-center text-muted-custom">データなし</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -164,7 +171,7 @@
   <div class="table-responsive">
     <table class="table table-bordered table-sm table-hover bg-white">
       <thead class="table-light">
-        <tr><th>決済日</th><th>Ticker</th><th class="mobile-hide">パターン</th><th>損益</th><th>理由</th></tr>
+        <tr><th>決済日</th><th>Ticker</th><th class="mobile-hide">パターン</th><th>損益(%)</th><th class="mobile-hide">損益(円)</th><th>理由</th></tr>
       </thead>
       <tbody>
         {% for t in trade_rows %}
@@ -173,10 +180,11 @@
           <td><a class="ticker-link" href="/stock/{{ t.ticker }}">{{ t.ticker }}</a></td>
           <td class="mobile-hide">{{ t.pattern_name }}</td>
           <td class="{{ 'text-profit' if t.pnl >= 0 else 'text-loss' }}">{{ "{:+.2f}".format(t.pnl) }}%</td>
+          <td class="mobile-hide {% if t.pnl_amount_jpy is not none %}{{ 'text-profit' if t.pnl_amount_jpy >= 0 else 'text-loss' }}{% endif %}">{% if t.pnl_amount_jpy is not none %}{{ "{:+,.0f}".format(t.pnl_amount_jpy) }}円{% else %}—{% endif %}</td>
           <td>{{ t.reason_label }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="5" class="text-center text-muted-custom">データなし</td></tr>
+        <tr><td colspan="6" class="text-center text-muted-custom">データなし</td></tr>
         {% endfor %}
       </tbody>
     </table>

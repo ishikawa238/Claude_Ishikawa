@@ -35,6 +35,8 @@ def check_batch(
     batch_type: str,
     schedule: str,
     window_hours: int,
+    *,
+    single_batch: bool = False,
 ) -> dict:
     """
     batch_run_log を確認し、バッチの状態を返す。
@@ -44,23 +46,39 @@ def check_batch(
 
     status は以下のいずれか:
         "success", "partial_failure", "failed", "running", "missing"
+
+    single_batch=True の場合、batch_type カラムが無いテーブル向けに
+    WHERE batch_type 条件を省略する。
     """
     if schedule == "monthly":
         return _check_monthly_batch(conn, batch_type)
 
     # daily バッチ: 直近 window_hours 以内の最新レコードを取得
-    row = db.fetch_one(
-        conn,
-        """
-        SELECT status, end_time, start_time
-        FROM batch_run_log
-        WHERE batch_type = ?
-          AND start_time >= datetime('now', 'localtime', ?)
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (batch_type, f"-{window_hours} hours"),
-    )
+    if single_batch:
+        row = db.fetch_one(
+            conn,
+            """
+            SELECT status, end_time, start_time
+            FROM batch_run_log
+            WHERE start_time >= datetime('now', 'localtime', ?)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (f"-{window_hours} hours",),
+        )
+    else:
+        row = db.fetch_one(
+            conn,
+            """
+            SELECT status, end_time, start_time
+            FROM batch_run_log
+            WHERE batch_type = ?
+              AND start_time >= datetime('now', 'localtime', ?)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (batch_type, f"-{window_hours} hours"),
+        )
 
     if row is None:
         return {
@@ -247,6 +265,7 @@ def check_project(project_key: str, project_cfg: dict, watchdog_cfg: dict) -> di
                     batch_cfg["batch_type"],
                     batch_cfg.get("schedule", "daily"),
                     window,
+                    single_batch=batch_cfg.get("single_batch", False),
                 )
                 result["batches"].append(batch_result)
 

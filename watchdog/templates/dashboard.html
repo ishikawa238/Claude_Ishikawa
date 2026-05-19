@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Watchdog Dashboard</title>
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Vendor -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+
+<!-- Icons -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+<!-- App -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+
+<nav class="navbar navbar-expand-sm mb-4 px-3">
+  <a class="navbar-brand" href="/">
+    <i data-lucide="activity" style="width:20px;height:20px;margin-right:6px;vertical-align:-3px"></i>Watchdog
+  </a>
+  <div class="ms-auto d-flex align-items-center gap-2">
+    <span id="refreshIndicator" class="meta-small" title="自動更新 60秒間隔"></span>
+    <button id="themeToggle" class="theme-toggle" onclick="toggleTheme()" title="テーマ切替">
+      <i data-lucide="moon" style="width:16px;height:16px"></i>
+    </button>
+  </div>
+</nav>
+
+<div class="container-fluid">
+  <!-- ヘッダーサマリー -->
+  <div id="summary" class="summary-bar mb-4">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <h1 class="page-title mb-0">System Status</h1>
+      <span id="overallBadge" class="overall-badge loading">読込中...</span>
+    </div>
+    <div class="meta-small" id="checkedAt"></div>
+  </div>
+
+  <!-- プロジェクトカード -->
+  <div id="projectGrid" class="row g-3">
+    <!-- JavaScript で動的に生成 -->
+    <div class="col-12 text-center py-5">
+      <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+      </div>
+      <p class="mt-2 text-muted">システム状態を取得中...</p>
+    </div>
+  </div>
+
+  <!-- 通知スケジュール一覧 -->
+  <div class="ops-section mt-5">
+    <button class="ops-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#schedulePanel" aria-expanded="false">
+      <i data-lucide="calendar-clock" style="width:16px;height:16px"></i>
+      Slack 通知スケジュール
+      <i data-lucide="chevron-down" class="toggle-chevron" style="width:14px;height:14px"></i>
+    </button>
+    <div class="collapse" id="schedulePanel">
+      <div class="ops-panel">
+        <table class="ops-table">
+          <thead>
+            <tr><th>時刻</th><th>システム</th><th>通知内容</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>07:00</td><td>AiNewsDigest</td><td>AI/ML/LLM 関連ニュースの新着ダイジェスト</td></tr>
+            <tr><td>07:00</td><td>FreelanceScout</td><td>CrowdWorks・Coconala の新着フリーランス案件</td></tr>
+            <tr><td>07:00</td><td>PaperWatch</td><td>arXiv 新着論文のキーワードマッチレポート</td></tr>
+            <tr><td>07:00</td><td>EnglishDaily</td><td>曜日別英語学習カリキュラム + ストリーク通知</td></tr>
+            <tr><td>07:00</td><td>MorningPlaylist</td><td>英語ポッドキャストプレイリスト自動更新 &amp; Echo 再生</td></tr>
+            <tr><td>07:30</td><td>Investment</td><td>米国株シグナル + 前夜の日本株シグナル統合 + 保有銘柄アラート</td></tr>
+            <tr><td>18:30</td><td>Investment</td><td>日本株のテクニカル分析・売買シグナル検知結果</td></tr>
+            <tr><td>17:30 / 19:30 / 21:30 / 23:30</td><td>EnglishDaily</td><td>未完了タスクのリマインド通知</td></tr>
+            <tr><td>毎月1日 08:00</td><td>Investment</td><td>月次レポート（銘柄マスタ更新 + ファンダメンタルズ取得）</td></tr>
+            <tr><td>22:00</td><td>Watchdog</td><td>全システム横断監視（異常検知時のみ通知）</td></tr>
+            <tr><td>03:00</td><td>AutoCommit</td><td>リポジトリ変更の自動 git commit &amp; push</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 運用ガイド -->
+  <div class="ops-section mt-3 mb-5">
+    <button class="ops-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#opsGuide" aria-expanded="false">
+      <i data-lucide="wrench" style="width:16px;height:16px"></i>
+      運用ガイド
+      <i data-lucide="chevron-down" class="toggle-chevron" style="width:14px;height:14px"></i>
+    </button>
+    <div class="collapse" id="opsGuide">
+      <div class="ops-panel">
+        <div class="ops-grid">
+          <div class="ops-card">
+            <h4><i data-lucide="play-circle" style="width:16px;height:16px"></i> 初回セットアップ / タスク再登録</h4>
+            <p>全システムの Windows タスクスケジューラを一括登録する。管理者権限が必要。</p>
+            <code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass<br>.\setup_all.ps1</code>
+          </div>
+          <div class="ops-card">
+            <h4><i data-lucide="list-checks" style="width:16px;height:16px"></i> 稼働状態チェック (CLI)</h4>
+            <p>全タスクの登録状態と最終実行結果を PowerShell で確認する。管理者権限不要。</p>
+            <code>.\status.ps1</code>
+          </div>
+          <div class="ops-card">
+            <h4><i data-lucide="layout-dashboard" style="width:16px;height:16px"></i> Investment Dashboard</h4>
+            <p>投資判断ダッシュボード。保有銘柄・シグナル・パフォーマンスなどを閲覧可能。</p>
+            <code>http://127.0.0.1:5100/report</code>
+          </div>
+          <div class="ops-card">
+            <h4><i data-lucide="activity" style="width:16px;height:16px"></i> このダッシュボードの起動</h4>
+            <p>watchdog/ ディレクトリで起動。通常はログオン時にタスクスケジューラから自動起動。</p>
+            <code>cd watchdog<br>python run_dashboard.py</code>
+          </div>
+          <div class="ops-card">
+            <h4><i data-lucide="folder-tree" style="width:16px;height:16px"></i> 共通アーキテクチャ</h4>
+            <p>Python 3.10+ / SQLite (WAL) / Slack Incoming Webhook / Windows タスクスケジューラ。共通モジュールは <code>shared/</code> パッケージ (config, db, slack, logger)。</p>
+          </div>
+          <div class="ops-card">
+            <h4><i data-lucide="plus-circle" style="width:16px;height:16px"></i> 新システム追加時</h4>
+            <p>batch_run_log テーブルを持つ DB があれば自動発見される（「未登録」バッジで表示）。config.json に登録して正式監視対象にする。</p>
+            <code>watchdog/config.json → projects</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Vendor JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- App JS -->
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

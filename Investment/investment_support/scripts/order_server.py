@@ -20,6 +20,7 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
   /api/screening-funnel - スクリーニングファネル統計 JSON
   /api/recent-signals  - 指定ティッカーの直近シグナル JSON（GET）
   /api/trade-result    - トレード結果記録（POST）
+  /api/holdings/update-sl - 保有銘柄の損切りライン更新（POST）
   /api/settings        - 設定値取得（GET）/ 更新（POST）
   /api/batch/trigger   - バッチ手動実行（POST）
   /api/batch/status    - バッチ実行状態（GET）
@@ -434,32 +435,42 @@ def stock_detail(ticker: str):
 @app.route("/performance")
 def performance():
     """トレード成績分析ページ"""
+    usdjpy = _get_usdjpy()
     with get_connection() as conn:
-        # サマリー統計
+        # サマリー統計（JP/US別の pnl_amount 合計を含む）
         summary = fetch_one(
             conn,
             """SELECT COUNT(*) AS total,
-                      SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
-                      SUM(CASE WHEN pnl_pct <= 0 THEN 1 ELSE 0 END) AS losses,
-                      AVG(pnl_pct) AS avg_pnl,
-                      MIN(pnl_pct) AS worst_trade,
-                      MAX(pnl_pct) AS best_trade,
-                      SUM(CASE WHEN pnl_pct > 0 THEN pnl_pct ELSE 0 END) AS total_profit,
-                      SUM(CASE WHEN pnl_pct < 0 THEN ABS(pnl_pct) ELSE 0 END) AS total_loss
-               FROM trade_result_log
-               WHERE actual_exit_date IS NOT NULL""",
+                      SUM(CASE WHEN trl.pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN trl.pnl_pct <= 0 THEN 1 ELSE 0 END) AS losses,
+                      AVG(trl.pnl_pct) AS avg_pnl,
+                      MIN(trl.pnl_pct) AS worst_trade,
+                      MAX(trl.pnl_pct) AS best_trade,
+                      SUM(CASE WHEN trl.pnl_pct > 0 THEN trl.pnl_pct ELSE 0 END) AS total_profit,
+                      SUM(CASE WHEN trl.pnl_pct < 0 THEN ABS(trl.pnl_pct) ELSE 0 END) AS total_loss,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND COALESCE(tsl.market,'JP')='JP'
+                               THEN trl.pnl_amount ELSE 0 END) AS total_pnl_jpy,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND tsl.market='US'
+                               THEN trl.pnl_amount ELSE 0 END) AS total_pnl_usd
+               FROM trade_result_log trl
+               LEFT JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
+               WHERE trl.actual_exit_date IS NOT NULL""",
         )
         summary = dict(summary) if summary else {}
 
-        # パターン別
+        # パターン別（JP/US別の pnl_amount 合計を含む）
         pattern_stats = fetch_all(
             conn,
             """SELECT tsl.pattern,
                       COUNT(*) AS total,
                       SUM(CASE WHEN trl.pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
-                      AVG(trl.pnl_pct) AS avg_pnl
+                      AVG(trl.pnl_pct) AS avg_pnl,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND COALESCE(tsl.market,'JP')='JP'
+                               THEN trl.pnl_amount ELSE 0 END) AS sum_pnl_jpy,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND tsl.market='US'
+                               THEN trl.pnl_amount ELSE 0 END) AS sum_pnl_usd
                FROM trade_result_log trl
-               JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
+               LEFT JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
                WHERE trl.actual_exit_date IS NOT NULL
                GROUP BY tsl.pattern""",
         )
@@ -468,14 +479,14 @@ def performance():
         all_trades = fetch_all(
             conn,
             """SELECT trl.actual_exit_date, trl.pnl_pct, trl.pnl_amount,
-                      trl.ticker, trl.exit_reason, tsl.pattern
+                      trl.ticker, trl.exit_reason, tsl.pattern, tsl.market
                FROM trade_result_log trl
-               JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
+               LEFT JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
                WHERE trl.actual_exit_date IS NOT NULL
                ORDER BY trl.actual_exit_date""",
         )
 
-    return _render_performance(summary, pattern_stats, all_trades)
+    return _render_performance(summary, pattern_stats, all_trades, usdjpy)
 
 
 # ============================================================
@@ -670,15 +681,21 @@ def api_market_timeline():
 @app.route("/api/perf-monthly")
 def api_perf_monthly():
     """月別損益データ"""
+    usdjpy = _get_usdjpy()
     with get_connection() as conn:
         rows = fetch_all(
             conn,
-            """SELECT strftime('%Y-%m', actual_exit_date) AS month,
-                      SUM(pnl_pct) AS total_pnl,
+            """SELECT strftime('%Y-%m', trl.actual_exit_date) AS month,
+                      SUM(trl.pnl_pct) AS total_pnl,
                       COUNT(*) AS trades,
-                      SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins
-               FROM trade_result_log
-               WHERE actual_exit_date IS NOT NULL
+                      SUM(CASE WHEN trl.pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND COALESCE(tsl.market,'JP')='JP'
+                               THEN trl.pnl_amount ELSE 0 END) AS pnl_jpy,
+                      SUM(CASE WHEN trl.pnl_amount IS NOT NULL AND tsl.market='US'
+                               THEN trl.pnl_amount ELSE 0 END) AS pnl_usd
+               FROM trade_result_log trl
+               LEFT JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
+               WHERE trl.actual_exit_date IS NOT NULL
                GROUP BY month ORDER BY month""",
         )
 
@@ -686,6 +703,8 @@ def api_perf_monthly():
     return jsonify({
         "months": [r["month"] for r in rows],
         "pnl": [round(r["total_pnl"] or 0, 2) for r in rows],
+        "pnl_jpy": [round((r["pnl_jpy"] or 0) + (r["pnl_usd"] or 0) * usdjpy, 0)
+                     for r in rows],
         "trades": [r["trades"] for r in rows],
         "wins": [r["wins"] or 0 for r in rows],
     })
@@ -694,25 +713,34 @@ def api_perf_monthly():
 @app.route("/api/perf-cumulative")
 def api_perf_cumulative():
     """累積損益データ"""
+    usdjpy = _get_usdjpy()
     with get_connection() as conn:
         rows = fetch_all(
             conn,
-            """SELECT actual_exit_date, pnl_pct
-               FROM trade_result_log
-               WHERE actual_exit_date IS NOT NULL
-               ORDER BY actual_exit_date""",
+            """SELECT trl.actual_exit_date, trl.pnl_pct, trl.pnl_amount, tsl.market
+               FROM trade_result_log trl
+               LEFT JOIN trade_signal_log tsl ON tsl.id = trl.signal_id
+               WHERE trl.actual_exit_date IS NOT NULL
+               ORDER BY trl.actual_exit_date""",
         )
 
     dates = []
     cum = []
+    cum_jpy = []
     running = 0.0
+    running_jpy = 0.0
     for r in rows:
         r = dict(r)
         running += float(r["pnl_pct"] or 0)
         dates.append(r["actual_exit_date"])
         cum.append(round(running, 2))
+        amt = float(r["pnl_amount"] or 0)
+        if r.get("market") == "US":
+            amt *= usdjpy
+        running_jpy += amt
+        cum_jpy.append(round(running_jpy, 0))
 
-    return jsonify({"dates": dates, "cumulative_pnl": cum})
+    return jsonify({"dates": dates, "cumulative_pnl": cum, "cumulative_pnl_jpy": cum_jpy})
 
 
 @app.route("/api/recent-signals")
@@ -844,6 +872,70 @@ def api_trade_result():
         "ticker": ticker,
         "pnl_pct": pnl_pct,
         "message": f"{ticker} のトレード結果を記録しました（{sign}{pnl_pct}%）",
+    })
+
+
+@app.route("/api/holdings/update-sl", methods=["POST"])
+def api_holdings_update_sl():
+    """保有銘柄の損切りラインを更新する（DB + holdings.csv 同期）"""
+    import csv
+
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({"error": "無効なリクエスト"}), 400
+
+    ticker = (data.get("ticker") or "").strip()
+    sl_raw = data.get("stop_loss_price")
+
+    if not ticker:
+        return jsonify({"error": "ティッカーを指定してください"}), 400
+    try:
+        new_sl = float(sl_raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "損切り価格が不正です"}), 400
+    if new_sl <= 0:
+        return jsonify({"error": "損切り価格は0より大きい値にしてください"}), 400
+
+    # DB 更新
+    with get_connection() as conn:
+        holding = fetch_one(
+            conn,
+            "SELECT id FROM holdings WHERE ticker=? AND is_closed=0",
+            (ticker,),
+        )
+        if not holding:
+            return jsonify({"error": f"{ticker} は保有銘柄に見つかりません"}), 404
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE holdings SET stop_loss_price=?, updated_at=? "
+            "WHERE ticker=? AND is_closed=0",
+            (new_sl, now, ticker),
+        )
+
+    # holdings.csv も同期更新
+    csv_path = _PROJECT_ROOT / "holdings.csv"
+    if csv_path.exists():
+        rows = []
+        fieldnames = None
+        with open(csv_path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            for row in reader:
+                if row.get("ticker", "").strip() == ticker:
+                    row["stop_loss_price"] = str(new_sl)
+                rows.append(row)
+        if fieldnames:
+            with open(csv_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+    logger.info(f"SL更新: {ticker} → {new_sl}")
+    return jsonify({
+        "success": True,
+        "ticker": ticker,
+        "stop_loss_price": new_sl,
     })
 
 
@@ -1357,7 +1449,9 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
                 action_items.append((
                     "info",
                     f"📋 {h['ticker']} — 損切りライン引き上げ推奨: "
-                    f"{sl:,.2f} → {_adj:,.2f}（買値付近）"
+                    f"{sl:,.2f} → {_adj:,.2f}（買値付近）",
+                    {"type": "sl_update", "ticker": h["ticker"],
+                     "old_sl": sl, "new_sl": round(float(_adj), 2)},
                 ))
 
     if mode in ("caution", "full_caution"):
@@ -1561,6 +1655,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "status_cls": status_cls,
             "status_label": status_label,
             "sl_str": f"{sl:,.2f}",
+            "sl_raw": sl,
+            "adjusted_stop": float(h["adjusted_stop"]) if h.get("adjusted_stop") else None,
             "target_str": target_str,
             "days_str": days_str,
             "days_css": days_css,
@@ -1781,7 +1877,7 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
 # HTML レンダリング: /performance
 # ============================================================
 
-def _render_performance(summary, pattern_stats, all_trades):
+def _render_performance(summary, pattern_stats, all_trades, usdjpy_rate: float = 150.0):
     summary = summary or {}
     pattern_stats = [dict(p) for p in pattern_stats]
     all_trades = [dict(t) for t in all_trades]
@@ -1797,6 +1893,11 @@ def _render_performance(summary, pattern_stats, all_trades):
     win_rate = (wins / total * 100) if total > 0 else 0
     pf = (total_profit / total_loss) if total_loss > 0 else 0
 
+    # 実現損益（円）: JP はそのまま、US は USD→JPY 換算
+    total_pnl_jpy_raw = float(summary.get("total_pnl_jpy") or 0)
+    total_pnl_usd_raw = float(summary.get("total_pnl_usd") or 0)
+    total_pnl_combined_jpy = total_pnl_jpy_raw + total_pnl_usd_raw * usdjpy_rate
+
     # パターン別リスト
     pat_rows = []
     for p in pattern_stats:
@@ -1805,12 +1906,15 @@ def _render_performance(summary, pattern_stats, all_trades):
         pw = p.get("wins") or 0
         pa = p.get("avg_pnl") or 0
         pwr = (pw / pt * 100) if pt > 0 else 0
+        p_jpy = float(p.get("sum_pnl_jpy") or 0)
+        p_usd = float(p.get("sum_pnl_usd") or 0)
         pat_rows.append({
             "pattern_name": pat_name,
             "total": pt,
             "wins": pw,
             "win_rate": pwr,
             "avg_pnl": pa,
+            "sum_pnl_jpy": p_jpy + p_usd * usdjpy_rate,
         })
 
     # トレード一覧リスト
@@ -1822,11 +1926,19 @@ def _render_performance(summary, pattern_stats, all_trades):
             "manual": "手動", "forced_stop": "強制停止",
         }.get(t.get("exit_reason", ""), t.get("exit_reason") or "—")
         pat_name = _PATTERN_NAME.get(t.get("pattern", ""), t.get("pattern", ""))
+        # 損益金額（円換算）
+        raw_amount = t.get("pnl_amount")
+        market = t.get("market") or "JP"
+        if raw_amount is not None:
+            pnl_amount_jpy = float(raw_amount) * (usdjpy_rate if market == "US" else 1.0)
+        else:
+            pnl_amount_jpy = None
         trade_rows.append({
             "exit_date": t.get("actual_exit_date") or "",
             "ticker": t.get("ticker") or "",
             "pattern_name": pat_name,
             "pnl": pnl,
+            "pnl_amount_jpy": pnl_amount_jpy,
             "reason_label": reason_label,
         })
 
@@ -1841,6 +1953,7 @@ def _render_performance(summary, pattern_stats, all_trades):
         pf=pf,
         best=best,
         worst=worst,
+        total_pnl_jpy=total_pnl_combined_jpy,
         pat_rows=pat_rows,
         trade_rows=trade_rows,
     )
@@ -2496,6 +2609,229 @@ def api_settings_post():
 
 
 # ============================================================
+# プロンプトビルダー
+# ============================================================
+
+@app.route("/prompt-builder")
+def prompt_builder_page():
+    """プロンプト作成ページ"""
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    with get_connection() as conn:
+        # 保有銘柄
+        holdings_rows = fetch_all(
+            conn,
+            """
+            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
+                   h.quantity, h.stop_loss_price,
+                   (SELECT adj_close FROM price_history
+                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
+                    ORDER BY date DESC LIMIT 1) AS current_price,
+                   (SELECT target_price FROM trade_signal_log
+                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
+                   t.rsi14 AS tech_rsi14, t.ma5 AS tech_ma5, t.ma25 AS tech_ma25,
+                   t.ma75 AS tech_ma75, t.ma200 AS tech_ma200
+            FROM holdings h
+            LEFT JOIN technical_snapshot t
+              ON t.ticker = h.ticker
+              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
+            WHERE h.is_closed = 0
+            ORDER BY h.entry_date
+            """,
+            (today_str,),
+        )
+
+        # 直近7日の買い候補
+        candidates_rows = fetch_all(
+            conn,
+            """
+            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
+                   tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
+                   tsl.target_price, tsl.recommended_amount, tsl.signal_date,
+                   tsl.conditions_met,
+                   ds.final_score, ds.recommend_rank,
+                   ds.trend_score AS _trend_score,
+                   ds.pattern_a_score AS _pattern_a_score,
+                   ds.pattern_b_score AS _pattern_b_score,
+                   ds.liquidity_score AS _liquidity_score,
+                   t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
+                   t.ma75 AS _ma75, t.ma200 AS _ma200,
+                   t.vol_20d_avg, t.high_52w AS _high_52w,
+                   ph.adj_close AS _close,
+                   CASE WHEN t.vol_20d_avg > 0
+                        THEN ph.volume * 1.0 / t.vol_20d_avg
+                        ELSE NULL END AS _vol_ratio
+            FROM trade_signal_log tsl
+            LEFT JOIN daily_signals ds
+              ON ds.ticker = tsl.ticker AND ds.date = tsl.signal_date
+            LEFT JOIN technical_snapshot t
+              ON t.ticker = tsl.ticker
+              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = tsl.ticker)
+            LEFT JOIN price_history ph
+              ON ph.ticker = tsl.ticker
+              AND ph.date = (SELECT MAX(date) FROM price_history WHERE ticker = tsl.ticker AND is_holiday = 0)
+            WHERE tsl.signal_date >= date(?, '-7 days')
+            ORDER BY tsl.signal_date DESC, tsl.ticker
+            """,
+            (today_str,),
+        )
+
+        # 市場環境
+        market_env = fetch_one(
+            conn,
+            "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
+        )
+
+    # 保有銘柄に損益率を計算して付加
+    holdings = []
+    for row in holdings_rows:
+        h = dict(row)
+        entry = h.get("entry_price") or 0
+        current = h.get("current_price") or 0
+        h["pnl_pct"] = ((current - entry) / entry * 100) if entry > 0 else 0
+        if h.get("entry_date"):
+            try:
+                ed = date.fromisoformat(h["entry_date"])
+                h["holding_days"] = (date.today() - ed).days
+            except (ValueError, TypeError):
+                h["holding_days"] = "?"
+        else:
+            h["holding_days"] = "?"
+        h["label"] = "hold"  # 簡易判定
+        if h.get("stop_loss_price") and current > 0:
+            sl = h["stop_loss_price"]
+            if current <= sl:
+                h["label"] = "forced_stop"
+            elif (current - sl) / current * 100 < 2.0:
+                h["label"] = "sl_near"
+        h["reasons"] = []
+        holdings.append(h)
+
+    candidates = [dict(r) for r in candidates_rows]
+    me = dict(market_env) if market_env else {}
+
+    from src.prompt_builder import THEMES
+    return render_template(
+        "prompt_builder.html",
+        active_page="prompt_builder",
+        holdings=holdings,
+        candidates=candidates,
+        market_env=me,
+        themes=THEMES,
+    )
+
+
+@app.route("/api/prompt-builder/generate", methods=["POST"])
+def api_prompt_builder_generate():
+    """テーマに基づいてプロンプトを生成する"""
+    from src.prompt_builder import generate_prompt
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"success": False, "error": "リクエストボディが必要です"}), 400
+
+    theme = data.get("theme", "")
+    tickers = data.get("tickers", [])
+    options = data.get("options", {})
+
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    with get_connection() as conn:
+        # 保有銘柄
+        holdings_rows = fetch_all(
+            conn,
+            """
+            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
+                   h.quantity, h.stop_loss_price,
+                   (SELECT adj_close FROM price_history
+                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
+                    ORDER BY date DESC LIMIT 1) AS current_price,
+                   (SELECT target_price FROM trade_signal_log
+                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
+                   t.rsi14 AS tech_rsi14, t.ma5 AS tech_ma5, t.ma25 AS tech_ma25,
+                   t.ma75 AS tech_ma75, t.ma200 AS tech_ma200
+            FROM holdings h
+            LEFT JOIN technical_snapshot t
+              ON t.ticker = h.ticker
+              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
+            WHERE h.is_closed = 0
+            ORDER BY h.entry_date
+            """,
+            (today_str,),
+        )
+
+        candidates_rows = fetch_all(
+            conn,
+            """
+            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
+                   tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
+                   tsl.target_price, tsl.recommended_amount, tsl.signal_date,
+                   tsl.conditions_met,
+                   ds.final_score, ds.recommend_rank,
+                   ds.trend_score AS _trend_score,
+                   ds.pattern_a_score AS _pattern_a_score,
+                   ds.pattern_b_score AS _pattern_b_score,
+                   ds.liquidity_score AS _liquidity_score,
+                   t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
+                   t.ma75 AS _ma75, t.ma200 AS _ma200,
+                   t.vol_20d_avg, t.high_52w AS _high_52w,
+                   ph.adj_close AS _close,
+                   CASE WHEN t.vol_20d_avg > 0
+                        THEN ph.volume * 1.0 / t.vol_20d_avg
+                        ELSE NULL END AS _vol_ratio
+            FROM trade_signal_log tsl
+            LEFT JOIN daily_signals ds
+              ON ds.ticker = tsl.ticker AND ds.date = tsl.signal_date
+            LEFT JOIN technical_snapshot t
+              ON t.ticker = tsl.ticker
+              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = tsl.ticker)
+            LEFT JOIN price_history ph
+              ON ph.ticker = tsl.ticker
+              AND ph.date = (SELECT MAX(date) FROM price_history WHERE ticker = tsl.ticker AND is_holiday = 0)
+            WHERE tsl.signal_date >= date(?, '-7 days')
+            ORDER BY tsl.signal_date DESC, tsl.ticker
+            """,
+            (today_str,),
+        )
+
+        market_env = fetch_one(
+            conn,
+            "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
+        )
+
+    # enrich holdings
+    holdings = []
+    for row in holdings_rows:
+        h = dict(row)
+        entry = h.get("entry_price") or 0
+        current = h.get("current_price") or 0
+        h["pnl_pct"] = ((current - entry) / entry * 100) if entry > 0 else 0
+        if h.get("entry_date"):
+            try:
+                ed = date.fromisoformat(h["entry_date"])
+                h["holding_days"] = (date.today() - ed).days
+            except (ValueError, TypeError):
+                h["holding_days"] = "?"
+        else:
+            h["holding_days"] = "?"
+        h["label"] = "hold"
+        if h.get("stop_loss_price") and current > 0:
+            sl = h["stop_loss_price"]
+            if current <= sl:
+                h["label"] = "forced_stop"
+            elif (current - sl) / current * 100 < 2.0:
+                h["label"] = "sl_near"
+        h["reasons"] = []
+        holdings.append(h)
+
+    candidates = [dict(r) for r in candidates_rows]
+    me = dict(market_env) if market_env else {}
+
+    result = generate_prompt(theme, tickers, holdings, candidates, me, options)
+    return jsonify({"success": True, **result})
+
+
+# ============================================================
 # バッチ手動実行
 # ============================================================
 
@@ -2630,6 +2966,7 @@ def main():
     logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
     logger.info("  /paypay       - PayPayポイント運用")
+    logger.info("  /prompt-builder - プロンプト作成")
     logger.info("  /settings     - 設定")
     logger.info("  /stock/<ticker> - 個別銘柄詳細")
     logger.info("  Ctrl+C で停止")

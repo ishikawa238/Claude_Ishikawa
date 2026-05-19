@@ -36,6 +36,22 @@
       "batches": [
         {"batch_type": "morning", "schedule": "daily"}
       ]
+    },
+    "paper_watch": {
+      "label": "PaperWatch",
+      "db_path": "../PaperWatch/paper_watch/data/paper_watch.db",
+      "log_dir": "../PaperWatch/paper_watch/logs",
+      "batches": [
+        {"batch_type": "morning", "schedule": "daily", "single_batch": true}
+      ]
+    },
+    "english_daily": {
+      "label": "EnglishDaily",
+      "db_path": "../EnglishDaily/english_daily/data/english_daily.db",
+      "log_dir": "../EnglishDaily/english_daily/logs",
+      "batches": [
+        {"batch_type": "morning", "schedule": "daily"}
+      ]
     }
   },
 
@@ -47,5 +63,10 @@
   "discovery": {
     "enabled": true,
     "exclude_dirs": ["shared", "shared.egg-info", "watchdog", "claude-study"]
+  },
+
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 5200
   }
 }

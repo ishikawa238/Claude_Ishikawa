@@ -475,6 +475,28 @@ class OrderServerTestCase(unittest.TestCase):
         html = resp.data.decode()
         self.assertIn("直近トレード", html)
 
+    def test_performance_contains_pnl_jpy(self):
+        resp = self.client.get("/performance")
+        html = resp.data.decode()
+        self.assertIn("実現損益(円)", html)
+        self.assertIn("円", html)
+        self.assertIn("合計損益(円)", html)
+        self.assertIn("損益(円)", html)
+
+    def test_api_perf_monthly_includes_pnl_jpy(self):
+        resp = self.client.get("/api/perf-monthly")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("pnl_jpy", data)
+        self.assertIsInstance(data["pnl_jpy"], list)
+
+    def test_api_perf_cumulative_includes_pnl_jpy(self):
+        resp = self.client.get("/api/perf-cumulative")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("cumulative_pnl_jpy", data)
+        self.assertIsInstance(data["cumulative_pnl_jpy"], list)
+
     # ---- /api/portfolio-pnl ----
 
     def test_api_portfolio_pnl_returns_json(self):

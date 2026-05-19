@@ -2,6 +2,7 @@
 
 // 累積損益
 fetch('/api/perf-cumulative').then(function(r) { return r.json(); }).then(function(data) {
+  var _cumJpy = data.cumulative_pnl_jpy || [];
   new Chart(document.getElementById('cumChart'), {
     type: 'line',
     data: {
@@ -16,7 +17,17 @@ fetch('/api/perf-cumulative').then(function(r) { return r.json(); }).then(functi
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: function(ctx) {
+              var jpy = _cumJpy[ctx.dataIndex];
+              return jpy != null ? '円: ' + Number(jpy).toLocaleString() + '円' : null;
+            }
+          }
+        }
+      },
       scales: {
         x: { ticks: { maxTicksLimit: 8, font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } },
         y: { ticks: { callback: function(v) { return v + '%'; }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } }
@@ -27,6 +38,7 @@ fetch('/api/perf-cumulative').then(function(r) { return r.json(); }).then(functi
 
 // 月別損益
 fetch('/api/perf-monthly').then(function(r) { return r.json(); }).then(function(data) {
+  var _monthJpy = data.pnl_jpy || [];
   new Chart(document.getElementById('monthlyChart'), {
     type: 'bar',
     data: {
@@ -39,7 +51,17 @@ fetch('/api/perf-monthly').then(function(r) { return r.json(); }).then(function(
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: function(ctx) {
+              var jpy = _monthJpy[ctx.dataIndex];
+              return jpy != null ? '円: ' + Number(jpy).toLocaleString() + '円' : null;
+            }
+          }
+        }
+      },
       scales: {
         x: { ticks: { font: { size: 10 }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } },
         y: { ticks: { callback: function(v) { return v + '%'; }, color: ChartTheme.textColor() }, grid: { color: ChartTheme.gridColor() } }

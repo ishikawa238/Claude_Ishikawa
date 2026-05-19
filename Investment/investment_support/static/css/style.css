@@ -574,3 +574,21 @@ th { white-space: nowrap; }
   gap: 4px;
 }
 .theme-toggle:hover { background: var(--bg-muted); border-color: var(--border-color-hover); }
+
+/* SL inline edit */
+.sl-display { cursor: pointer; border-bottom: 1px dashed var(--border-color); }
+.sl-display:hover { color: var(--primary); }
+.sl-hint { font-size: 0.7rem; color: var(--warning); }
+.sl-edit { display: inline-flex; align-items: center; gap: 2px; }
+.sl-input { width: 80px; font-size: 0.8rem; padding: 1px 4px; border: 1px solid var(--border-color); border-radius: 3px; background: var(--bg-card); color: var(--text-primary); }
+.sl-save-btn, .sl-cancel-btn { border: none; background: none; cursor: pointer; font-size: 0.85rem; padding: 0 3px; line-height: 1; }
+.sl-save-btn { color: var(--success); }
+.sl-cancel-btn { color: var(--danger); }
+.sl-cell.sl-saving .sl-display { opacity: 0.5; }
+.sl-cell.sl-ok .sl-display { animation: sl-flash 0.6s; }
+@keyframes sl-flash { 0%,100% { background: transparent; } 50% { background: var(--success-bg, rgba(40,167,69,0.15)); } }
+.sl-apply-btn { margin-left: 8px; padding: 3px 12px; font-size: 0.8rem; font-weight: 600; border: 2px solid #2563eb; border-radius: 5px; background: #eff6ff; color: #1e40af; cursor: pointer; transition: all 0.15s; }
+.sl-apply-btn:hover { background: #2563eb; color: #fff; }
+.sl-apply-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+[data-theme="dark"] .sl-apply-btn { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+[data-theme="dark"] .sl-apply-btn:hover { background: #3b82f6; color: #fff; }

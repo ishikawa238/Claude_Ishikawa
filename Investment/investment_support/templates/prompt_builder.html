@@ -81,7 +81,7 @@
   <h2>2. 銘柄を選択</h2>
 
   <div id="singleSelect" style="display:none">
-    <select id="tickerSelect" class="form-select" style="max-width:400px">
+    <select id="tickerSelect" class="form-select" style="max-width:560px">
       <option value="">-- 選択してください --</option>
     </select>
   </div>
@@ -197,8 +197,11 @@ function populateSelect(items, type) {
       var pnl = (item.pnl_pct || 0).toFixed(1);
       opt.textContent = item.ticker + ' ' + (item.name || '') + ' (' + (pnl >= 0 ? '+' : '') + pnl + '%)';
     } else {
-      var dt = item.signal_date || '';
-      opt.textContent = item.ticker + ' ' + (item.name || '') + ' [' + (item.pattern || '') + '] ' + dt;
+      var dt = (item.signal_date || '').slice(5);
+      var rank = item.recommend_rank || '-';
+      var score = (item.final_score != null) ? Math.round(item.final_score) : '-';
+      var labelMark = (item.ds_label === 'candidate') ? '\u2605\u5019\u88dc' : '\u25B3\u76E3\u8996';
+      opt.textContent = item.ticker + ' ' + (item.name || '') + ' [' + (item.pattern || '') + '] ' + rank + ' ' + score + ' ' + labelMark + ' ' + dt;
     }
     sel.appendChild(opt);
   });

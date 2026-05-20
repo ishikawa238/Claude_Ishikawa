@@ -373,6 +373,11 @@ def _format_holdings_rich(holdings: list[dict]) -> str:
     if not holdings:
         return "## 保有銘柄\nなし"
 
+    # 総資金（ポートフォリオ比率計算用）
+    cap_cfg = CONFIG.get("capital", {})
+    total_cap_jpy = float(cap_cfg.get("total_capital_jpy", 0))
+    total_cap_usd = float(cap_cfg.get("total_capital_usd", 0))
+
     lines = [f"## 保有銘柄（{len(holdings)}件）"]
     for h in holdings:
         ticker = h.get("ticker", "?")
@@ -381,16 +386,30 @@ def _format_holdings_rich(holdings: list[dict]) -> str:
         days = h.get("holding_days", "?")
         label = h.get("label", "?")
         label_jp = _HOLDING_LABELS.get(label, label)
+        quantity = h.get("quantity")
 
+        qty_str = f" {quantity:g}株" if quantity else ""
         lines.append(
-            f"- {ticker} {name}"
+            f"- {ticker} {name}{qty_str}"
             f" 損益:{pnl_pct:+.1f}%"
             f" 保有:{days}日"
             f" 判定:{label_jp}"
         )
 
-        # 現在値・目標・損切りの距離
+        # 評価額・ポートフォリオ比率
         current = h.get("current_price")
+        if quantity and current:
+            market = h.get("market", "")
+            value = quantity * current
+            total_cap = total_cap_jpy if market == "JP" else total_cap_usd
+            currency = "円" if market == "JP" else "USD"
+            val_str = f"評価額:{value:,.0f}{currency}"
+            if total_cap > 0:
+                weight = value / total_cap * 100
+                val_str += f"（ポートフォリオ比率:{weight:.1f}%）"
+            lines.append(f"  {val_str}")
+
+        # 現在値・目標・損切りの距離
         target = h.get("target_price")
         sl = h.get("stop_loss_price")
         price_parts = []

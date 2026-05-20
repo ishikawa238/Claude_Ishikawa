@@ -87,6 +87,7 @@ def _make_holding(**overrides) -> dict:
         "ticker": "AAPL",
         "name": "Apple Inc",
         "market": "US",
+        "quantity": 5,
         "pnl_pct": 5.2,
         "holding_days": 15,
         "label": "hold",
@@ -533,6 +534,43 @@ class TestFormatHoldingsRich(unittest.TestCase):
         text = llm_advisor._format_holdings_rich([_make_holding()])
         self.assertIn("目標:210", text)
         self.assertIn("損切り:170", text)
+
+    def test_holding_quantity_and_value(self):
+        """株数・評価額が表示される"""
+        text = llm_advisor._format_holdings_rich([_make_holding()])
+        self.assertIn("5株", text)
+        # 5株 × 190.0 = 950 USD
+        self.assertIn("評価額:950USD", text)
+
+    def test_holding_portfolio_weight(self):
+        """ポートフォリオ比率が表示される（CONFIG に total_capital_usd がある場合）"""
+        with patch.object(llm_advisor, "CONFIG", {
+            **_CONFIG_MOCK,
+            "capital": {"total_capital_jpy": "1000000", "total_capital_usd": "10000"},
+        }):
+            text = llm_advisor._format_holdings_rich([_make_holding()])
+        # 950 / 10000 = 9.5%
+        self.assertIn("ポートフォリオ比率:9.5%", text)
+
+    def test_holding_no_quantity(self):
+        """quantity がない場合は株数・評価額を表示しない"""
+        text = llm_advisor._format_holdings_rich([_make_holding(quantity=None)])
+        self.assertNotIn("株", text)
+        self.assertNotIn("評価額", text)
+
+    def test_holding_multiple_weights(self):
+        """複数銘柄のポートフォリオ比率がそれぞれ計算される"""
+        with patch.object(llm_advisor, "CONFIG", {
+            **_CONFIG_MOCK,
+            "capital": {"total_capital_jpy": "1000000", "total_capital_usd": "10000"},
+        }):
+            holdings = [
+                _make_holding(ticker="AAPL", current_price=200.0, quantity=10),  # 2000 USD = 20%
+                _make_holding(ticker="GOOG", current_price=150.0, quantity=20),  # 3000 USD = 30%
+            ]
+            text = llm_advisor._format_holdings_rich(holdings)
+        self.assertIn("比率:20.0%", text)
+        self.assertIn("比率:30.0%", text)
 
 
 class TestFormatMaAlignment(unittest.TestCase):

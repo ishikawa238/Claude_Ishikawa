@@ -2612,6 +2612,30 @@ def api_settings_post():
 # プロンプトビルダー
 # ============================================================
 
+
+def _dedup_candidates(rows: list[dict]) -> list[dict]:
+    """ティッカーごとに最良の行（final_score最大 → signal_date最新）のみ残す。"""
+    best: dict[str, dict] = {}
+    for row in rows:
+        ticker = row["ticker"]
+        if ticker not in best:
+            best[ticker] = row
+            continue
+        prev = best[ticker]
+        prev_score = prev.get("final_score") or 0
+        curr_score = row.get("final_score") or 0
+        if curr_score > prev_score or (
+            curr_score == prev_score
+            and (row.get("signal_date") or "") > (prev.get("signal_date") or "")
+        ):
+            best[ticker] = row
+    return sorted(
+        best.values(),
+        key=lambda r: (r.get("final_score") or 0),
+        reverse=True,
+    )
+
+
 @app.route("/prompt-builder")
 def prompt_builder_page():
     """プロンプト作成ページ"""
@@ -2650,6 +2674,7 @@ def prompt_builder_page():
                    tsl.target_price, tsl.recommended_amount, tsl.signal_date,
                    tsl.conditions_met,
                    ds.final_score, ds.recommend_rank,
+                   ds.label AS ds_label,
                    ds.trend_score AS _trend_score,
                    ds.pattern_a_score AS _pattern_a_score,
                    ds.pattern_b_score AS _pattern_b_score,
@@ -2707,7 +2732,7 @@ def prompt_builder_page():
         h["reasons"] = []
         holdings.append(h)
 
-    candidates = [dict(r) for r in candidates_rows]
+    candidates = _dedup_candidates([dict(r) for r in candidates_rows])
     me = dict(market_env) if market_env else {}
 
     from src.prompt_builder import THEMES
@@ -2768,6 +2793,7 @@ def api_prompt_builder_generate():
                    tsl.target_price, tsl.recommended_amount, tsl.signal_date,
                    tsl.conditions_met,
                    ds.final_score, ds.recommend_rank,
+                   ds.label AS ds_label,
                    ds.trend_score AS _trend_score,
                    ds.pattern_a_score AS _pattern_a_score,
                    ds.pattern_b_score AS _pattern_b_score,
@@ -2824,7 +2850,7 @@ def api_prompt_builder_generate():
         h["reasons"] = []
         holdings.append(h)
 
-    candidates = [dict(r) for r in candidates_rows]
+    candidates = _dedup_candidates([dict(r) for r in candidates_rows])
     me = dict(market_env) if market_env else {}
 
     result = generate_prompt(theme, tickers, holdings, candidates, me, options)

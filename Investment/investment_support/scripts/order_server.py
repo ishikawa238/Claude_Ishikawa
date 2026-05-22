@@ -102,7 +102,7 @@ app = Flask(
 
 _MODE_LABEL = {"normal": "通常モード", "caution": "警戒モード", "full_caution": "全面警戒モード"}
 _MODE_CSS = {"normal": "mode-normal", "caution": "mode-caution", "full_caution": "mode-full_caution"}
-_PATTERN_NAME = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
+_PATTERN_NAME = {"A": "モメンタムブレイクアウト", "B": "押し目買い", "C": "サポートバウンス"}
 _RANK_CSS = {"S": "rank-s", "A": "rank-a", "B": "rank-b", "C": "rank-c", "Watch": "rank-watch"}
 _LABEL_CSS = {"candidate": "label-candidate", "watch": "label-watch", "skip": "label-skip"}
 _LABEL_DISPLAY = {"candidate": "候補", "watch": "監視", "skip": "スキップ"}
@@ -193,6 +193,12 @@ _COND_B_LABELS = [
     ("cond_b_ma25_rising",      "MA25上昇"),
     ("cond_b_rsi_ok",           "RSI適正"),
 ]
+_COND_C_LABELS = [
+    ("cond_c_weekly_uptrend", "週足MA25上昇"),
+    ("cond_c_at_support",     "サポート近傍"),
+    ("cond_c_rsi_oversold",   "RSI売られ過ぎ"),
+    ("cond_c_sar_reversal",   "SAR反転"),
+]
 
 
 # ============================================================
@@ -232,7 +238,7 @@ def report():
                     WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS signal_pattern,
                    t.rsi14, t.atr14, t.ma5, t.ma25, t.ma75, t.ma200,
                    d.final_score, d.recommend_rank,
-                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.liquidity_score,
+                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.pattern_c_score, d.liquidity_score,
                    u.sector,
                    tp.profit_type, tp.r_value,
                    tp.t1_price, tp.t1_pct, tp.t1_reached,
@@ -390,7 +396,7 @@ def stock_detail(ticker: str):
         # スコア
         score = fetch_one(
             conn,
-            """SELECT trend_score, pattern_a_score, pattern_b_score,
+            """SELECT trend_score, pattern_a_score, pattern_b_score, pattern_c_score,
                       liquidity_score, final_score, recommend_rank, recommend_reason
                FROM daily_signals
                WHERE ticker = ? ORDER BY date DESC LIMIT 1""",
@@ -517,8 +523,11 @@ def screening():
                       d.cond_b_ma200_rising, d.cond_b_ma_aligned,
                       d.cond_b_pullback_touched, d.cond_b_bounced,
                       d.cond_b_ma25_rising, d.cond_b_rsi_ok,
+                      d.cond_c_weekly_uptrend, d.cond_c_at_support,
+                      d.cond_c_rsi_oversold, d.cond_c_sar_reversal,
                       d.close, d.rsi14, d.atr14, d.vol_ratio, d.rs_rank,
-                      d.final_score, d.recommend_rank, d.recommend_reason
+                      d.final_score, d.recommend_rank, d.recommend_reason,
+                      d.pattern_c_score
                FROM daily_signals d
                LEFT JOIN universe_master u ON u.ticker = d.ticker
                WHERE (d.market, d.date) IN (
@@ -604,20 +613,22 @@ def api_score_radar():
     with get_connection() as conn:
         row = fetch_one(
             conn,
-            """SELECT trend_score, pattern_a_score, pattern_b_score, liquidity_score
+            """SELECT trend_score, pattern_a_score, pattern_b_score,
+                      pattern_c_score, liquidity_score
                FROM daily_signals WHERE ticker = ?
                ORDER BY date DESC LIMIT 1""",
             (ticker,),
         )
 
     if not row:
-        return jsonify({"trend": 0, "pattern_a": 0, "pattern_b": 0, "liquidity": 0})
+        return jsonify({"trend": 0, "pattern_a": 0, "pattern_b": 0, "pattern_c": 0, "liquidity": 0})
 
     row = dict(row)
     return jsonify({
         "trend": row.get("trend_score") or 0,
         "pattern_a": row.get("pattern_a_score") or 0,
         "pattern_b": row.get("pattern_b_score") or 0,
+        "pattern_c": row.get("pattern_c_score") or 0,
         "liquidity": row.get("liquidity_score") or 0,
     })
 
@@ -1999,7 +2010,7 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
 
         # 条件フラグドット
         conds_html = ""
-        cond_labels = _COND_A_LABELS if pattern == "A" else _COND_B_LABELS
+        cond_labels = {"A": _COND_A_LABELS, "B": _COND_B_LABELS, "C": _COND_C_LABELS}.get(pattern, _COND_A_LABELS)
         for col, tip in cond_labels:
             conds_html += _cond_dot(r.get(col), tip)
 
@@ -2678,6 +2689,7 @@ def prompt_builder_page():
                    ds.trend_score AS _trend_score,
                    ds.pattern_a_score AS _pattern_a_score,
                    ds.pattern_b_score AS _pattern_b_score,
+                   ds.pattern_c_score AS _pattern_c_score,
                    ds.liquidity_score AS _liquidity_score,
                    t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
                    t.ma75 AS _ma75, t.ma200 AS _ma200,
@@ -2797,6 +2809,7 @@ def api_prompt_builder_generate():
                    ds.trend_score AS _trend_score,
                    ds.pattern_a_score AS _pattern_a_score,
                    ds.pattern_b_score AS _pattern_b_score,
+                   ds.pattern_c_score AS _pattern_c_score,
                    ds.liquidity_score AS _liquidity_score,
                    t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
                    t.ma75 AS _ma75, t.ma200 AS _ma200,

@@ -116,6 +116,7 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         "_trend_score":      signal.get("trend_score"),
         "_pattern_a_score":  signal.get("pattern_a_score"),
         "_pattern_b_score":  signal.get("pattern_b_score"),
+        "_pattern_c_score":  signal.get("pattern_c_score"),
         "_liquidity_score":  signal.get("liquidity_score"),
         # テクニカル指標（DB保存対象外・notifier で使用）
         "_high_52w": signal.get("high_52w"),
@@ -201,6 +202,12 @@ def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
             "cond_b_bounced":          "MA25からの反発確認",
             "cond_b_ma25_rising":      "MA25上昇中",
             "cond_b_rsi_ok":           f"RSI適正（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI適正",
+        },
+        "C": {
+            "cond_c_weekly_uptrend": "週足MA25上昇中（長期上昇トレンド確認）",
+            "cond_c_at_support":     "サポートレベル近傍",
+            "cond_c_rsi_oversold":   f"RSI売られ過ぎ圏（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI売られ過ぎ圏",
+            "cond_c_sar_reversal":   "パラボリックSAR上昇転換",
         },
     }
     met = []

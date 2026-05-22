@@ -1,7 +1,8 @@
 """
 買い候補スコアリングモジュール (v1)
 
-各候補銘柄に対して trend_score / pattern_a_score / pattern_b_score / liquidity_score を計算し、
+各候補銘柄に対して trend_score / pattern_a_score / pattern_b_score /
+pattern_c_score / liquidity_score を計算し、
 final_score (0〜100) と recommend_rank / recommend_reason を生成する。
 
 設計方針:
@@ -21,9 +22,10 @@ logger = get_logger(__name__)
 # 最終スコアの重み
 # ============================================================
 
-W_TREND     = 0.35
-W_PATTERN_A = 0.30
-W_PATTERN_B = 0.20
+W_TREND     = 0.30
+W_PATTERN_A = 0.25
+W_PATTERN_B = 0.15
+W_PATTERN_C = 0.15
 W_LIQUIDITY = 0.15
 
 # ============================================================
@@ -49,6 +51,14 @@ _PAW_RSI       = 0.20
 _PBW_PULLBACK   = 0.40
 _PBW_REBOUND    = 0.35
 _PBW_MA25_TREND = 0.25
+
+# ============================================================
+# pattern_c_score サブスコア重み
+# ============================================================
+
+_PCW_SUPPORT_PROXIMITY = 0.40
+_PCW_RSI_DEPTH         = 0.30
+_PCW_SAR_CONFIRM       = 0.30
 
 # ============================================================
 # 市場環境 multiplier
@@ -120,12 +130,14 @@ def compute_score(
     t_score   = _calc_trend_score(tk)
     pa_score  = _calc_pattern_a_score(tk)
     pb_score  = _calc_pattern_b_score(tk, recent_low_5d)
+    pc_score  = _calc_pattern_c_score(tk)
     liq_score = _calc_liquidity_score(tk)
 
     base = (
         W_TREND     * t_score
         + W_PATTERN_A * pa_score
         + W_PATTERN_B * pb_score
+        + W_PATTERN_C * pc_score
         + W_LIQUIDITY * liq_score
     )
 
@@ -138,6 +150,7 @@ def compute_score(
         "trend_score":      t_score,
         "pattern_a_score":  pa_score,
         "pattern_b_score":  pb_score,
+        "pattern_c_score":  pc_score,
         "liquidity_score":  liq_score,
         "base_score":       round(base, 1),
         "market_multiplier": multiplier,
@@ -380,7 +393,62 @@ def _calc_pattern_b_score(
 
 
 # ============================================================
-# 4. liquidity_score (0〜100)
+# 4. pattern_c_score (0〜100)  — サポートバウンス評価
+# ============================================================
+
+def _calc_pattern_c_score(tk: dict) -> int:
+    close         = tk.get("close") or tk.get("adj_close")
+    support_level = tk.get("support_level")
+    rsi           = tk.get("rsi14")
+    sar_direction = tk.get("sar_direction")
+
+    # 4-1. サポート近接度（重み 40%）
+    if close and support_level and support_level > 0:
+        distance_pct = (close - support_level) / support_level * 100
+        if distance_pct <= 1.0:
+            sup_comp = 100
+        elif distance_pct <= 3.0:
+            sup_comp = 75
+        elif distance_pct <= 5.0:
+            sup_comp = 40
+        elif distance_pct <= 8.0:
+            sup_comp = 15
+        else:
+            sup_comp = 0
+    else:
+        sup_comp = 0
+
+    # 4-2. RSI 売られ過ぎ深さ（重み 30%）
+    if rsi is not None:
+        if rsi <= 20:
+            rsi_comp = 100
+        elif rsi <= 25:
+            rsi_comp = 85
+        elif rsi <= 30:
+            rsi_comp = 70
+        elif rsi <= 35:
+            rsi_comp = 40
+        else:
+            rsi_comp = 0
+    else:
+        rsi_comp = 0
+
+    # 4-3. パラボリックSAR 反転確認（重み 30%）
+    if sar_direction == "up":
+        sar_comp = 100
+    else:
+        sar_comp = 0
+
+    score = (
+        _PCW_SUPPORT_PROXIMITY * sup_comp
+        + _PCW_RSI_DEPTH       * rsi_comp
+        + _PCW_SAR_CONFIRM     * sar_comp
+    )
+    return max(0, min(100, round(score)))
+
+
+# ============================================================
+# 5. liquidity_score (0〜100)
 # ============================================================
 
 def _calc_liquidity_score(tk: dict) -> int:
@@ -422,6 +490,7 @@ def _build_recommend_reason(
     trend = scores["trend_score"]
     pa    = scores["pattern_a_score"]
     pb    = scores["pattern_b_score"]
+    pc    = scores["pattern_c_score"]
     liq   = scores["liquidity_score"]
 
     # --- トレンド系 ---
@@ -454,6 +523,12 @@ def _build_recommend_reason(
         parts.append("押し目反発の形成を確認")
     elif pb >= 40:
         parts.append("押し目買いの兆候あり")
+
+    # --- パターンC 系 ---
+    if pc >= 60:
+        parts.append("サポートレベルからの反発を確認")
+    elif pc >= 40:
+        parts.append("サポートバウンスの兆候あり")
 
     # --- 流動性 ---
     if liq >= 80:

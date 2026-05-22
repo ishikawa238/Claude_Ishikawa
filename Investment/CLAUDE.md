@@ -71,9 +71,9 @@ External APIs → price_history / index_snapshot (SQLite)
 | `data_fetcher.py` | EODHD API — bulk EOD (1 request/exchange/day), index history, symbol master |
 | `yfinance_fetcher.py` | yfinance — initial 3-year history load only (free, no API limit) |
 | `jquants_fetcher.py` | J-Quants API — JP fundamentals and earnings schedule |
-| `technical_calculator.py` | Computes MA5/25/75/200, RSI14, ATR14, volatility, turnover → `technical_snapshot` |
+| `technical_calculator.py` | Computes MA5/25/75/200, RSI14, ATR14, volatility, turnover, weekly MA25, Parabolic SAR, support/resistance → `technical_snapshot` |
 | `market_filter.py` | Market environment judge (normal/caution/full_caution) + liquidity screening |
-| `signal_detector.py` | Pattern A (breakout) and Pattern B (MA25 pullback) detection |
+| `signal_detector.py` | Pattern A (breakout), Pattern B (MA25 pullback), Pattern C (support bounce) detection |
 | `entry_calculator.py` | Computes entry price, stop-loss, target, recommended amount → `trade_signal_log` |
 | `holdings_monitor.py` | Evaluates stop-loss hits, take-profit target reaches, and earnings alerts for open positions |
 | `take_profit.py` | Take-profit target management — type determination (I/II/III), T1/T2/T3 price calculation, reach detection, DB ops → `take_profit_targets` |

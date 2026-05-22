@@ -254,7 +254,7 @@ def summarize_results(trades: list[dict], initial_capital: float = 0) -> dict:
 
     # パターン別統計
     pattern_stats = {}
-    for pattern in ("A", "B"):
+    for pattern in ("A", "B", "C"):
         p_trades = [t for t in trades if t.get("pattern") == pattern]
         if not p_trades:
             continue
@@ -317,7 +317,8 @@ def format_summary(summary: dict, initial_capital: float = 0) -> str:
     if summary["pattern_stats"]:
         lines += ["", "  --- パターン別 ---"]
         for pat, st in sorted(summary["pattern_stats"].items()):
-            name = "モメンタムブレイクアウト" if pat == "A" else "押し目買い"
+            _BT_PATTERN_NAMES = {"A": "モメンタムブレイクアウト", "B": "押し目買い", "C": "サポートバウンス"}
+            name = _BT_PATTERN_NAMES.get(pat, pat)
             lines.append(
                 f"  [{pat}] {name}: "
                 f"{st['total']}件 勝率{st['win_rate']:.0f}% "

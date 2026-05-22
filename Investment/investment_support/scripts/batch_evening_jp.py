@@ -45,7 +45,7 @@ from src.entry_calculator import save_entry_sets
 from src.holdings_monitor import ensure_holding_prices, evaluate_holdings, sync_holdings_from_csv
 from src.logger import get_logger
 from src.market_filter import get_screened_tickers, judge_market_environment
-from src.notifier import send_evening_report
+from src.notifier import send_evening_report, send_skip_notification
 from src.signal_detector import detect_and_save_signals
 from src.technical_calculator import (
     calculate_and_save_index_mas, calculate_and_save_snapshots,
@@ -102,6 +102,7 @@ def main() -> int:
     # 非取引日スキップ（土日: TSE は月〜金のみ）
     if _TODAY.weekday() in (5, 6):  # 5=Saturday, 6=Sunday
         logger.info(f"[夜バッチ] 非取引日（{_TODAY}, {_TODAY.strftime('%A')}）のためスキップします")
+        send_skip_notification(_TODAY, _BATCH_TYPE, "非取引日（週末）のため")
         return 5
 
     # 二重起動防止

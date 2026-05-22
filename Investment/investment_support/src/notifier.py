@@ -66,6 +66,12 @@ _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
         "cond_b_ma25_rising":   "MA25上昇中",
         "cond_b_rsi_ok":        "RSI適正範囲",
     },
+    "C": {
+        "cond_c_weekly_uptrend": "週足MA25上昇中",
+        "cond_c_at_support":     "サポートレベル近傍",
+        "cond_c_rsi_oversold":   "RSI売られ過ぎ圏",
+        "cond_c_sar_reversal":   "パラボリックSAR反転",
+    },
 }
 
 # 条件チェックの短縮ラベル（インライン表示用）
@@ -85,6 +91,12 @@ _COND_SHORT_LABELS: dict[str, dict[str, str]] = {
         "cond_b_bounced":       "MA25反発",
         "cond_b_ma25_rising":   "MA25↑",
         "cond_b_rsi_ok":        "RSI",
+    },
+    "C": {
+        "cond_c_weekly_uptrend": "週足MA25↑",
+        "cond_c_at_support":     "サポート",
+        "cond_c_rsi_oversold":   "RSI低",
+        "cond_c_sar_reversal":   "SAR↑",
     },
 }
 
@@ -497,7 +509,12 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     name    = es.get("name") or ticker
     market  = es["market"]
     pattern = es["pattern"]
-    p_name  = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
+    _PATTERN_DISPLAY_NAMES = {
+        "A": "モメンタムブレイクアウト",
+        "B": "押し目買い",
+        "C": "サポートバウンス",
+    }
+    p_name  = _PATTERN_DISPLAY_NAMES.get(pattern, pattern)
     rs_rank = es.get("_rs_rank")
     rank_str = f" ランク{rs_rank}位" if rs_rank else ""
 
@@ -521,6 +538,9 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     if pattern == "A":
         rsi_min = int(float(_SIG.get("pattern_a_rsi_min", 50)))
         rsi_max = int(float(_SIG.get("pattern_a_rsi_max", 70)))
+    elif pattern == "C":
+        rsi_min = 0
+        rsi_max = int(float(_SIG.get("pattern_c_rsi_max", 35)))
     else:
         rsi_min = int(float(_SIG.get("pattern_b_rsi_min", 40)))
         rsi_max = int(float(_SIG.get("pattern_b_rsi_max", 60)))
@@ -764,8 +784,9 @@ def _sub_score_line(es: dict) -> str:
     t = es.get("_trend_score")
     a = es.get("_pattern_a_score")
     b = es.get("_pattern_b_score")
+    c = es.get("_pattern_c_score")
     l = es.get("_liquidity_score")
-    if t is None and a is None and b is None and l is None:
+    if t is None and a is None and b is None and c is None and l is None:
         return ""
     parts = []
     if t is not None:
@@ -774,6 +795,8 @@ def _sub_score_line(es: dict) -> str:
         parts.append(f"ブレイクアウト:{a}")
     if b is not None:
         parts.append(f"押し目:{b}")
+    if c is not None:
+        parts.append(f"サポート:{c}")
     if l is not None:
         parts.append(f"流動性:{l}")
     return "📈 " + " / ".join(parts)
@@ -926,7 +949,12 @@ def _near_miss_section(near_misses: list[dict] | None) -> list[dict]:
         final_score = int(nm.get("final_score") or 0)
         nm_type = nm.get("near_miss_type", "score_short")
 
-        p_name = "モメンタムブレイクアウト" if pattern == "A" else "押し目買い"
+        _NM_PATTERN_NAMES = {
+            "A": "モメンタムブレイクアウト",
+            "B": "押し目買い",
+            "C": "サポートバウンス",
+        }
+        p_name = _NM_PATTERN_NAMES.get(pattern, pattern)
 
         # 行1: ヘッダー + パターン
         line1 = f"*{i}. [{pattern}] {ticker} {name} ({market})* — {p_name}"
@@ -952,6 +980,9 @@ def _near_miss_section(near_misses: list[dict] | None) -> list[dict]:
             sub_parts.append(f"ブレイクアウト:{int(a)}")
         if b is not None:
             sub_parts.append(f"押し目:{int(b)}")
+        c = nm.get("pattern_c_score")
+        if c is not None:
+            sub_parts.append(f"サポート:{int(c)}")
         if lq is not None:
             sub_parts.append(f"流動性:{int(lq)}")
         sub_str = "📈 " + " / ".join(sub_parts) if sub_parts else ""
@@ -984,6 +1015,28 @@ def _build_tomorrow_notes(holdings: list[dict]) -> list[str]:
         elif h["label"] == "sell_watch":
             notes.append(f"・{h['ticker']} {h.get('name','')}：売り検討シグナル → 判断要")
     return notes
+
+
+# ============================================================
+# スキップ通知
+# ============================================================
+
+_WEEKDAY_JA = ("月", "火", "水", "木", "金", "土", "日")
+
+
+def send_skip_notification(
+    target_date: date,
+    batch_type: str,
+    reason: str,
+) -> bool:
+    """非取引日スキップ時に短い Slack 通知を送信する。"""
+    batch_label = _BATCH_TYPE_LABEL.get(batch_type, batch_type)
+    weekday_ja = _WEEKDAY_JA[target_date.weekday()]
+    date_str = target_date.strftime("%Y-%m-%d")
+    text = f"🌙 {date_str}（{weekday_ja}）{reason}、{batch_label}をスキップしました"
+    payload = {"blocks": [_section(text)]}
+    report_type = "evening_skip" if "evening" in batch_type else "morning_skip"
+    return _send(payload, target_date, report_type)
 
 
 # ============================================================

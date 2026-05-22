@@ -33,7 +33,7 @@ _US_MIN_PRICE      = float(_SC["us_min_price"])
 _US_MIN_TURNOVER   = float(_SC["us_min_turnover"])
 _US_MIN_MARKET_CAP = float(_SC["us_min_market_cap"])
 _MIN_ACTIVE_DAYS   = int(_SC["min_active_days_of_30"])
-_ALLOW_UNKNOWN_MARKET_CAP = _as_bool(_SC.get("allow_unknown_market_cap", False))
+_ALLOW_UNKNOWN_MARKET_CAP = _as_bool(_SC.get("allow_unknown_market_cap", True))
 
 
 # ============================================================
@@ -183,6 +183,9 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
             t.return_5d, t.return_20d,
             t.rsi14, t.atr14, t.volatility_20d,
             t.est_turnover, t.est_market_cap,
+            t.weekly_ma25, t.weekly_ma25_5w_ago,
+            t.parabolic_sar, t.sar_direction,
+            t.support_level, t.resistance_level,
             p.open, p.adj_close AS close, p.volume
         FROM technical_snapshot t
         JOIN universe_master u ON t.ticker = u.ticker

@@ -3,6 +3,7 @@
 
 パターンA: モメンタムブレイクアウト
 パターンB: 押し目買い
+パターンC: サポートバウンス（週足上昇 + サポート近傍 + RSI売られ過ぎ + SAR反転）
 
 各条件の充足状況をフラグで記録し、daily_signals テーブルに保存する。
 市場環境モードにかかわらずシグナル検出を実施する。
@@ -29,6 +30,8 @@ _PB_RSI_MAX       = float(_SIG["pattern_b_rsi_max"])
 _PB_MA25_TOUCH    = float(_SIG["pattern_b_ma25_touch_pct"])
 _PB_LOOKBACK      = int(_SIG["pattern_b_lookback_days"])
 _PB_BOUNCE_DAYS   = int(_SIG.get("pattern_b_bounce_confirm_days", 1))
+_PC_RSI_MAX       = float(_SIG.get("pattern_c_rsi_max", 35))
+_PC_SUPPORT_TOL   = float(_SIG.get("pattern_c_support_tolerance_pct", 3.0))
 _MAX_CANDIDATES   = int(_SIG["max_candidates_per_pattern"])
 
 
@@ -79,9 +82,11 @@ def detect_and_save_signals(
         row_a = _eval_pattern_a(tk, target_str, market)
         # パターンB評価
         row_b = _eval_pattern_b(tk, target_str, market)
+        # パターンC評価（サポートバウンス）
+        row_c = _eval_pattern_c(tk, target_str, market)
 
-        # どちらかが candidate なら採用
-        best = _pick_best(row_a, row_b)
+        # 最も強いシグナルを採用
+        best = _pick_best(_pick_best(row_a, row_b), row_c)
 
         # --- スコアベースのラベル決定 ---
         # candidate には2種類ある:
@@ -104,6 +109,7 @@ def detect_and_save_signals(
         best["trend_score"]      = scores["trend_score"]
         best["pattern_a_score"]  = scores["pattern_a_score"]
         best["pattern_b_score"]  = scores["pattern_b_score"]
+        best["pattern_c_score"]  = scores["pattern_c_score"]
         best["liquidity_score"]  = scores["liquidity_score"]
         best["base_score"]       = scores["base_score"]
         best["market_multiplier"] = scores["market_multiplier"]
@@ -242,6 +248,10 @@ def _eval_pattern_a(tk: dict, target_str: str, market: str) -> dict:
         "cond_b_bounced":          None,
         "cond_b_ma25_rising":      None,
         "cond_b_rsi_ok":           None,
+        "cond_c_weekly_uptrend":   None,
+        "cond_c_at_support":       None,
+        "cond_c_rsi_oversold":     None,
+        "cond_c_sar_reversal":     None,
         "close":     close,
         "rsi14":     rsi,
         "atr14":     tk.get("atr14"),
@@ -323,6 +333,10 @@ def _eval_pattern_b(tk: dict, target_str: str, market: str) -> dict:
         "cond_b_bounced":          c4,
         "cond_b_ma25_rising":      c5,
         "cond_b_rsi_ok":           c6,
+        "cond_c_weekly_uptrend":   None,
+        "cond_c_at_support":       None,
+        "cond_c_rsi_oversold":     None,
+        "cond_c_sar_reversal":     None,
         "close":     close,
         "rsi14":     rsi,
         "atr14":     tk.get("atr14"),
@@ -377,6 +391,87 @@ def _check_pullback(
         ):
             bounced = 1
     return _flag(touched), bounced
+
+
+# ============================================================
+# パターンC 評価
+# ============================================================
+
+def _eval_pattern_c(tk: dict, target_str: str, market: str) -> dict:
+    """
+    パターンC（サポートバウンス）の全条件を評価する。
+
+    条件:
+    1. 週足MA25が上昇中（長期上昇トレンド確認）
+    2. 終値がサポートレベル近傍（support_tolerance_pct 以内）
+    3. RSI14が oversold 圏（≤ pattern_c_rsi_max）
+    4. パラボリックSARが上昇方向に転換（sar_direction == 'up'）
+    """
+    close         = tk.get("close") or tk.get("adj_close")
+    weekly_ma25   = tk.get("weekly_ma25")
+    weekly_5w_ago = tk.get("weekly_ma25_5w_ago")
+    support_level = tk.get("support_level")
+    rsi           = tk.get("rsi14")
+    sar_direction = tk.get("sar_direction")
+    vol           = tk.get("volume")
+    vol_avg       = tk.get("vol_20d_avg")
+
+    # 各条件評価
+    c1 = _flag(weekly_ma25 and weekly_5w_ago and weekly_ma25 > weekly_5w_ago)
+
+    # サポート近傍: 終値が support_level の ±tolerance% 以内
+    if close and support_level and support_level > 0:
+        distance_pct = abs(close - support_level) / support_level * 100
+        c2 = _flag(distance_pct <= _PC_SUPPORT_TOL)
+    else:
+        c2 = 0
+
+    c3 = _flag(rsi is not None and rsi <= _PC_RSI_MAX)
+    c4 = _flag(sar_direction == "up")
+
+    vol_ratio = (vol / vol_avg) if (vol and vol_avg and vol_avg > 0) else None
+
+    all_conds = [c1, c2, c3, c4]
+    met = sum(all_conds)
+    total = len(all_conds)
+
+    if met == total:
+        label = "candidate"
+    elif met >= total - 1:
+        label = "watch"
+    else:
+        label = "skip"
+
+    return {
+        "ticker":  tk["ticker"],
+        "date":    target_str,
+        "market":  market,
+        "pattern": "C",
+        "label":   label,
+        "cond_a_ma200_rising":     None,
+        "cond_a_ma_aligned":       None,
+        "cond_a_52w_high_near":    None,
+        "cond_a_volume_surge":     None,
+        "cond_a_rsi_ok":           None,
+        "cond_a_above_ma25":       None,
+        "cond_b_ma200_rising":     None,
+        "cond_b_ma_aligned":       None,
+        "cond_b_pullback_touched": None,
+        "cond_b_bounced":          None,
+        "cond_b_ma25_rising":      None,
+        "cond_b_rsi_ok":           None,
+        "cond_c_weekly_uptrend":   c1,
+        "cond_c_at_support":       c2,
+        "cond_c_rsi_oversold":     c3,
+        "cond_c_sar_reversal":     c4,
+        "close":     close,
+        "rsi14":     rsi,
+        "atr14":     tk.get("atr14"),
+        "vol_ratio": vol_ratio,
+        "rs_rank":   None,
+        "_conditions_met_count": met,
+        "_conditions_total": total,
+    }
 
 
 # ============================================================
@@ -438,9 +533,10 @@ def _flag(condition) -> int:
 
 def _pick_best(row_a: dict, row_b: dict) -> dict:
     """
-    パターンA・B のうち、より強いシグナルを持つ方を返す。
+    2つのパターン評価結果のうち、より強いシグナルを持つ方を返す。
     candidate > watch > skip の優先順で選ぶ。
     同じ強度の場合は vol_ratio が高い方を優先する。
+    3パターン以上の場合はチェーンして使用: _pick_best(_pick_best(a, b), c)
     """
     priority = {"candidate": 2, "watch": 1, "skip": 0}
     pa = priority[row_a["label"]]

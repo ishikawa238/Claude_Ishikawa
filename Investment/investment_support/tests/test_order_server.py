@@ -81,6 +81,9 @@ def _init_test_db(conn):
             vol_20d_avg REAL, high_20d REAL, high_52w REAL, low_52w REAL,
             return_5d REAL, return_20d REAL, rsi14 REAL, atr14 REAL,
             volatility_20d REAL, est_turnover REAL, est_market_cap REAL,
+            weekly_ma25 REAL, weekly_ma25_5w_ago REAL,
+            parabolic_sar REAL, sar_direction TEXT,
+            support_level REAL, resistance_level REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_ts_td ON technical_snapshot(ticker, date);
@@ -113,8 +116,11 @@ def _init_test_db(conn):
             cond_b_ma200_rising INTEGER, cond_b_ma_aligned INTEGER,
             cond_b_pullback_touched INTEGER, cond_b_bounced INTEGER,
             cond_b_ma25_rising INTEGER, cond_b_rsi_ok INTEGER,
+            cond_c_weekly_uptrend INTEGER, cond_c_at_support INTEGER,
+            cond_c_rsi_oversold INTEGER, cond_c_sar_reversal INTEGER,
             close REAL, rsi14 REAL, atr14 REAL, vol_ratio REAL, rs_rank INTEGER,
             trend_score REAL, pattern_a_score REAL, pattern_b_score REAL,
+            pattern_c_score REAL,
             liquidity_score REAL, base_score REAL, market_multiplier REAL,
             final_score REAL, recommend_rank TEXT, recommend_reason TEXT,
             market_mode TEXT,
@@ -257,17 +263,17 @@ def _init_test_db(conn):
     # daily_signals（スコア付き）
     conn.execute(
         "INSERT INTO daily_signals (ticker, date, market, pattern, label, "
-        "trend_score, pattern_a_score, pattern_b_score, liquidity_score, "
+        "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('7203', ?, 'JP', 'A', 'candidate', 80, 65, 50, 90, 78, 'A', "
+        "VALUES ('7203', ?, 'JP', 'A', 'candidate', 80, 65, 50, 10, 90, 78, 'A', "
         "'上昇トレンドが継続中。52週高値に接近。流動性が高い', 'normal')",
         (today_str,),
     )
     conn.execute(
         "INSERT INTO daily_signals (ticker, date, market, pattern, label, "
-        "trend_score, pattern_a_score, pattern_b_score, liquidity_score, "
+        "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('AAPL', ?, 'US', 'B', 'candidate', 70, 55, 75, 85, 72, 'B', "
+        "VALUES ('AAPL', ?, 'US', 'B', 'candidate', 70, 55, 75, 15, 85, 72, 'B', "
         "'中期トレンドは良好。押し目反発の形成を確認', 'normal')",
         (today_str,),
     )

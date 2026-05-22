@@ -409,17 +409,21 @@ class WeekendSkipTests(unittest.TestCase):
 
     # ── 夜バッチ: 土日はスキップ（return 5） ──
 
-    def test_evening_skips_on_saturday(self):
-        """夜バッチ: 土曜日は非取引日スキップ。"""
+    @patch("scripts.batch_evening_jp.send_skip_notification")
+    def test_evening_skips_on_saturday(self, mock_skip):
+        """夜バッチ: 土曜日は非取引日スキップ + Slack通知。"""
         saturday = date(2026, 5, 16)
         with patch.object(_evening, "_TODAY", saturday):
             self.assertEqual(_evening.main(), 5)
+        mock_skip.assert_called_once()
 
-    def test_evening_skips_on_sunday(self):
-        """夜バッチ: 日曜日は非取引日スキップ。"""
+    @patch("scripts.batch_evening_jp.send_skip_notification")
+    def test_evening_skips_on_sunday(self, mock_skip):
+        """夜バッチ: 日曜日は非取引日スキップ + Slack通知。"""
         sunday = date(2026, 5, 17)
         with patch.object(_evening, "_TODAY", sunday):
             self.assertEqual(_evening.main(), 5)
+        mock_skip.assert_called_once()
 
     # ── 夜バッチ: 月曜は実行する ──
 
@@ -430,17 +434,21 @@ class WeekendSkipTests(unittest.TestCase):
 
     # ── 朝バッチ: 日月はスキップ（return 5） ──
 
-    def test_morning_skips_on_sunday(self):
-        """朝バッチ: 日曜日は非取引日スキップ。"""
+    @patch("scripts.batch_morning_all.send_skip_notification")
+    def test_morning_skips_on_sunday(self, mock_skip):
+        """朝バッチ: 日曜日は非取引日スキップ + Slack通知。"""
         sunday = date(2026, 5, 17)
         with patch.object(_morning, "_TODAY", sunday):
             self.assertEqual(_morning.main(), 5)
+        mock_skip.assert_called_once()
 
-    def test_morning_skips_on_monday(self):
-        """朝バッチ: 月曜日は非取引日スキップ（US金曜データは土曜に取得済み）。"""
+    @patch("scripts.batch_morning_all.send_skip_notification")
+    def test_morning_skips_on_monday(self, mock_skip):
+        """朝バッチ: 月曜日は非取引日スキップ（US金曜データは土曜に取得済み） + Slack通知。"""
         monday = date(2026, 5, 18)
         with patch.object(_morning, "_TODAY", monday):
             self.assertEqual(_morning.main(), 5)
+        mock_skip.assert_called_once()
 
     # ── 朝バッチ: 土曜は実行する（US金曜クローズのデータ処理） ──
 

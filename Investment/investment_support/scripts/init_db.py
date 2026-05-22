@@ -181,7 +181,7 @@ DDL_STATEMENTS = [
         ticker                  TEXT    NOT NULL,
         date                    DATE    NOT NULL,
         market                  TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
-        pattern                 TEXT    CHECK(pattern IN ('A', 'B', NULL)),
+        pattern                 TEXT    CHECK(pattern IN ('A', 'B', 'C', NULL)),
         label                   TEXT    NOT NULL CHECK(label IN ('candidate', 'watch', 'skip')),
         cond_a_ma200_rising     INTEGER,
         cond_a_ma_aligned       INTEGER,
@@ -217,7 +217,7 @@ DDL_STATEMENTS = [
         ticker              TEXT    NOT NULL,
         name                TEXT,
         market              TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
-        pattern             TEXT    NOT NULL CHECK(pattern IN ('A', 'B')),
+        pattern             TEXT    NOT NULL CHECK(pattern IN ('A', 'B', 'C')),
         entry_price         REAL    NOT NULL,
         stop_loss_price     REAL    NOT NULL,
         stop_loss_pct       REAL    NOT NULL,
@@ -261,7 +261,7 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS report_log (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         report_date  DATE    NOT NULL,
-        report_type  TEXT    NOT NULL CHECK(report_type IN ('morning', 'evening', 'monthly')),
+        report_type  TEXT    NOT NULL CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip')),
         content      TEXT    NOT NULL,
         slack_status TEXT    CHECK(slack_status IN ('success', 'failed', 'skipped')),
         created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -375,7 +375,7 @@ DDL_STATEMENTS = [
         ticker           TEXT    NOT NULL,
         name             TEXT,
         market           TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
-        pattern          TEXT    CHECK(pattern IN ('A', 'B', NULL)),
+        pattern          TEXT    CHECK(pattern IN ('A', 'B', 'C', NULL)),
         entry_price      REAL    NOT NULL,
         planned_entry_price REAL,
         actual_entry_date DATE,
@@ -519,6 +519,19 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE paper_trades ADD COLUMN actual_entry_price REAL",
     "ALTER TABLE paper_trades ADD COLUMN is_filled INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE paper_trades ADD COLUMN entry_slippage_pct REAL NOT NULL DEFAULT 0",
+    # Pattern C: technical_snapshot に週足MA・パラボリックSAR・サポート/レジスタンス追加
+    "ALTER TABLE technical_snapshot ADD COLUMN weekly_ma25        REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN weekly_ma25_5w_ago REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN parabolic_sar      REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN sar_direction       TEXT",
+    "ALTER TABLE technical_snapshot ADD COLUMN support_level       REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN resistance_level    REAL",
+    # Pattern C: daily_signals に条件フラグ・スコア追加
+    "ALTER TABLE daily_signals ADD COLUMN cond_c_weekly_uptrend INTEGER",
+    "ALTER TABLE daily_signals ADD COLUMN cond_c_at_support      INTEGER",
+    "ALTER TABLE daily_signals ADD COLUMN cond_c_rsi_oversold    INTEGER",
+    "ALTER TABLE daily_signals ADD COLUMN cond_c_sar_reversal    INTEGER",
+    "ALTER TABLE daily_signals ADD COLUMN pattern_c_score         REAL",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）
@@ -555,6 +568,7 @@ def init_db() -> None:
 
         success_count = 0
         skip_count = 0
+        deferred_indexes: list[str] = []
 
         for i, ddl in enumerate(DDL_STATEMENTS, start=1):
             stmt = ddl.strip()
@@ -570,11 +584,30 @@ def init_db() -> None:
                 elif stmt.upper().startswith("CREATE"):
                     pass  # インデックスは個別表示しない
             except sqlite3.Error as e:
-                logger.error(f"  DDL実行エラー（ステップ{i}）: {e}\n  SQL: {stmt[:80]}...")
-                conn.close()
-                raise
+                # CREATE INDEX はマイグレーション追加カラムに依存する場合があるため、
+                # エラー時はマイグレーション後にリトライする
+                if stmt.upper().lstrip().startswith("CREATE INDEX") or \
+                   stmt.upper().lstrip().startswith("CREATE UNIQUE INDEX"):
+                    deferred_indexes.append(stmt)
+                    logger.debug(f"  インデックス作成をマイグレーション後に延期: {stmt[:60]}...")
+                else:
+                    logger.error(f"  DDL実行エラー（ステップ{i}）: {e}\n  SQL: {stmt[:80]}...")
+                    conn.close()
+                    raise
 
         _run_migrations(conn)
+
+        # マイグレーション後に延期されたインデックスをリトライ
+        for stmt in deferred_indexes:
+            try:
+                conn.execute(stmt)
+                logger.info(f"  延期インデックス作成成功: {stmt.strip()[:60]}")
+            except sqlite3.OperationalError as e:
+                if "already exists" in str(e).lower():
+                    pass
+                else:
+                    logger.warning(f"  延期インデックス作成失敗: {e}")
+
         conn.commit()
         logger.info(f"DB初期化完了: テーブル {success_count} 件を作成（または確認）しました。")
 
@@ -584,11 +617,241 @@ def init_db() -> None:
     _print_table_summary(db_path)
 
 
+def _migrate_report_log_check_for_skip(conn: sqlite3.Connection) -> None:
+    """
+    report_log の CHECK(report_type IN ('morning','evening','monthly')) を
+    ('morning','evening','monthly','morning_skip','evening_skip') に拡張する。
+
+    冪等: 'morning_skip' を INSERT できれば既に拡張済みとみなしてスキップする。
+    """
+    table = "report_log"
+    # 拡張済みかテスト
+    try:
+        conn.execute(f"SAVEPOINT chk_{table}")
+        conn.execute(
+            "INSERT INTO report_log (report_date, report_type, content, slack_status) "
+            "VALUES ('9999-12-31', 'morning_skip', '{}', 'skipped')"
+        )
+        conn.execute(
+            "DELETE FROM report_log WHERE report_date = '9999-12-31' AND report_type = 'morning_skip'"
+        )
+        conn.execute(f"RELEASE chk_{table}")
+        logger.info(f"  CHECK制約拡張済み（スキップ）: {table}.report_type")
+        return
+    except sqlite3.IntegrityError:
+        conn.execute(f"ROLLBACK TO chk_{table}")
+        conn.execute(f"RELEASE chk_{table}")
+    except sqlite3.OperationalError:
+        conn.execute(f"ROLLBACK TO chk_{table}")
+        conn.execute(f"RELEASE chk_{table}")
+
+    # テーブル再作成による制約拡張
+    logger.info(f"  CHECK制約を拡張中: {table}.report_type")
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        if not row:
+            logger.warning(f"  テーブルが見つかりません: {table}")
+            return
+
+        original_ddl = row[0]
+        new_ddl = original_ddl.replace(
+            "CHECK(report_type IN ('morning', 'evening', 'monthly'))",
+            "CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip'))",
+        )
+        if new_ddl == original_ddl:
+            logger.info(f"  CHECK制約変更不要: {table}")
+            return
+
+        temp_ddl = new_ddl.replace(
+            f"CREATE TABLE {table}",
+            f"CREATE TABLE {table}__new",
+            1,
+        )
+
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN")
+        conn.execute(f"SAVEPOINT migrate_{table}")
+        conn.execute(temp_ddl)
+
+        cols_info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        col_names = ", ".join(c[1] for c in cols_info)
+        conn.execute(
+            f"INSERT INTO {table}__new ({col_names}) "
+            f"SELECT {col_names} FROM {table}"
+        )
+
+        old_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        new_count = conn.execute(f"SELECT COUNT(*) FROM {table}__new").fetchone()[0]
+        if old_count != new_count:
+            conn.execute(f"ROLLBACK TO migrate_{table}")
+            conn.execute(f"RELEASE migrate_{table}")
+            conn.execute("PRAGMA foreign_keys = ON")
+            logger.error(f"  行数不一致: {table} ({old_count} vs {new_count})")
+            return
+
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {table}__new RENAME TO {table}")
+        conn.execute(f"RELEASE migrate_{table}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        logger.info(f"  CHECK制約拡張完了: {table} ({old_count}行)")
+    except Exception as e:
+        logger.error(f"  CHECK制約拡張エラー: {table}: {e}")
+        try:
+            conn.execute(f"ROLLBACK TO migrate_{table}")
+            conn.execute(f"RELEASE migrate_{table}")
+        except Exception:
+            pass
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table}__new")
+        except Exception:
+            pass
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
+
+
+def _migrate_check_constraints_for_pattern_c(conn: sqlite3.Connection) -> None:
+    """
+    既存DBの CHECK(pattern IN ('A','B')) 制約を ('A','B','C') に拡張する。
+
+    SQLite は ALTER CONSTRAINT をサポートしないため、テーブルを再作成する。
+    冪等: 'C' を INSERT できれば既に拡張済みとみなしてスキップする。
+    """
+    tables_to_migrate = [
+        ("daily_signals", "pattern", True),       # NULL 許可
+        ("trade_signal_log", "pattern", False),    # NOT NULL
+        ("paper_trades", "pattern", True),         # NULL 許可
+    ]
+
+    for table, col, nullable in tables_to_migrate:
+        # 拡張済みかテスト（SAVEPOINT でロールバック）
+        try:
+            conn.execute(f"SAVEPOINT chk_{table}")
+            if nullable:
+                conn.execute(
+                    f"INSERT INTO {table} ({col}) VALUES ('C')"
+                )
+            else:
+                # NOT NULL テーブルは全必須カラムを埋める必要がある
+                # テスト行を作って即削除する
+                conn.execute(f"SAVEPOINT chk_{table}")
+                # trade_signal_log の必須カラムで試す
+                conn.execute(
+                    "INSERT INTO trade_signal_log "
+                    "(signal_date, ticker, market, pattern, entry_price, "
+                    "stop_loss_price, stop_loss_pct, target_price, market_mode) "
+                    "VALUES ('9999-12-31','__CHK__','JP','C',0,0,0,0,'normal')"
+                )
+                conn.execute(
+                    "DELETE FROM trade_signal_log WHERE ticker = '__CHK__'"
+                )
+            conn.execute(f"RELEASE chk_{table}")
+            logger.info(f"  CHECK制約拡張済み（スキップ）: {table}.{col}")
+            continue
+        except sqlite3.IntegrityError:
+            conn.execute(f"ROLLBACK TO chk_{table}")
+            conn.execute(f"RELEASE chk_{table}")
+        except sqlite3.OperationalError:
+            conn.execute(f"ROLLBACK TO chk_{table}")
+            conn.execute(f"RELEASE chk_{table}")
+
+        # テーブル再作成による制約拡張
+        logger.info(f"  CHECK制約を拡張中: {table}.{col}")
+        try:
+            # 現在のCREATE TABLE文を取得
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not row:
+                logger.warning(f"  テーブルが見つかりません: {table}")
+                continue
+
+            original_ddl = row[0]
+            # CHECK制約を書き換え
+            new_ddl = original_ddl.replace(
+                "CHECK(pattern IN ('A', 'B'))",
+                "CHECK(pattern IN ('A', 'B', 'C'))",
+            ).replace(
+                "CHECK(pattern IN ('A', 'B', NULL))",
+                "CHECK(pattern IN ('A', 'B', 'C', NULL))",
+            )
+
+            if new_ddl == original_ddl:
+                logger.info(f"  CHECK制約変更不要: {table}")
+                continue
+
+            # テーブル名を一時名に変更した DDL
+            temp_ddl = new_ddl.replace(
+                f"CREATE TABLE {table}",
+                f"CREATE TABLE {table}__new",
+                1,
+            )
+
+            # 外部キー制約を一時的に無効化（DROP TABLE 時の FK 違反防止）
+            # PRAGMA foreign_keys は保留中のトランザクションがない状態でのみ有効
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("BEGIN")
+            conn.execute(f"SAVEPOINT migrate_{table}")
+            conn.execute(temp_ddl)
+
+            # カラム一覧を取得してコピー
+            cols_info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            col_names = ", ".join(c[1] for c in cols_info)
+            conn.execute(
+                f"INSERT INTO {table}__new ({col_names}) "
+                f"SELECT {col_names} FROM {table}"
+            )
+
+            # 行数検証
+            old_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            new_count = conn.execute(f"SELECT COUNT(*) FROM {table}__new").fetchone()[0]
+            if old_count != new_count:
+                conn.execute(f"ROLLBACK TO migrate_{table}")
+                conn.execute(f"RELEASE migrate_{table}")
+                conn.execute("PRAGMA foreign_keys = ON")
+                logger.error(f"  行数不一致: {table} ({old_count} vs {new_count})")
+                continue
+
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {table}__new RENAME TO {table}")
+            conn.execute(f"RELEASE migrate_{table}")
+            conn.execute("PRAGMA foreign_keys = ON")
+            logger.info(f"  CHECK制約拡張完了: {table} ({old_count}行)")
+        except Exception as e:
+            logger.error(f"  CHECK制約拡張エラー: {table}: {e}")
+            try:
+                conn.execute(f"ROLLBACK TO migrate_{table}")
+                conn.execute(f"RELEASE migrate_{table}")
+            except Exception:
+                pass
+            try:
+                conn.execute(f"DROP TABLE IF EXISTS {table}__new")
+            except Exception:
+                pass
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+            except Exception:
+                pass
+
+
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """
     既存DBに対してカラム追加などのマイグレーションを実行する。
     カラムが既に存在する場合は OperationalError を無視する（冪等）。
     """
+    # Pattern C: CHECK制約拡張（カラム追加より先に実行）
+    _migrate_check_constraints_for_pattern_c(conn)
+
+    # report_log: skip通知用の report_type 拡張
+    _migrate_report_log_check_for_skip(conn)
+
     for stmt in MIGRATION_STATEMENTS:
         try:
             conn.execute(stmt)

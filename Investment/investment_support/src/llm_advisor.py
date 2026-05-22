@@ -36,7 +36,7 @@ _MAX_RESPONSE_CHARS = 2800
 _MAX_PROMPT_TOKENS = 80_000
 
 # パターン名の日本語表記
-_PATTERN_NAMES = {"A": "モメンタムブレイクアウト", "B": "押し目買い"}
+_PATTERN_NAMES = {"A": "モメンタムブレイクアウト", "B": "押し目買い", "C": "サポートバウンス"}
 
 # 市場モードの日本語表記
 _MODE_LABELS = {
@@ -299,11 +299,12 @@ def _format_entry_sets_rich(entry_sets: list[dict]) -> str:
         trend_s = es.get("_trend_score")
         pat_a_s = es.get("_pattern_a_score")
         pat_b_s = es.get("_pattern_b_score")
+        pat_c_s = es.get("_pattern_c_score")
         liq_s = es.get("_liquidity_score")
         sub_parts = []
         if trend_s is not None:
             sub_parts.append(f"トレンド:{trend_s:.0f}")
-        pat_score = pat_a_s if pattern == "A" else pat_b_s
+        pat_score = {"A": pat_a_s, "B": pat_b_s, "C": pat_c_s}.get(pattern)
         if pat_score is not None:
             sub_parts.append(f"パターン:{pat_score:.0f}")
         if liq_s is not None:

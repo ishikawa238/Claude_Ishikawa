@@ -44,7 +44,13 @@
     "risk_reward_ratio": 2.0,
     "max_candidates_per_pattern": 3,
     "stop_loss_warning_min_pct": 1.0,
-    "stop_loss_warning_max_pct": 15.0
+    "stop_loss_warning_max_pct": 15.0,
+    "pattern_c_rsi_max": 35,
+    "pattern_c_support_tolerance_pct": 3.0,
+    "pattern_c_sar_af_start": 0.02,
+    "pattern_c_sar_af_step": 0.02,
+    "pattern_c_sar_af_max": 0.20,
+    "pattern_c_support_lookback_days": 120
   },
 
   "screening": {
@@ -55,7 +61,7 @@
     "us_min_turnover": 20000000,
     "us_min_market_cap": 2000000000,
     "min_active_days_of_30": 20,
-    "allow_unknown_market_cap": false
+    "allow_unknown_market_cap": true
   },
 
   "schedule": {

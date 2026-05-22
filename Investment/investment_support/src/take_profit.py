@@ -67,7 +67,7 @@ def determine_profit_type(ticker: str) -> str:
     pattern = row["pattern"]
     if pattern == "A":
         return "I"
-    if pattern == "B":
+    if pattern in ("B", "C"):
         return "II"
     return "III"
 

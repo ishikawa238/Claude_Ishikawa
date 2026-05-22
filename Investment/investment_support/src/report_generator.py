@@ -501,7 +501,7 @@ def _append_system_stats(blocks: list, ss: dict) -> None:
         ev_lines = ["*パターン別期待値*"]
         for pat in sorted(pattern_ev.keys()):
             info = pattern_ev[pat]
-            pat_label = {"A": "A (ブレイクアウト)", "B": "B (押し目買い)"}.get(pat, pat)
+            pat_label = {"A": "A (ブレイクアウト)", "B": "B (押し目買い)", "C": "C (サポートバウンス)"}.get(pat, pat)
             ev_sign = "+" if info["ev"] >= 0 else ""
             ev_lines.append(
                 f"  {pat_label}: {info['count']}件 "

@@ -271,6 +271,32 @@ def report():
             """,
             (today_str,),
         )
+        # 買い候補カード用: 最新バッチの候補を詳細データ付きで取得
+        buy_candidates = fetch_all(
+            conn,
+            """
+            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
+                   tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
+                   tsl.target_price, tsl.recommended_amount, tsl.signal_date,
+                   tsl.conditions_met,
+                   d.final_score, d.recommend_rank,
+                   d.trend_score, d.pattern_a_score, d.pattern_b_score,
+                   d.pattern_c_score, d.liquidity_score,
+                   d.cond_a_ma200_rising, d.cond_a_ma_aligned, d.cond_a_52w_high_near,
+                   d.cond_a_volume_surge, d.cond_a_rsi_ok, d.cond_a_above_ma25,
+                   d.cond_b_ma200_rising, d.cond_b_ma_aligned, d.cond_b_pullback_touched,
+                   d.cond_b_bounced, d.cond_b_ma25_rising, d.cond_b_rsi_ok,
+                   d.cond_c_weekly_uptrend, d.cond_c_at_support, d.cond_c_rsi_oversold,
+                   d.cond_c_sar_reversal
+            FROM trade_signal_log tsl
+            LEFT JOIN daily_signals d ON d.ticker = tsl.ticker AND d.date = tsl.signal_date
+            WHERE tsl.signal_date = (
+                SELECT MAX(signal_date) FROM trade_signal_log WHERE signal_date <= ?
+            )
+            ORDER BY d.final_score DESC, tsl.ticker
+            """,
+            (today_str,),
+        )
         # 市場環境タイムライン: 直近60日
         market_history = fetch_all(
             conn,
@@ -330,7 +356,7 @@ def report():
     except Exception:
         latest_snapshot = None
 
-    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, last_batch, data_insufficient, snapshot=latest_snapshot)
+    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, last_batch, data_insufficient, snapshot=latest_snapshot, buy_candidates=buy_candidates)
 
 
 # ============================================================
@@ -1328,7 +1354,91 @@ def _get_or_calc_risk(conn, ticker: str, today_str: str, market: str) -> dict:
 # HTML レンダリング: /report
 # ============================================================
 
-def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None):
+
+def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market: int = 3) -> list[dict]:
+    """買い候補カード用のテンプレートデータを構築する。JP/US各最大 max_per_market 件。"""
+    # スコア降順で JP/US それぞれ上位 max_per_market 件に絞る
+    jp_count = us_count = 0
+    filtered: list[dict] = []
+    for bc in buy_candidates:
+        mkt = bc.get("market") or "JP"
+        if mkt == "JP":
+            if jp_count >= max_per_market:
+                continue
+            jp_count += 1
+        else:
+            if us_count >= max_per_market:
+                continue
+            us_count += 1
+        filtered.append(bc)
+
+    cards: list[dict] = []
+    for bc in filtered:
+        pattern = bc.get("pattern") or ""
+        entry = float(bc["entry_price"])
+        sl_pct = float(bc["stop_loss_pct"] or 0)
+        tg_pct = sl_pct * 2
+        market = bc.get("market") or "JP"
+        currency = "円" if market == "JP" else "USD"
+
+        # 推奨投入額・株数
+        amt = bc.get("recommended_amount")
+        amt_str = f"{amt:,.0f} {currency}" if amt else "—"
+        if amt and entry > 0:
+            est_qty = amt / entry
+            qty_str = f"約{est_qty:.0f}株" if est_qty >= 1 else f"約{est_qty:.2f}株"
+        else:
+            qty_str = "—"
+
+        # スコア・ランク
+        fscore = bc.get("final_score")
+        score_pct = min(int(fscore), 100) if fscore is not None else 0
+        score_str = f"{fscore:.0f}" if fscore is not None else "—"
+        frank = bc.get("recommend_rank") or "—"
+        rank_css = _RANK_CSS.get(frank, "rank-default")
+
+        # 候補種別（conditions_met JSON から判定）
+        cond_json = bc.get("conditions_met") or ""
+        if cond_json and "❌" in str(cond_json):
+            source_label = "スコア候補"
+            source_css = "source-score"
+        elif cond_json:
+            source_label = "全条件一致"
+            source_css = "source-strict"
+        else:
+            source_label = "—"
+            source_css = ""
+
+        # 条件ドット HTML
+        cond_labels_map = {"A": _COND_A_LABELS, "B": _COND_B_LABELS, "C": _COND_C_LABELS}
+        cond_labels = cond_labels_map.get(pattern, _COND_A_LABELS)
+        conds_html = ""
+        for col, tip in cond_labels:
+            conds_html += _cond_dot(bc.get(col), tip)
+
+        cards.append({
+            "ticker": bc["ticker"],
+            "name": bc.get("name") or "",
+            "market": market,
+            "pattern": pattern,
+            "pattern_name": _PATTERN_NAME.get(pattern, pattern),
+            "source_label": source_label,
+            "source_css": source_css,
+            "score_pct": score_pct,
+            "score_str": score_str,
+            "rank": frank,
+            "rank_css": rank_css,
+            "entry_str": f"{entry:,.2f}",
+            "sl_str": f"{float(bc['stop_loss_price']):,.2f}（-{sl_pct:.1f}%）",
+            "target_str": f"{float(bc['target_price']):,.2f}（+{tg_pct:.1f}%）",
+            "amt_str": amt_str,
+            "qty_str": qty_str,
+            "conditions_html": conds_html,
+        })
+    return cards
+
+
+def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None):
     market_env = dict(market_env) if market_env else {}
     holdings = [dict(h) for h in holdings]
     candidates = [dict(c) for c in candidates]
@@ -1718,6 +1828,13 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
     mh_sp500_ma = json.dumps([m["sp500_ma25"] for m in market_history])
     mh_modes = json.dumps([m["mode"] for m in market_history])
 
+    # --- 買い候補カード構築 ---
+    buy_cands = [dict(b) for b in buy_candidates] if buy_candidates else []
+    buy_candidate_cards = _build_candidate_cards(buy_cands, mode)
+    buy_candidate_date = buy_cands[0].get("signal_date", "") if buy_cands else ""
+    buy_candidate_is_today = (buy_candidate_date == today_str)
+    is_market_caution = mode in ("caution", "full_caution")
+
     return render_template(
         "report.html",
         active_page="report",
@@ -1762,6 +1879,10 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         total_assets=total_assets,
         total_assets_source=total_assets_source,
         total_cash_jpy_equiv=total_cash_jpy_equiv,
+        buy_candidate_cards=buy_candidate_cards,
+        buy_candidate_date=buy_candidate_date,
+        buy_candidate_is_today=buy_candidate_is_today,
+        is_market_caution=is_market_caution,
     )
 
 

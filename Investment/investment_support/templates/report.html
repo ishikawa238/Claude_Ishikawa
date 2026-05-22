@@ -84,6 +84,81 @@
   {% endfor %}
 </div>
 
+<!-- 買い候補カード -->
+<div class="section animate-in">
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h2 class="mb-0">買い候補
+      {% if buy_candidate_date %}
+      <span class="text-muted fs-6">({{ buy_candidate_date }}{% if not buy_candidate_is_today %} 最終更新{% endif %})</span>
+      {% endif %}
+    </h2>
+    <span class="meta-small">{{ buy_candidate_cards|length }}件</span>
+  </div>
+
+  {% if is_market_caution %}
+  <div class="action-item action-warn mb-3">{{ mode_label }}中のため、新規買い候補の検出は停止されています。</div>
+  {% endif %}
+
+  {% if buy_candidate_cards %}
+  <div class="row g-3">
+    {% for card in buy_candidate_cards %}
+    <div class="col-md-6 col-lg-4">
+      <div class="candidate-card" data-pattern="{{ card.pattern }}">
+        <div class="candidate-card-header">
+          <span class="pattern-badge pattern-{{ card.pattern }}">{{ card.pattern }}: {{ card.pattern_name }}</span>
+          {% if card.source_css %}<span class="{{ card.source_css }}">{{ card.source_label }}</span>{% endif %}
+        </div>
+        <div class="candidate-card-title">
+          <a class="ticker-link" href="/stock/{{ card.ticker }}" style="font-size:1.1rem;font-weight:700">{{ card.ticker }}</a>
+          <span class="meta-medium">{{ card.name }}</span>
+          <span class="meta-small text-muted">{{ card.market }}</span>
+        </div>
+
+        {% if card.score_str != '—' %}
+        <div class="candidate-score-row">
+          <div class="candidate-score-bar"><div class="candidate-score-fill" style="width:{{ card.score_pct }}%"></div></div>
+          <span class="candidate-score-value">{{ card.score_str }}点</span>
+          <span class="rank-badge {{ card.rank_css }}">{{ card.rank }}</span>
+        </div>
+        {% endif %}
+
+        <div class="candidate-price-grid">
+          <div>
+            <span class="candidate-price-label"><span class="tip" data-tip="この価格で買い注文を出す目安（前日終値）">エントリー</span></span>
+            <span class="candidate-price-value">{{ card.entry_str }}</span>
+          </div>
+          <div>
+            <span class="candidate-price-label"><span class="tip" data-tip="この価格まで下がったら損切り（売る）価格">損切りSL</span></span>
+            <span class="candidate-price-value text-loss">{{ card.sl_str }}</span>
+          </div>
+          <div>
+            <span class="candidate-price-label"><span class="tip" data-tip="リスクリワード2:1に基づく利益確定の目安価格">利確目安</span></span>
+            <span class="candidate-price-value text-profit">{{ card.target_str }}</span>
+          </div>
+          <div>
+            <span class="candidate-price-label"><span class="tip" data-tip="リスク管理に基づく推奨投入金額と推定株数">投入額</span></span>
+            <span class="candidate-price-value">{{ card.amt_str }}<br><span class="reason-text">{{ card.qty_str }}</span></span>
+          </div>
+        </div>
+
+        <div class="candidate-conditions">
+          <span class="cond-label">条件:</span>
+          {{ card.conditions_html|safe }}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="summary-card text-center" style="padding:24px">
+    <div class="meta-medium">直近の買い候補はありません</div>
+    <div class="meta-small" style="margin-top:4px">
+      <span class="tip" data-tip="バッチ処理でパターンA/B/Cの条件を満たす銘柄が検出されると、ここにカードとして表示されます">候補が検出されると、ここにカードで表示されます</span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
 <!-- バッチ手動実行 -->
 <div class="summary-card mb-4 animate-in">
   <h2>バッチ手動実行</h2>

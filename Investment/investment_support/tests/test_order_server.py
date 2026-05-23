@@ -52,6 +52,7 @@ import src.config as _src_config
 _src_config.CONFIG = _CONFIG_MOCK
 
 import scripts.order_server as _server_mod
+import scripts.routes.api_routes as _api_mod
 from scripts.order_server import app
 
 
@@ -318,6 +319,7 @@ class OrderServerTestCase(unittest.TestCase):
         # get_connection をテスト用に差し替え
         cls._patches = [
             patch.object(_server_mod, "get_connection", _get_test_connection),
+            patch.object(_api_mod, "get_connection", _get_test_connection),
             patch.object(_server_mod, "_get_usdjpy", MagicMock(return_value=150.0)),
         ]
         for p in cls._patches:

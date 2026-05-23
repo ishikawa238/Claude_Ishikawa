@@ -15,12 +15,50 @@ yfinance の仕様:
 """
 
 import time
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
 from src.logger import get_logger
 
 logger = get_logger(__name__)
+
+JP_PRICE_SOURCE = "yfinance"
+
+
+@dataclass
+class DailyPriceFetchResult:
+    """日次価格取得の結果サマリー（監視・通知用）。"""
+
+    rows: list[dict]
+    total_tickers: int
+    tickers_with_target_date: int
+    failed_tickers: list[str]
+    source: str = JP_PRICE_SOURCE
+    status: str = "ok"  # ok / partial / failed
+
+    @property
+    def failed_count(self) -> int:
+        return len(self.failed_tickers)
+
+    @property
+    def alert_message(self) -> str | None:
+        """Slack 等に出す警告文。全件失敗時は強調メッセージ。"""
+        if self.total_tickers == 0:
+            return None
+        if self.status == "failed":
+            return (
+                f"⚠️ *JP価格データ取得失敗*（ソース: {self.source}）\n"
+                f"対象 {self.total_tickers} 銘柄のうち当日分を取得できませんでした。"
+                " シグナル検出は安全のためスキップされています。"
+                " yfinance の障害・レート制限の可能性があります。"
+            )
+        if self.status == "partial" and self.failed_tickers:
+            return (
+                f"⚠️ JP価格データ一部失敗（{self.source}）: "
+                f"失敗 {len(self.failed_tickers)} / {self.total_tickers} 銘柄"
+            )
+        return None
 
 _BATCH_SIZE   = 50   # yfinance に一度に渡す銘柄数
 _SLEEP_SEC    = 1.0  # バッチ間のウェイト（レートリミット対策）
@@ -189,41 +227,65 @@ def fetch_history_bulk_yf(
     return all_rows, failed
 
 
+def fetch_daily_yf_with_status(
+    tickers_with_market: list[tuple[str, str]],
+    target_date: date,
+) -> DailyPriceFetchResult:
+    """
+    yfinance で指定日の価格データを一括取得し、成否サマリーを返す。
+    fetch_bulk_eod("JP") の代替（JP 市場の EODHD Bulk が利用不可の場合に使用）。
+    """
+    total = len(tickers_with_market)
+    if total == 0:
+        return DailyPriceFetchResult(
+            rows=[], total_tickers=0, tickers_with_target_date=0,
+            failed_tickers=[], status="ok",
+        )
+
+    from_date = target_date - timedelta(days=5)
+    all_rows, failed = fetch_history_bulk_yf(tickers_with_market, from_date, target_date)
+
+    target_str = target_date.strftime("%Y-%m-%d")
+    daily_rows = [r for r in all_rows if r["date"] == target_str]
+    tickers_on_date = {r["ticker"] for r in daily_rows}
+
+    min_coverage = total * 0.5
+    if daily_rows and len(daily_rows) >= min_coverage:
+        rows = daily_rows
+        logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
+    else:
+        rows = all_rows
+        logger.info(
+            f"yfinance 当日価格なし ({target_str})。直近データ {len(all_rows)} 件を返します"
+        )
+
+    if not rows:
+        status = "failed"
+    elif failed or len(tickers_on_date) < min_coverage:
+        status = "partial" if rows else "failed"
+    else:
+        status = "ok"
+
+    return DailyPriceFetchResult(
+        rows=rows,
+        total_tickers=total,
+        tickers_with_target_date=len(tickers_on_date),
+        failed_tickers=failed,
+        source=JP_PRICE_SOURCE,
+        status=status,
+    )
+
+
 def fetch_daily_yf(
     tickers_with_market: list[tuple[str, str]],
     target_date: date,
 ) -> list[dict]:
     """
-    yfinance で指定日の価格データを一括取得する。
-    fetch_bulk_eod("JP") の代替（JP 市場の EODHD Bulk が利用不可の場合に使用）。
-
-    引数:
-        tickers_with_market: [(ticker, market), ...] のリスト
-        target_date: 取得対象日
+    yfinance で指定日の価格データを一括取得する（後方互換ラッパー）。
 
     返り値: price_history テーブルへの INSERT 用辞書リスト。
-            target_date のデータを優先するが、祝日・取引時間外等で当日分が
-            ない場合は直近5営業日のデータをすべて返す（upsert で冪等）。
     """
-    from_date = target_date - timedelta(days=5)
-    all_rows, _ = fetch_history_bulk_yf(tickers_with_market, from_date, target_date)
-
-    target_str = target_date.strftime("%Y-%m-%d")
-    daily_rows = [r for r in all_rows if r["date"] == target_str]
-
-    # 当日データが対象銘柄の半数以上あれば「当日取得成功」と判定する。
-    # 市場が未開場の場合、ごく少数の銘柄だけ当日データを持つことがあり、
-    # その場合は「当日データなし」として直近5日分を返す。
-    min_coverage = len(tickers_with_market) * 0.5
-    if daily_rows and len(daily_rows) >= min_coverage:
-        logger.info(f"yfinance 当日価格取得完了: {len(daily_rows)} 件 ({target_str})")
-        return daily_rows
-
-    # 当日分が不十分な場合（祝日・時間外・市場未開場）は直近5日分をすべて返す
-    logger.info(
-        f"yfinance 当日価格なし ({target_str})。直近データ {len(all_rows)} 件を返します"
-    )
-    return all_rows
+    return fetch_daily_yf_with_status(tickers_with_market, target_date).rows
 
 
 def fetch_usdjpy_rate() -> float | None:

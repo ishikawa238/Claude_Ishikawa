@@ -13,9 +13,16 @@
 - _eval_pattern_a() はモジュール内部関数のため import して直接テスト。
 """
 
+import sys
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
 from unittest.mock import patch
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PROJECT_ROOT.parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 _CONFIG_MOCK = {
     "signal": {

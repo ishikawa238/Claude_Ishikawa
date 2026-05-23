@@ -54,7 +54,7 @@ function Register-InvestmentTask {
 Register-InvestmentTask `
     -TaskName "Investment_EveningBatch_JP" `
     -Script   "-m scripts.batch_evening_jp" `
-    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday -At "18:30") `
+    -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday -At "20:30") `
     -Desc     "Investment Support - Evening batch (JP stocks)"
 
 # Morning batch (all markets) - daily 07:30
@@ -103,7 +103,7 @@ Write-Host ""
 Write-Host "Schedule summary:"
 Write-Host "  At logon     ->  Investment_Dashboard (127.0.0.1:5100)"
 Write-Host "  Daily 07:30  ->  Investment_MorningBatch_ALL"
-Write-Host "  Daily 18:30  ->  Investment_EveningBatch_JP"
+Write-Host "  Daily 20:30  ->  Investment_EveningBatch_JP"
 Write-Host "  1st of month ->  Investment_MonthlyBatch"
 Write-Host ""
 Write-Host "To verify: run 'taskschd.msc'"

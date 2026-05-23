@@ -19,7 +19,7 @@ python -m scripts.init_db
 python -m scripts.fetch_historical      # initial data load (takes several hours)
 ```
 
-`yfinance` is not in `requirements.txt` but is required for the initial historical data load (`fetch_historical.py`); install it manually: `pip install yfinance`.
+`yfinance` is listed in `requirements.txt` and is used for JP daily prices and the initial 3-year history load (`fetch_historical.py`, `yfinance_fetcher.py`).
 
 ## Running Commands
 
@@ -69,7 +69,7 @@ External APIs → price_history / index_snapshot (SQLite)
 | `config.py` | Loads `config.json`; all other modules import `CONFIG` from here |
 | `data_store.py` | SQLite abstraction — `get_connection()`, `upsert()`, `fetch_all()`, `fetch_one()`, `insert_one()`, `log_error()` |
 | `data_fetcher.py` | EODHD API — bulk EOD (1 request/exchange/day), index history, symbol master |
-| `yfinance_fetcher.py` | yfinance — initial 3-year history load only (free, no API limit) |
+| `yfinance_fetcher.py` | yfinance — JP daily prices + initial 3-year history load (free, unofficial API) |
 | `jquants_fetcher.py` | J-Quants API — JP fundamentals and earnings schedule |
 | `technical_calculator.py` | Computes MA5/25/75/200, RSI14, ATR14, volatility, turnover, weekly MA25, Parabolic SAR, support/resistance → `technical_snapshot` |
 | `market_filter.py` | Market environment judge (normal/caution/full_caution) + liquidity screening |

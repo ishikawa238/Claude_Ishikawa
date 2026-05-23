@@ -35,8 +35,7 @@
 cd investment_support
 python -m venv .venv
 .venv\Scripts\activate.bat
-pip install -r requirements.txt
-pip install yfinance            # 初回履歴取得に必要
+pip install -r requirements.txt   # yfinance 含む（JP日次・初回履歴取得に使用）
 
 copy config_template.json config.json   # APIキー等を設定
 python -m scripts.init_db               # DB初期化
@@ -314,7 +313,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 
 ## 既知の制約
 
-- JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応
+- JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応（代替候補は [investment_support/docs/jp_price_sources.md](investment_support/docs/jp_price_sources.md) を参照）
 - JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
 - J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
 - Webダッシュボードは `127.0.0.1` のみで待ち受け。外部公開は不可

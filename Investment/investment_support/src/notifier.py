@@ -278,6 +278,7 @@ def send_evening_report(
     screening_stats: dict | None = None,
     paypay_points: list[dict] | None = None,
     paypay_signals: list[dict] | None = None,
+    price_source_alert: str | None = None,
 ) -> bool:
     """
     夜通知を生成して Slack に送信する。
@@ -288,6 +289,7 @@ def send_evening_report(
         entry_sets:           エントリーセット付き候補（最大3件）
         holdings:             evaluate_holdings() の返り値
         failed_tickers_count: データ取得失敗銘柄数
+        price_source_alert:   JP価格ソース障害時の警告文（任意）
         llm_feedback:         LLM アドバイザーからのフィードバック（任意）
         near_misses:          惜しかった銘柄（任意）
         screening_stats:      スクリーニング統計（screened, candidates, entry_sets 件数）
@@ -307,6 +309,10 @@ def send_evening_report(
         header_text += f"\n{mode_det}"
     blocks.append(_section(header_text))
     blocks.append(_divider())
+
+    if price_source_alert:
+        blocks.append(_section(price_source_alert))
+        blocks.append(_divider())
 
     # 買い候補（市場環境にかかわらずスコア付きで表示）
     evening_sets = entry_sets[:3]

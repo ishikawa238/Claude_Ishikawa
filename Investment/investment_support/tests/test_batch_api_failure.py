@@ -104,6 +104,17 @@ def _stop_patches(patches: list) -> None:
 # 夜バッチ共通モックビルダー
 # ============================================================
 
+def _empty_price_result(total: int = 1):
+    from src.yfinance_fetcher import DailyPriceFetchResult
+    return DailyPriceFetchResult(
+        rows=[],
+        total_tickers=total,
+        tickers_with_target_date=0,
+        failed_tickers=[f"T{i}" for i in range(total)] if total else [],
+        status="failed",
+    )
+
+
 def _evening_patches(**overrides) -> list:
     """
     夜バッチ (_run_batch) に必要な共通パッチのリストを返す。
@@ -116,7 +127,9 @@ def _evening_patches(**overrides) -> list:
         "scripts.batch_evening_jp.fetch_all": MagicMock(return_value=[]),
         "scripts.batch_evening_jp.upsert": MagicMock(),
         "scripts.batch_evening_jp.fetch_index_history": MagicMock(return_value=[]),
-        "scripts.batch_evening_jp.fetch_daily_yf": MagicMock(return_value=[]),
+        "scripts.batch_evening_jp.fetch_daily_yf_with_status": MagicMock(
+            return_value=_empty_price_result(),
+        ),
         "scripts.batch_evening_jp.calculate_and_save_index_mas": MagicMock(),
         "scripts.batch_evening_jp.judge_market_environment": MagicMock(return_value={"mode": "normal"}),
         "scripts.batch_evening_jp.calculate_and_save_snapshots": MagicMock(),
@@ -202,7 +215,7 @@ class EveningBatchTimeoutTests(unittest.TestCase):
         import requests
 
         patches = _evening_patches(
-            **{"scripts.batch_evening_jp.fetch_daily_yf": MagicMock(
+            **{"scripts.batch_evening_jp.fetch_daily_yf_with_status": MagicMock(
                 side_effect=requests.exceptions.Timeout("接続タイムアウト")
             )}
         )

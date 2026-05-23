@@ -8,8 +8,15 @@ backtester モジュールのテスト
 - _calc_max_drawdown(): 最大ドローダウン
 """
 
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _PROJECT_ROOT.parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 
 _CONFIG_MOCK = {

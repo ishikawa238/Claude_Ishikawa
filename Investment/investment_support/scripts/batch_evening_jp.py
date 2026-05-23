@@ -36,7 +36,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared.batch import start_batch_log, finish_batch_log
 from src.config import CONFIG
 from src.data_fetcher import fetch_index_history
-from src.yfinance_fetcher import fetch_daily_yf
+from src.yfinance_fetcher import fetch_daily_yf_with_status
 from src.data_store import (
     backup_database, fetch_all, get_connection,
     log_error, upsert,
@@ -201,13 +201,20 @@ def _run_batch(
         logger.info(f"対象銘柄: JP {len(tickers_with_market)} 件")
 
         # 価格データ取得（yfinance: EODHD JP Bulk が利用不可のため代替）
-        all_rows = fetch_daily_yf(tickers_with_market, _TODAY)
-        failed_count = 0
-        if not all_rows:
+        price_result = fetch_daily_yf_with_status(tickers_with_market, _TODAY)
+        all_rows = price_result.rows
+        jp_price_alert = price_result.alert_message
+        if price_result.status == "failed":
+            logger.warning(
+                "JP 価格取得失敗（yfinance）。price_history の更新をスキップします。"
+            )
+            failed_count = len(tickers_with_market)
+        elif not all_rows:
             logger.warning("JP 価格取得失敗。price_history の更新をスキップします。")
             failed_count = len(tickers_with_market)
         else:
             _save_in_chunks(all_rows, "price_history")
+            failed_count = price_result.failed_count
 
         # ────────────────────────────────────────
         # STEP 2: テクニカル指標計算（インデックスMA）
@@ -229,7 +236,7 @@ def _run_batch(
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
         # ────────────────────────────────────────
         _progress(4, "スクリーニング・シグナル検出")
-        if failed_count == len(tickers_with_market):
+        if price_result.status == "failed" or failed_count == len(tickers_with_market):
             # 全銘柄の価格取得に失敗 → 古いデータでの誤シグナルを防ぐ
             logger.warning(
                 "全銘柄の価格取得に失敗したため、テクニカル計算・シグナル検出をスキップします。"
@@ -340,7 +347,8 @@ def _run_batch(
                                 llm_feedback=llm_feedback, near_misses=near_misses,
                                 screening_stats=screening_stats,
                                 paypay_points=paypay_points_eval,
-                                paypay_signals=paypay_signals)
+                                paypay_signals=paypay_signals,
+                                price_source_alert=jp_price_alert)
         except Exception as e:
             logger.error(f"Slack通知送信失敗: {e}", exc_info=True)
             log_error(_BATCH_TYPE, "send_evening_report", type(e).__name__, str(e))
@@ -355,9 +363,16 @@ def _run_batch(
         # STEP 10: バッチログ更新
         # ────────────────────────────────────────
         status = "partial_failure" if failed_count > 0 else "success"
+        import json as _json
+        batch_memo = _json.dumps({
+            "jp_price_source": price_result.source,
+            "jp_price_status": price_result.status,
+            "jp_price_target_date_count": price_result.tickers_with_target_date,
+        }, ensure_ascii=False)
         with get_connection() as conn:
             finish_batch_log(conn, batch_id, status,
-                             {"total_tickers": len(tickers_with_market), "failed_tickers": failed_count, "signals_generated": signals_count})
+                             {"total_tickers": len(tickers_with_market), "failed_tickers": failed_count,
+                              "signals_generated": signals_count, "memo": batch_memo})
         logger.info(f"[夜バッチ] 完了: {status}")
         return 0 if status == "success" else 1
 

@@ -127,7 +127,7 @@ def _evening_patches(**overrides) -> list:
         "scripts.batch_evening_jp.fetch_all": MagicMock(return_value=[]),
         "scripts.batch_evening_jp.upsert": MagicMock(),
         "scripts.batch_evening_jp.fetch_index_history": MagicMock(return_value=[]),
-        "scripts.batch_evening_jp.fetch_daily_yf_with_status": MagicMock(
+        "scripts.batch_evening_jp._fetch_jp_daily_with_status": MagicMock(
             return_value=_empty_price_result(),
         ),
         "scripts.batch_evening_jp.calculate_and_save_index_mas": MagicMock(),
@@ -215,7 +215,7 @@ class EveningBatchTimeoutTests(unittest.TestCase):
         import requests
 
         patches = _evening_patches(
-            **{"scripts.batch_evening_jp.fetch_daily_yf_with_status": MagicMock(
+            **{"scripts.batch_evening_jp._fetch_jp_daily_with_status": MagicMock(
                 side_effect=requests.exceptions.Timeout("接続タイムアウト")
             )}
         )

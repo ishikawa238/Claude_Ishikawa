@@ -36,7 +36,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared.batch import start_batch_log, finish_batch_log
 from src.config import CONFIG
 from src.data_fetcher import fetch_index_history
-from src.yfinance_fetcher import fetch_daily_yf_with_status
 from src.data_store import (
     backup_database, fetch_all, get_connection,
     log_error, upsert,
@@ -57,6 +56,63 @@ _BATCH_TYPE = "evening_jp"
 _LOCK_DIR = _PROJECT_ROOT / "data"
 _LOCK_FILE = _LOCK_DIR / "batch_evening_jp.lock"
 _BATCH_TIMEOUT_SEC = 30 * 60  # 30分
+
+
+def _fetch_jp_daily_with_status(tickers_with_market: list[tuple[str, str]], target_date: date):
+    """
+    JP 日次価格を取得する。
+
+    order_server 起動後に yfinance_fetcher が更新された場合、
+    古い sys.modules キャッシュを避けるため都度 reload する。
+    """
+    import importlib
+    import src.yfinance_fetcher as yf_mod
+
+    importlib.reload(yf_mod)
+    if hasattr(yf_mod, "fetch_daily_yf_with_status"):
+        return yf_mod.fetch_daily_yf_with_status(tickers_with_market, target_date)
+
+    # 旧版 yfinance_fetcher 向けフォールバック
+    logger.warning(
+        "fetch_daily_yf_with_status がありません。fetch_daily_yf にフォールバックします。"
+    )
+    from dataclasses import dataclass
+
+    @dataclass
+    class _PriceResult:
+        rows: list
+        total_tickers: int
+        tickers_with_target_date: int
+        failed_tickers: list
+        source: str
+        status: str
+
+        @property
+        def failed_count(self) -> int:
+            return len(self.failed_tickers)
+
+        @property
+        def alert_message(self) -> str | None:
+            if self.status == "failed" and self.total_tickers > 0:
+                return (
+                    "⚠️ *JP価格データ取得失敗*（ソース: yfinance）\n"
+                    f"対象 {self.total_tickers} 銘柄のうち当日分を取得できませんでした。"
+                )
+            return None
+
+    rows = yf_mod.fetch_daily_yf(tickers_with_market, target_date)
+    total = len(tickers_with_market)
+    target_str = target_date.strftime("%Y-%m-%d")
+    on_date = len({r["ticker"] for r in rows if r.get("date") == target_str})
+    status = "failed" if not rows else ("partial" if on_date < total * 0.5 else "ok")
+    return _PriceResult(
+        rows=rows,
+        total_tickers=total,
+        tickers_with_target_date=on_date,
+        failed_tickers=[],
+        source=getattr(yf_mod, "JP_PRICE_SOURCE", "yfinance"),
+        status=status,
+    )
 
 
 def _acquire_lock() -> "open | None":
@@ -201,7 +257,7 @@ def _run_batch(
         logger.info(f"対象銘柄: JP {len(tickers_with_market)} 件")
 
         # 価格データ取得（yfinance: EODHD JP Bulk が利用不可のため代替）
-        price_result = fetch_daily_yf_with_status(tickers_with_market, _TODAY)
+        price_result = _fetch_jp_daily_with_status(tickers_with_market, _TODAY)
         all_rows = price_result.rows
         jp_price_alert = price_result.alert_message
         if price_result.status == "failed":

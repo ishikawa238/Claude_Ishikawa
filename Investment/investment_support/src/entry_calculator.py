@@ -21,6 +21,9 @@ from src.logger import get_logger
 logger = get_logger(__name__)
 
 
+_RANK_PRIORITY = {"S": 5, "A": 4, "B": 3, "C": 2, "Watch": 1}
+
+
 # ============================================================
 # エントリーセット計算
 # ============================================================
@@ -69,12 +72,22 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         recommended_amount = None
 
     # --- 投入額の上限制御 ---
+    warn_too_small = False
     if recommended_amount is not None:
         # (1) 総資金を超えない
         recommended_amount = min(recommended_amount, capital)
-        # (2) max_holdings に基づく1ポジションあたりの上限
-        max_per_position = capital / settings["max_holdings"]
-        recommended_amount = min(recommended_amount, max_per_position)
+        if settings.get("offensive"):
+            # 攻めモード: 1銘柄上限 max_per_position_pct と
+            # 新規エントリー上限 new_entry_size_pct_max を適用
+            max_per_position = capital * settings["max_per_position_pct"] / 100
+            entry_max = capital * settings["new_entry_size_pct_max"] / 100
+            entry_min = capital * settings["new_entry_size_pct_min"] / 100
+            recommended_amount = min(recommended_amount, max_per_position, entry_max)
+            warn_too_small = recommended_amount < entry_min
+        else:
+            # 守りモード: max_holdings に基づく1ポジション上限
+            max_per_position = capital / settings["max_holdings"]
+            recommended_amount = min(recommended_amount, max_per_position)
 
     # --- 決算近接チェック ---
     warn_earnings = _check_earnings_near(ticker, signal["date"])
@@ -100,7 +113,9 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         "_warn_wide":    stop_loss_pct > settings["warn_max_pct"],
         "_warn_earnings": warn_earnings,
         "_warn_at_capacity": open_holdings_count >= settings["max_holdings"],
+        "_warn_too_small": warn_too_small,
         "_remaining_slots": max(settings["max_holdings"] - open_holdings_count, 0),
+        "_strategy_mode": "offensive" if settings.get("offensive") else "defensive",
         "_candidate_source": signal.get("_candidate_source"),
         "_conditions_met_count": signal.get("_conditions_met_count"),
         "_conditions_total": signal.get("_conditions_total"),
@@ -251,7 +266,7 @@ def _settings() -> dict:
     """実行時点の config から計算パラメータを取得する。"""
     sig_cfg = config_module.CONFIG["signal"]
     cap_cfg = config_module.CONFIG["capital"]
-    return {
+    settings = {
         "atr_mult": float(sig_cfg["atr_stop_multiplier"]),
         "rr_ratio": float(sig_cfg["risk_reward_ratio"]),
         "warn_min_pct": float(sig_cfg["stop_loss_warning_min_pct"]),
@@ -261,7 +276,20 @@ def _settings() -> dict:
         "capital_usd": float(cap_cfg["total_capital_usd"]),
         "max_holdings": max(int(cap_cfg.get("max_concurrent_holdings", 3)), 1),
         "default_stop_loss_pct": float(cap_cfg.get("default_stop_loss_pct", 8)),
+        "offensive": False,
     }
+
+    # 攻めモード時: リスク比率・保有上限・1銘柄サイズの上書き
+    if config_module.is_offensive():
+        off = config_module.get_offensive_config()
+        settings["offensive"] = True
+        settings["risk_pct"] = float(off.get("risk_per_trade_pct", 1.5)) / 100
+        settings["max_holdings"] = max(int(off.get("max_concurrent_holdings", 8)), 1)
+        settings["max_per_position_pct"] = float(off.get("max_per_position_pct", 20.0))
+        settings["new_entry_size_pct_min"] = float(off.get("new_entry_size_pct_min", 5.0))
+        settings["new_entry_size_pct_max"] = float(off.get("new_entry_size_pct_max", 10.0))
+
+    return settings
 
 
 def _log_entry_set(es: dict) -> None:

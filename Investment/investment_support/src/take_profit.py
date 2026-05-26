@@ -6,23 +6,30 @@
 - T1/T2/T3 の価格と売却株数を計算する
 - take_profit_targets テーブルへの自動生成・到達判定・更新を行う
 
-利確タイプ:
+利確タイプ（守りモード = defensive）:
   パターンA（ブレイクアウト） → タイプI:  T1=+0.5R(50%), T2=+1.0R(30%), T3=+2.0R(20%)
   パターンB（押し目買い）     → タイプII: T1=+1.0R(30%), T2=+2.0R(30%), T3=MA25トレーリング(40%)
   対応シグナルなし           → タイプIII: 手動管理（ターゲットなし）
+
+攻めモード（offensive）では、タイプI/II をより伸ばす形に上書きする:
+  タイプI:  T1=+1.0R(20%), T2=+3.0R(20%), T3=+5.0R(20%), 残り40%は MA25→MA50 トレーリング
+  タイプII: T1=+1.0R(30%), T2=+2.0R(30%), 残り40%は MA25→MA50 トレーリング
+  さらに株価2倍到達で残量の半分を利確推奨する特例を持つ。
+  SL引き上げ: T1到達で買値、T2到達で +1R、T3到達で +3R（直前のターゲット価格）。
 """
 
 import math
 from datetime import datetime
 from typing import Optional
 
+from src.config import get_offensive_config, is_offensive
 from src.data_store import fetch_all, fetch_one, get_connection
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
 # ============================================================
-# タイプ別パラメータ
+# タイプ別パラメータ（守りモードの既定値）
 # ============================================================
 
 _TYPE_PARAMS = {
@@ -43,6 +50,38 @@ _TYPE_PARAMS = {
         "t3_pct": 40,
     },
 }
+
+
+def _get_type_params(profit_type: str) -> dict:
+    """
+    攻めモード/守りモードに応じてタイプ別パラメータを返す。
+    攻めモードでは config.strategy.offensive.take_profit_type_i/ii で上書き可能。
+    """
+    if not is_offensive():
+        return _TYPE_PARAMS.get(profit_type, {})
+
+    off = get_offensive_config()
+    if profit_type == "I":
+        tp = off.get("take_profit_type_i", {})
+        return {
+            "t1_r_mult": float(tp.get("t1_r_mult", 1.0)),
+            "t1_pct":    float(tp.get("t1_pct", 20)),
+            "t2_r_mult": float(tp.get("t2_r_mult", 3.0)),
+            "t2_pct":    float(tp.get("t2_pct", 20)),
+            "t3_r_mult": float(tp.get("t3_r_mult", 5.0)),
+            "t3_pct":    float(tp.get("t3_pct", 20)),
+        }
+    if profit_type == "II":
+        tp = off.get("take_profit_type_ii", {})
+        return {
+            "t1_r_mult": float(tp.get("t1_r_mult", 1.0)),
+            "t1_pct":    float(tp.get("t1_pct", 30)),
+            "t2_r_mult": float(tp.get("t2_r_mult", 2.0)),
+            "t2_pct":    float(tp.get("t2_pct", 30)),
+            "t3_r_mult": None,
+            "t3_pct":    float(tp.get("trailing_pct", 40)),
+        }
+    return {}
 
 
 # ============================================================
@@ -95,10 +134,13 @@ def calc_targets(
         }
     タイプIII の場合は空辞書を返す。
     """
-    if profit_type == "III" or profit_type not in _TYPE_PARAMS:
+    if profit_type == "III":
         return {}
 
-    params = _TYPE_PARAMS[profit_type]
+    params = _get_type_params(profit_type)
+    if not params:
+        return {}
+
     r_value = entry_price - stop_loss_price
     if r_value <= 0:
         return {}
@@ -144,6 +186,9 @@ def _split_quantity(
       2株: T1で1株、残り1株
       3株: T1で2株、残り1株
       4株以上: 標準の分割比率
+
+    合計割合（t1_pct + t2_pct + t3_pct）が 100% 未満（攻めモード等）の場合は、
+    余剰分をトレーリング枠として残し T1/T2/T3 には含めない。
     """
     if total <= 0:
         return (0, 0, 0)
@@ -154,13 +199,21 @@ def _split_quantity(
     if total == 3:
         return (2, 0, 1)
 
-    # 4株以上: 割合ベースで分配（端数は T1 に寄せる）
-    t3_qty = max(math.floor(total * t3_pct / 100), 1)
-    t2_qty = max(math.floor(total * t2_pct / 100), 1)
-    t1_qty = total - t2_qty - t3_qty
-    if t1_qty <= 0:
-        t1_qty = 1
-        t2_qty = total - t1_qty - t3_qty
+    total_pct = float(t1_pct) + float(t2_pct) + float(t3_pct)
+    if total_pct >= 99.0:
+        # 守りモード: 端数は T1 に寄せて合計を total に揃える
+        t3_qty = max(math.floor(total * t3_pct / 100), 1)
+        t2_qty = max(math.floor(total * t2_pct / 100), 1)
+        t1_qty = total - t2_qty - t3_qty
+        if t1_qty <= 0:
+            t1_qty = 1
+            t2_qty = total - t1_qty - t3_qty
+        return (t1_qty, t2_qty, t3_qty)
+
+    # 攻めモード等: 余剰分はトレーリング枠として残す
+    t1_qty = math.floor(total * t1_pct / 100)
+    t2_qty = math.floor(total * t2_pct / 100)
+    t3_qty = math.floor(total * t3_pct / 100)
     return (t1_qty, t2_qty, t3_qty)
 
 
@@ -280,16 +333,25 @@ def check_target_reached(
     entry_price: float,
     target_date: str,
     ma25: Optional[float] = None,
+    ma50: Optional[float] = None,
 ) -> dict:
     """
     現在価格に基づいて T1/T2/T3 の到達判定を行い、DBを更新する。
 
+    攻めモード時の追加挙動:
+        - T1 到達で SL を買値へ、T2 で +1R、T3 で +3R へ引き上げる（直前のターゲット価格）
+        - 株価が買値の 2 倍に到達した場合、残数の半分を利確推奨（double_milestone）
+        - トレーリング枠が active な状態で MA25 を割ったら短期回収（trailing_level="ma25"）、
+          MA50 を割ったら大化け枠も含めて全撤退（trailing_level="ma50"）を推奨
+
     返り値:
         {
-            "newly_reached": list[str],  # 今回新たに到達した段階 ("t1", "t2", "t3")
-            "adjusted_stop": float|None, # T1到達後の推奨SL引き上げ先
-            "sell_qty": int,             # 今回売るべき推奨株数
-            "trailing_triggered": bool,  # MA25割れトレーリング発動
+            "newly_reached": list[str],   # 今回新たに到達した段階 ("t1", "t2", "t3")
+            "adjusted_stop": float|None,  # 推奨SL引き上げ先
+            "sell_qty": int,              # 今回売るべき推奨株数
+            "trailing_triggered": bool,   # MA25/MA50 トレーリング発動
+            "trailing_level": str|None,   # "ma25" or "ma50"
+            "double_milestone": bool,     # 株価2倍到達（攻めモードのみ）
         }
     """
     result = {
@@ -297,70 +359,134 @@ def check_target_reached(
         "adjusted_stop": None,
         "sell_qty": 0,
         "trailing_triggered": False,
+        "trailing_level": None,
+        "double_milestone": False,
     }
 
     targets = get_targets(ticker)
     if not targets:
         return result
 
+    offensive = is_offensive()
+    r_val = float(targets["r_value"] or 0)
+    profit_type = targets["profit_type"]
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     updates: list[tuple[str, object]] = []
 
-    # T1 到達判定
-    if not targets["t1_reached"] and targets["t1_price"] and current_price >= targets["t1_price"]:
+    # --- T1 到達判定 ---
+    if (not targets["t1_reached"]
+            and targets["t1_price"]
+            and current_price >= targets["t1_price"]):
         result["newly_reached"].append("t1")
+        # 守り・攻めとも T1 到達で SL を買値へ引き上げる
         result["adjusted_stop"] = round(entry_price, 2)
         updates.append(("t1_reached", 1))
         updates.append(("t1_reached_date", target_date))
         updates.append(("adjusted_stop", result["adjusted_stop"]))
+        # 攻めモードは T1 到達時点でトレーリング枠を意識する
+        if offensive:
+            updates.append(("trailing_active", 1))
 
-    # T2 到達判定
-    if not targets["t2_reached"] and targets["t2_price"] and current_price >= targets["t2_price"]:
+    # --- T2 到達判定 ---
+    if (not targets["t2_reached"]
+            and targets["t2_price"]
+            and current_price >= targets["t2_price"]):
         result["newly_reached"].append("t2")
-        r_val = targets["r_value"] or 0
-        result["adjusted_stop"] = round(entry_price + 0.5 * r_val, 2)
+        if offensive:
+            # 攻めモード: SL を +1R 付近へ
+            result["adjusted_stop"] = round(entry_price + 1.0 * r_val, 2)
+        else:
+            result["adjusted_stop"] = round(entry_price + 0.5 * r_val, 2)
         updates.append(("t2_reached", 1))
         updates.append(("t2_reached_date", target_date))
         updates.append(("adjusted_stop", result["adjusted_stop"]))
         # タイプII: T2到達でトレーリング有効化
-        if targets["profit_type"] == "II":
+        if profit_type == "II" or offensive:
             updates.append(("trailing_active", 1))
 
-    # T3 到達判定（タイプI のみ — 固定価格）
+    # --- T3 到達判定（タイプI のみ — 固定価格） ---
     if (not targets["t3_reached"]
             and targets["t3_price"]
             and current_price >= targets["t3_price"]):
         result["newly_reached"].append("t3")
-        r_val = targets["r_value"] or 0
-        result["adjusted_stop"] = round(entry_price + r_val, 2)
+        if offensive:
+            # 攻めモード: SL を直前のターゲット価格（T2 = +3R 付近）へ。残り 40% はトレーリング継続
+            result["adjusted_stop"] = round(entry_price + 3.0 * r_val, 2)
+        else:
+            result["adjusted_stop"] = round(entry_price + r_val, 2)
         updates.append(("t3_reached", 1))
         updates.append(("t3_reached_date", target_date))
         updates.append(("adjusted_stop", result["adjusted_stop"]))
+        if offensive:
+            updates.append(("trailing_active", 1))
 
-    # タイプII トレーリングストップ判定（MA25割れ）
-    if (targets["profit_type"] == "II"
-            and targets["t2_reached"]
-            and not targets["t3_reached"]
-            and ma25 is not None
-            and current_price < ma25):
+    # --- トレーリング判定（攻めモード or タイプII） ---
+    # 攻めモード時はトレーリング枠（残り25%）を MA25/MA50 で段階撤退する。
+    # 守りモード時は従来通り タイプII の T2到達後 MA25割れで終了。
+    if offensive:
+        trailing_active = bool(targets["trailing_active"]) or any(
+            stage in result["newly_reached"] for stage in ("t1", "t2", "t3")
+        )
+        ma50_break = False
+        ma25_break = False
+        if trailing_active:
+            if ma50 is not None and current_price < ma50:
+                ma50_break = True
+            elif ma25 is not None and current_price < ma25:
+                ma25_break = True
+
+        if ma50_break:
+            # 大化け枠も含めて全撤退（残量を全て手仕舞い）
+            result["trailing_triggered"] = True
+            result["trailing_level"] = "ma50"
+        elif ma25_break:
+            result["trailing_triggered"] = True
+            result["trailing_level"] = "ma25"
+    elif (profit_type == "II"
+          and targets["t2_reached"]
+          and not targets["t3_reached"]
+          and ma25 is not None
+          and current_price < ma25):
+        # 守りモード タイプII の MA25 トレーリング
         result["newly_reached"].append("t3")
         result["trailing_triggered"] = True
+        result["trailing_level"] = "ma25"
         updates.append(("t3_reached", 1))
         updates.append(("t3_reached_date", target_date))
 
-    # 売却推奨株数の計算
+    # --- 株価2倍特例（攻めモード）---
+    if offensive and current_price >= entry_price * 2.0:
+        result["double_milestone"] = True
+
+    # --- 売却推奨株数の計算 ---
+    # T1/T2/T3 到達分は段階比率に従う。
     if result["newly_reached"]:
         quantity = _get_holding_quantity(ticker)
         targets_info = calc_targets(
             entry_price,
-            entry_price - (targets["r_value"] or 0),
-            targets["profit_type"],
+            entry_price - r_val,
+            profit_type,
             quantity,
         )
         for stage in result["newly_reached"]:
             result["sell_qty"] += targets_info.get(f"{stage}_qty", 0)
 
-    # DB更新
+    # 攻めモードのトレーリング発動: 残量から短期回収50% / 全撤退
+    if offensive and result["trailing_triggered"] and not result["newly_reached"]:
+        remaining = max(int(_get_holding_quantity(ticker)), 0)
+        if remaining > 0:
+            if result["trailing_level"] == "ma50":
+                result["sell_qty"] = remaining
+            else:  # ma25
+                result["sell_qty"] = max(remaining // 2, 1)
+
+    # 株価2倍特例: 残量の半分を売却推奨（T 到達と独立に通知のため別フィールドとして付加）
+    if result["double_milestone"]:
+        remaining = max(int(_get_holding_quantity(ticker)), 0)
+        result["double_sell_qty"] = max(remaining // 2, 1) if remaining > 0 else 0
+
+    # --- DB更新 ---
     if updates:
         updates.append(("updated_at", now))
         set_clause = ", ".join(f"{col} = ?" for col, _ in updates)

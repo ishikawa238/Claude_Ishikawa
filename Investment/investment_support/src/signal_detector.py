@@ -13,7 +13,7 @@ market_mode は entry_calculator を通じて trade_signal_log に記録され�
 from datetime import date
 from typing import Optional
 
-from src.config import CONFIG
+from src.config import CONFIG, get_offensive_config, is_offensive
 from src.data_store import fetch_all, get_connection, upsert
 from src.logger import get_logger
 from src.scoring import compute_score, fetch_recent_lows
@@ -126,7 +126,18 @@ def detect_and_save_signals(
             best["_notify_extras"] = {
                 fld: tk.get(fld) for fld in ("ma5", "ma25", "ma75", "ma200", "high_52w")
             }
+            # 攻めモード判定で参照する補助情報を保持
+            best["_screened_extras"] = {
+                "est_market_cap": tk.get("est_market_cap"),
+                "return_5d": tk.get("return_5d"),
+                "return_20d": tk.get("return_20d"),
+                "vol_20d_avg": tk.get("vol_20d_avg"),
+            }
             candidates.append(best)
+
+    # 攻めモード時はハードフィルタを適用（除外銘柄は watch に降格）
+    if is_offensive() and candidates:
+        candidates = _apply_offensive_filters(candidates, target_str, all_rows)
 
     # final_score 降順でランク付け
     candidates.sort(key=lambda x: x.get("final_score") or 0, reverse=True)
@@ -154,6 +165,8 @@ def detect_and_save_signals(
         for fld, val in extras.items():
             if fld not in c or c[fld] is None:
                 c[fld] = val
+        # 攻めモード判定用の補助情報は破棄
+        c.pop("_screened_extras", None)
 
     candidate_count = len(candidates)
     watch_count = sum(1 for r in all_rows if r["label"] == "watch")
@@ -472,6 +485,202 @@ def _eval_pattern_c(tk: dict, target_str: str, market: str) -> dict:
         "_conditions_met_count": met,
         "_conditions_total": total,
     }
+
+
+# ============================================================
+# 攻めモード用ハードフィルター
+# ============================================================
+
+_RANK_PRIORITY = {"S": 5, "A": 4, "B": 3, "C": 2, "Watch": 1}
+
+
+def _apply_offensive_filters(
+    candidates: list[dict],
+    target_str: str,
+    all_rows: list[dict],
+) -> list[dict]:
+    """
+    攻めモード時の追加フィルタを適用する。
+    除外した銘柄は all_rows 上のラベルを "watch" に降格する。
+    """
+    off_cfg = get_offensive_config()
+    filters = off_cfg.get("filters", {})
+
+    min_score = float(off_cfg.get("min_final_score", 80))
+    min_rank = str(off_cfg.get("min_rank", "A")).upper()
+    min_rank_pri = _RANK_PRIORITY.get(min_rank, 4)
+
+    rsi_max = float(filters.get("rsi_max_hard", 80.0))
+    block_upper = bool(filters.get("block_long_upper_shadow", True))
+    upper_ratio_min = float(filters.get("upper_shadow_ratio_min", 0.6))
+    block_red_surge = bool(filters.get("block_red_after_volume_surge", True))
+    surge_pct = float(filters.get("block_recent_surge_pct", 30.0))
+    surge_days = int(filters.get("block_recent_surge_days", 5))
+    jp_max_mcap = float(filters.get("jp_max_market_cap_jpy", 500_000_000_000))
+    us_max_mcap = float(filters.get("us_max_market_cap_usd", 30_000_000_000))
+
+    tickers = [c["ticker"] for c in candidates]
+    candle_map = _fetch_latest_candle(tickers, target_str) if tickers else {}
+
+    kept: list[dict] = []
+    rejected: list[tuple[str, str]] = []
+
+    for c in candidates:
+        sc = c.get("_screened_extras") or {}
+        rsi = c.get("rsi14")
+        score = c.get("final_score") or 0
+        rank = c.get("recommend_rank") or "Watch"
+        market = c.get("market")
+
+        reason: str | None = None
+
+        if score < min_score:
+            reason = f"スコア{score} < {min_score}"
+        elif _RANK_PRIORITY.get(rank, 0) < min_rank_pri:
+            reason = f"ランク{rank} < {min_rank}"
+        elif rsi is not None and rsi >= rsi_max:
+            reason = f"RSI{rsi:.1f} >= {rsi_max}"
+
+        # 直近5日急騰
+        if reason is None and surge_pct > 0:
+            ret_5d = sc.get("return_5d")
+            if ret_5d is None:
+                ret_5d = _calc_recent_return(c["ticker"], target_str, surge_days)
+            if ret_5d is not None and ret_5d * 100.0 >= surge_pct:
+                reason = f"直近{surge_days}日急騰{ret_5d * 100:.1f}% >= {surge_pct}%"
+
+        # 時価総額上限
+        if reason is None:
+            mcap = sc.get("est_market_cap")
+            if mcap is not None:
+                if market == "JP" and mcap > jp_max_mcap:
+                    reason = f"時価総額(JP) {mcap:,.0f} > {jp_max_mcap:,.0f}"
+                elif market == "US" and mcap > us_max_mcap:
+                    reason = f"時価総額(US) ${mcap:,.0f} > ${us_max_mcap:,.0f}"
+
+        # 上ヒゲ / 出来高急増直後の陰線
+        if reason is None and (block_upper or block_red_surge):
+            candle = candle_map.get(c["ticker"])
+            if candle:
+                if block_upper and _is_long_upper_shadow(candle, upper_ratio_min):
+                    reason = "長い上ヒゲ"
+                elif block_red_surge and _is_red_after_volume_surge(candle, sc):
+                    reason = "出来高急増直後の陰線"
+
+        if reason is None:
+            kept.append(c)
+        else:
+            rejected.append((c["ticker"], reason))
+
+    if rejected:
+        rejected_tickers = {t for t, _ in rejected}
+        for row in all_rows:
+            if row["ticker"] in rejected_tickers and row["label"] == "candidate":
+                row["label"] = "watch"
+                row["_candidate_source"] = None
+
+        for t, r in rejected[:10]:
+            logger.info(f"  攻めモードフィルター除外: {t} ({r})")
+        if len(rejected) > 10:
+            logger.info(f"  攻めモードフィルター除外: 他 {len(rejected) - 10} 件")
+
+    logger.info(
+        f"攻めモードフィルター適用: 候補 {len(candidates)} 件 → "
+        f"{len(kept)} 件通過 / {len(rejected)} 件除外"
+    )
+    return kept
+
+
+def _fetch_latest_candle(tickers: list[str], target_str: str) -> dict[str, dict]:
+    """
+    対象日の OHLCV を一括取得する。
+    返り値: {ticker: {"open", "high", "low", "close", "volume"}}
+    """
+    if not tickers:
+        return {}
+    placeholders = ",".join(["?"] * len(tickers))
+    sql = (
+        f"SELECT ticker, open, high, low, adj_close AS close, volume "
+        f"FROM price_history "
+        f"WHERE ticker IN ({placeholders}) AND date = ? AND is_holiday = 0"
+    )
+    with get_connection() as conn:
+        rows = fetch_all(conn, sql, tuple(tickers) + (target_str,))
+    result: dict[str, dict] = {}
+    for r in rows:
+        result[r["ticker"]] = {
+            "open": _safe_float(r["open"]),
+            "high": _safe_float(r["high"]),
+            "low": _safe_float(r["low"]),
+            "close": _safe_float(r["close"]),
+            "volume": _safe_float(r["volume"]),
+        }
+    return result
+
+
+def _calc_recent_return(ticker: str, target_str: str, days: int) -> Optional[float]:
+    """
+    銘柄ごとに直近 days 営業日のリターンを取得（return_Nd が screened_tickers
+    に無い場合のフォールバック）。
+    """
+    with get_connection() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT adj_close FROM price_history "
+            "WHERE ticker = ? AND date <= ? AND is_holiday = 0 "
+            "ORDER BY date DESC LIMIT ?",
+            (ticker, target_str, days + 1),
+        )
+    if len(rows) < 2:
+        return None
+    latest = _safe_float(rows[0]["adj_close"])
+    base = _safe_float(rows[-1]["adj_close"])
+    if not latest or not base or base <= 0:
+        return None
+    return (latest - base) / base
+
+
+def _is_long_upper_shadow(candle: dict, ratio_min: float) -> bool:
+    """
+    長い上ヒゲ判定:
+        (high - max(open, close)) / (high - low) >= ratio_min
+    """
+    high = candle.get("high")
+    low = candle.get("low")
+    open_ = candle.get("open")
+    close = candle.get("close")
+    if None in (high, low, open_, close):
+        return False
+    rng = high - low
+    if rng <= 0:
+        return False
+    body_top = max(open_, close)
+    upper_shadow = high - body_top
+    return (upper_shadow / rng) >= ratio_min
+
+
+def _is_red_after_volume_surge(candle: dict, sc: dict) -> bool:
+    """
+    出来高急増（20日平均比2倍以上）かつ陰線（close < open）を検出する。
+    """
+    open_ = candle.get("open")
+    close = candle.get("close")
+    volume = candle.get("volume")
+    vol_avg = sc.get("vol_20d_avg")
+    if None in (open_, close, volume, vol_avg):
+        return False
+    if vol_avg <= 0:
+        return False
+    return close < open_ and (volume / vol_avg) >= 2.0
+
+
+def _safe_float(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 # ============================================================

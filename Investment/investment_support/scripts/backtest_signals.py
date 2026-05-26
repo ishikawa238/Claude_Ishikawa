@@ -4,14 +4,17 @@
 実行方法（investment_support/ ディレクトリから）:
     python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30
     python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30 --market JP --capital 200000
+    python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30 --strategy-mode offensive
 
 引数:
-    --start   開始日（YYYY-MM-DD）  必須
-    --end     終了日（YYYY-MM-DD）  必須
-    --market  市場（JP / US / ALL） デフォルト: ALL
-    --capital 初期資金              デフォルト: config.json の total_capital_jpy
-    --commission  片道手数料（%）    デフォルト: 0.1
-    --slippage    スリッページ（%）  デフォルト: 0.1
+    --start          開始日（YYYY-MM-DD）  必須
+    --end            終了日（YYYY-MM-DD）  必須
+    --market         市場（JP / US / ALL） デフォルト: ALL
+    --capital        初期資金              デフォルト: config.json の total_capital_jpy
+    --commission     片道手数料（%）       デフォルト: 0.1
+    --slippage       スリッページ（%）     デフォルト: 0.1
+    --strategy-mode  戦略モード(defensive/offensive/compare)  デフォルト: config.json の strategy_mode
+                     compare を指定すると両モードを実行し期待値を並べて表示する。
 """
 
 import argparse
@@ -24,6 +27,7 @@ _REPO_ROOT = _PROJECT_ROOT.parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+import src.config as _config_module
 from src.backtester import format_summary, run_backtest, summarize_results
 from src.config import CONFIG
 from src.logger import get_logger
@@ -53,6 +57,11 @@ def main() -> None:
         "--slippage", type=float, default=0.1,
         help="スリッページ（%%、デフォルト: 0.1）"
     )
+    parser.add_argument(
+        "--strategy-mode", default=None,
+        choices=["defensive", "offensive", "compare"],
+        help="戦略モード（既定: config.json）。compare で両モードを並べて表示。",
+    )
 
     args = parser.parse_args()
 
@@ -60,7 +69,24 @@ def main() -> None:
     if capital is None:
         capital = float(CONFIG["capital"]["total_capital_jpy"])
 
-    logger.info(f"バックテスト実行: {args.start} ～ {args.end}")
+    if args.strategy_mode == "compare":
+        _run_and_print("defensive", args, capital)
+        print("\n" + "=" * 70 + "\n")
+        _run_and_print("offensive", args, capital)
+        return
+
+    if args.strategy_mode:
+        _config_module.CONFIG["strategy_mode"] = args.strategy_mode
+
+    _run_and_print(_config_module.get_strategy_mode(), args, capital)
+
+
+def _run_and_print(mode: str, args: argparse.Namespace, capital: float) -> None:
+    """指定モードでバックテストを実行し、結果を整形して表示する。"""
+    _config_module.CONFIG["strategy_mode"] = mode
+    label = "⚔ 攻めモード" if mode == "offensive" else "🛡 守りモード"
+    logger.info(f"バックテスト実行({label}): {args.start} ～ {args.end}")
+    print(f"\n=== {label}（strategy_mode={mode}） ===")
 
     trades = run_backtest(
         start_date=args.start,

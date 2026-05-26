@@ -408,5 +408,132 @@ class TestTrailingStop(unittest.TestCase):
         self.assertTrue(result["trailing_triggered"])
 
 
+class TestOffensiveMode(unittest.TestCase):
+    """攻めモード時の利確ルールテスト"""
+
+    def setUp(self):
+        global _test_conn
+        _test_conn = sqlite3.connect(":memory:")
+        _test_conn.row_factory = sqlite3.Row
+        _init_test_db(_test_conn)
+        self._patcher = patch(
+            "src.take_profit.get_connection", side_effect=_get_test_connection
+        )
+        self._patcher.start()
+
+        # 攻めモードを有効化（B案: +1R/+3R/+5R 各20%、残り40%トレーリング）
+        _src_config.CONFIG["strategy_mode"] = "offensive"
+        _src_config.CONFIG["strategy"] = {
+            "offensive": {
+                "take_profit_type_i": {
+                    "t1_r_mult": 1.0, "t1_pct": 20,
+                    "t2_r_mult": 3.0, "t2_pct": 20,
+                    "t3_r_mult": 5.0, "t3_pct": 20,
+                    "trailing_pct": 40,
+                    "double_partial_take_pct": 50,
+                },
+            },
+        }
+
+        # パターンA のシグナル + 保有銘柄
+        _test_conn.execute(
+            "INSERT INTO trade_signal_log "
+            "(signal_date, ticker, market, pattern, entry_price, stop_loss_price, "
+            "stop_loss_pct, target_price, market_mode) "
+            "VALUES ('2026-01-01', 'OFF', 'JP', 'A', 1000, 900, 10.0, 1200, 'normal')"
+        )
+        _test_conn.execute(
+            "INSERT INTO holdings "
+            "(ticker, name, market, entry_price, entry_date, quantity, "
+            "stop_loss_price, is_closed, created_at, updated_at) "
+            "VALUES ('OFF', 'オフ', 'JP', 1000, '2026-01-01', 10, 900, 0, "
+            "datetime('now'), datetime('now'))"
+        )
+        _test_conn.commit()
+
+    def tearDown(self):
+        self._patcher.stop()
+        _test_conn.close()
+        # CONFIG を戻す
+        _src_config.CONFIG.pop("strategy_mode", None)
+        _src_config.CONFIG.pop("strategy", None)
+
+    def test_calc_targets_offensive_type_i(self):
+        """攻めモード タイプI: T1=+1R, T2=+3R, T3=+5R, 20%/20%/20%（残り40%トレーリング）"""
+        result = calc_targets(1000.0, 900.0, "I", 10)
+        self.assertEqual(result["profit_type"], "I")
+        self.assertAlmostEqual(result["r_value"], 100.0)
+        self.assertAlmostEqual(result["t1_price"], 1100.0)  # +1R
+        self.assertAlmostEqual(result["t2_price"], 1300.0)  # +3R
+        self.assertAlmostEqual(result["t3_price"], 1500.0)  # +5R
+        self.assertEqual(result["t1_pct"], 20)
+        self.assertEqual(result["t2_pct"], 20)
+        self.assertEqual(result["t3_pct"], 20)
+        # 10株: 20%/20%/20% → 2/2/2（残り4株はトレーリング枠）
+        self.assertEqual(result["t1_qty"], 2)
+        self.assertEqual(result["t2_qty"], 2)
+        self.assertEqual(result["t3_qty"], 2)
+
+    def test_check_t1_offensive_raises_sl_to_entry(self):
+        """攻めモード T1 到達で SL を買値（entry）に引き上げ、トレーリング有効化"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        result = check_target_reached("OFF", 1100.0, 1000.0, "2026-01-05")
+        self.assertIn("t1", result["newly_reached"])
+        self.assertAlmostEqual(result["adjusted_stop"], 1000.0)
+        targets = get_targets("OFF")
+        self.assertEqual(targets["trailing_active"], 1)
+
+    def test_check_t2_offensive_raises_sl_to_plus_1r(self):
+        """攻めモード T2 到達で SL を +1R に引き上げ（B案: T2=+3R=1300）"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        result = check_target_reached("OFF", 1300.0, 1000.0, "2026-01-05")
+        self.assertIn("t1", result["newly_reached"])
+        self.assertIn("t2", result["newly_reached"])
+        # T2 到達で SL は +1R = 1100 へ（最新で上書き）
+        self.assertAlmostEqual(result["adjusted_stop"], 1100.0)
+
+    def test_check_t3_offensive_raises_sl_to_plus_3r(self):
+        """攻めモード T3 到達で SL を +3R に引き上げ（B案: T3=+5R=1500）"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        result = check_target_reached("OFF", 1500.0, 1000.0, "2026-01-05")
+        self.assertIn("t1", result["newly_reached"])
+        self.assertIn("t2", result["newly_reached"])
+        self.assertIn("t3", result["newly_reached"])
+        # T3 到達で SL は +3R = 1300 へ（最新で上書き）
+        self.assertAlmostEqual(result["adjusted_stop"], 1300.0)
+
+    def test_check_double_milestone(self):
+        """株価が買値の 2 倍になったら double_milestone=True"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        result = check_target_reached("OFF", 2000.0, 1000.0, "2026-01-10")
+        self.assertTrue(result["double_milestone"])
+        self.assertGreater(result.get("double_sell_qty", 0), 0)
+
+    def test_trailing_ma25_break(self):
+        """T1 到達後（トレーリング active）に MA25 割れで部分撤退推奨"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        check_target_reached("OFF", 1100.0, 1000.0, "2026-01-05")
+        # MA25 を割り込む
+        result = check_target_reached(
+            "OFF", 1050.0, 1000.0, "2026-01-10", ma25=1080.0, ma50=1000.0,
+        )
+        self.assertTrue(result["trailing_triggered"])
+        self.assertEqual(result["trailing_level"], "ma25")
+        self.assertGreater(result["sell_qty"], 0)
+
+    def test_trailing_ma50_break_full_exit(self):
+        """MA50 割れで全量手仕舞い推奨"""
+        ensure_targets("OFF", 1000.0, 900.0, 10, "2026-01-02")
+        check_target_reached("OFF", 1100.0, 1000.0, "2026-01-05")
+        # MA50 を明確に割り込む
+        result = check_target_reached(
+            "OFF", 950.0, 1000.0, "2026-01-10", ma25=1080.0, ma50=1000.0,
+        )
+        self.assertTrue(result["trailing_triggered"])
+        self.assertEqual(result["trailing_level"], "ma50")
+        # 残量全量を推奨
+        self.assertGreater(result["sell_qty"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

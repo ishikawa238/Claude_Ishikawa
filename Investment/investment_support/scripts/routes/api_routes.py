@@ -896,14 +896,47 @@ def api_paypay_points_delete():
 # 設定 API
 # ============================================================
 
+def _get_config_value(section: str, key: str, default):
+    """
+    設定値を取得する。section は以下の3形式を扱う:
+        "_top"          → CONFIG[key] （ルートキー）
+        "section"       → CONFIG[section][key]
+        "a.b.c..."      → CONFIG[a][b][c]...[key]（ネスト対応）
+    """
+    if section == "_top":
+        return CONFIG.get(key, default)
+    parts = section.split(".")
+    obj = CONFIG
+    for p in parts:
+        if not isinstance(obj, dict):
+            return default
+        obj = obj.get(p, {})
+    if not isinstance(obj, dict):
+        return default
+    return obj.get(key, default)
+
+
+def _set_config_value(target: dict, section: str, key: str, value) -> None:
+    """target 辞書に対し、section を辿って key を value にセットする。"""
+    if section == "_top":
+        target[key] = value
+        return
+    parts = section.split(".")
+    obj = target
+    for p in parts:
+        if p not in obj or not isinstance(obj[p], dict):
+            obj[p] = {}
+        obj = obj[p]
+    obj[key] = value
+
+
 @api_bp.route("/api/settings", methods=["GET"])
 def api_settings_get():
     """現在の設定値を返す"""
     result = []
     for item in EDITABLE_SETTINGS:
-        section = CONFIG.get(item["section"], {})
-        current = section.get(item["key"], item["default"])
-        result.append({
+        current = _get_config_value(item["section"], item["key"], item["default"])
+        entry = {
             "section": item["section"],
             "key": item["key"],
             "label": item["label"],
@@ -915,7 +948,10 @@ def api_settings_get():
             "step": item["step"],
             "help": item["help"],
             "group": item["group"],
-        })
+        }
+        if item.get("choices"):
+            entry["choices"] = item["choices"]
+        result.append(entry)
     return jsonify({"settings": result, "group_labels": GROUP_LABELS})
 
 
@@ -938,11 +974,11 @@ def api_settings_post():
     errors = []
     validated: list[tuple[str, str, object]] = []
     for compound_key, raw_value in updates.items():
-        parts = compound_key.split(".", 1)
-        if len(parts) != 2:
+        # 右から最後の '.' で分割（ネストした section に対応）
+        if "." not in compound_key:
             errors.append(f"不正なキー形式: {compound_key}")
             continue
-        section, key = parts
+        section, key = compound_key.rsplit(".", 1)
         spec = allowed.get((section, key))
         if spec is None:
             errors.append(f"編集不可のキー: {compound_key}")
@@ -967,6 +1003,14 @@ def api_settings_post():
                 if spec["max"] is not None and value > spec["max"]:
                     errors.append(f"{spec['label']}: 最大値は {spec['max']}")
                     continue
+            elif spec["type"] == "enum":
+                value = str(raw_value)
+                choices = [c["value"] for c in (spec.get("choices") or [])]
+                if choices and value not in choices:
+                    errors.append(
+                        f"{spec['label']}: 値が選択肢にありません（{', '.join(choices)}）"
+                    )
+                    continue
             else:
                 errors.append(f"不明な型: {spec['type']}")
                 continue
@@ -988,9 +1032,7 @@ def api_settings_post():
         return jsonify({"error": "config.json の読み込みに失敗しました"}), 500
 
     for section, key, value in validated:
-        if section not in full_config:
-            full_config[section] = {}
-        full_config[section][key] = value
+        _set_config_value(full_config, section, key, value)
 
     # ファイルに書き戻し
     try:
@@ -1002,9 +1044,7 @@ def api_settings_post():
 
     # メモリ上の CONFIG も同期
     for section, key, value in validated:
-        if section not in CONFIG:
-            CONFIG[section] = {}
-        CONFIG[section][key] = value
+        _set_config_value(CONFIG, section, key, value)
 
     logger.info(f"設定を更新しました: {len(validated)} 項目")
     return jsonify({"success": True, "updated": len(validated)})

@@ -58,6 +58,7 @@ copy config_template.json config.json
 | J-Quants APIキー | `jquants.api_key` | J-Quants ポータルで取得したリフレッシュトークン。未設定の場合、JP財務データ・決算アラートは機能しない |
 | moomoo 接続先 | `moomoo.host` / `moomoo.port` | moomoo OpenD の接続先。未設定でも `holdings.csv` で保有銘柄を管理できる |
 | LLM アドバイザー | `llm.enabled` | `true` に設定し、使用するプロバイダーの `api_key` を入力。未設定の場合、LLMフィードバックは表示されない |
+| 戦略モード | `strategy_mode` | `defensive`（既定）または `offensive`。攻めモードは 2倍・3倍株狙い向けに利確・選定・撤退ルールが厳格化される。詳細は `Investment/offensive_strategy.md` を参照 |
 
 ---
 

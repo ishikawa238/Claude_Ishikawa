@@ -77,6 +77,18 @@ function renderForm() {
             </div>
             ${helpHtml}
           </div>`;
+      } else if (s.type === 'enum') {
+        const options = (s.choices || []).map(c =>
+          `<option value="${esc(c.value)}" ${c.value === s.value ? 'selected' : ''}>${esc(c.label)}</option>`
+        ).join('');
+        html += `
+          <div class="col-12 col-md-6">
+            <label class="form-label fw-bold" for="${id}">${esc(s.label)}</label>
+            <select class="form-select" id="${id}" onchange="markDirty()">
+              ${options}
+            </select>
+            ${helpHtml}
+          </div>`;
       } else {
         const step = s.step || (s.type === 'float' ? 0.01 : 1);
         html += `
@@ -117,6 +129,8 @@ async function saveSettings() {
       updates[id] = el.checked;
     } else if (s.type === 'int') {
       updates[id] = parseInt(el.value, 10);
+    } else if (s.type === 'enum') {
+      updates[id] = el.value;
     } else {
       updates[id] = parseFloat(el.value);
     }
@@ -169,6 +183,8 @@ function resetToDefault() {
     if (!el) return;
     if (s.type === 'bool') {
       el.checked = s.default;
+    } else if (s.type === 'enum') {
+      el.value = s.default;
     } else {
       el.value = s.default;
     }

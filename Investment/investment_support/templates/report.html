@@ -1,6 +1,27 @@
 {% extends "base.html" %}
 {% block title %}Dashboard {{ today_str }}{% endblock %}
 
+{% block head_extra %}
+<style>
+  /* 攻めモードの追加シグナルバッジ */
+  .off-signal-cell { white-space: nowrap; font-size: 0.78rem; }
+  .off-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-right: 2px;
+    border: 1px solid transparent;
+    line-height: 1.4;
+  }
+  .off-badge-addbuy { background: #e8f5e9; color: #1b5e20; border-color: #a5d6a7; }
+  .off-badge-ma25   { background: #fff8e1; color: #6d4c00; border-color: #ffe082; }
+  .off-badge-ma50   { background: #ffebee; color: #b71c1c; border-color: #ef9a9a; }
+  .off-badge-double { background: #fff3e0; color: #bf360c; border-color: #ffab91; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1 class="h4 mb-4">Dashboard <span class="text-muted fs-6">{{ today_str }}</span></h1>
 
@@ -290,6 +311,9 @@
           <th>損益</th><th>状態</th>
           <th><span class="tip" data-tip="損切りライン：ここまで下がったら売る価格">SL</span></th>
           <th class="mobile-hide"><span class="tip" data-tip="利確ターゲット：段階的に利益を確保する価格。✓=到達済み、→=次の目標、灰色=未到達">利確ターゲット</span></th><th class="mobile-hide">保有日数</th>
+          {% if is_offensive_mode %}
+          <th><span class="tip" data-tip="攻めモードの追加シグナル：📈買い増し候補 / 📉トレーリング段階（MA25・MA50） / 💰株価2倍特例">攻めシグナル</span></th>
+          {% endif %}
           <th class="detail-col">市場</th><th class="detail-col">数量</th>
           <th class="detail-col"><span class="tip" data-tip="RSI：0〜100の数値。70以上は買われすぎ、30以下は売られすぎ">RSI</span></th>
           <th class="detail-col"><span class="tip" data-tip="ATR：1日あたりの値動きの大きさ（値が大きいほど変動が激しい）">ATR</span></th>
@@ -302,7 +326,7 @@
         <tr>
           <td><a class="ticker-link" href="/stock/{{ h.ticker }}">{{ h.ticker }}</a></td>
           <td>{{ h.name or "" }}</td>
-          <td>{{ h.cp_str }}</td>
+          <td>{{ h.cp_str }}{% if h.entry_str %}<br><span class="meta-small" title="購入価格">{{ h.entry_str }}</span>{% endif %}</td>
           <td class="{{ h.pnl_css }}">{{ h.pnl_str }}{% if h.pnl_jpy_str %}<br><span class="meta-small">{{ h.pnl_jpy_str }}</span>{% endif %}</td>
           <td><span class="status-badge {{ h.status_cls }}">{{ h.status_label }}</span></td>
           <td class="sl-cell" data-ticker="{{ h.ticker }}" data-sl="{{ h.sl_raw }}">
@@ -315,6 +339,9 @@
           </td>
           <td class="mobile-hide">{{ h.target_str|safe }}</td>
           <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
+          {% if is_offensive_mode %}
+          <td class="off-signal-cell"{% if h.offensive_title %} title="{{ h.offensive_title }}"{% endif %}>{{ h.offensive_html|safe }}</td>
+          {% endif %}
           <td class="detail-col">{{ h.market or "" }}</td>
           <td class="detail-col">{{ h.qty_str }}</td>
           <td class="detail-col {{ h.rsi_css }}">{{ h.rsi_str }}</td>
@@ -325,7 +352,7 @@
           <td class="detail-col">{{ h.trend_str|safe }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="8" class="text-center text-muted-custom">保有銘柄なし</td></tr>
+        <tr><td colspan="{% if is_offensive_mode %}9{% else %}8{% endif %}" class="text-center text-muted-custom">保有銘柄なし</td></tr>
         {% endfor %}
       </tbody>
     </table>

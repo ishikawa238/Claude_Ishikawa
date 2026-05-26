@@ -16,6 +16,7 @@ from src.yfinance_fetcher import (
     fetch_daily_yf_with_status,
     fetch_history_bulk_yf,
     fetch_history_yf,
+    fetch_index_history_yf,
 )
 
 
@@ -143,6 +144,73 @@ class TestDailyPriceFetchResult(unittest.TestCase):
       failed_tickers=["a", "b"], status="partial",
     )
     self.assertEqual(r.failed_count, 2)
+
+
+class TestFetchIndexHistoryYf(unittest.TestCase):
+  """EODHD fetch_index_history のフォールバック関数のテスト。"""
+
+  @patch("yfinance.download")
+  def test_returns_rows_on_success(self, mock_download):
+    mock_download.return_value = pd.DataFrame(
+      {"Open": [38000.0], "High": [38200.0], "Low": [37900.0],
+       "Close": [38100.0], "Volume": [0]},
+      index=pd.to_datetime(["2026-05-20"]),
+    )
+    rows = fetch_index_history_yf("N225", date(2026, 5, 15), date(2026, 5, 20))
+    self.assertEqual(len(rows), 1)
+    self.assertEqual(rows[0]["index_code"], "N225")
+    self.assertEqual(rows[0]["date"], "2026-05-20")
+    self.assertAlmostEqual(rows[0]["close"], 38100.0)
+    # technical_calculator が後で埋めるため None 初期化
+    self.assertIsNone(rows[0]["ma25"])
+    self.assertIsNone(rows[0]["ma75"])
+    self.assertIsNone(rows[0]["ma200"])
+    self.assertIsNone(rows[0]["ma25_5d_ago"])
+
+  @patch("yfinance.download")
+  def test_uses_yf_symbol_for_each_index(self, mock_download):
+    """内部コードが yfinance シンボルに正しく変換されること。"""
+    mock_download.return_value = pd.DataFrame(
+      {"Close": [1.0]}, index=pd.to_datetime(["2026-05-20"]),
+    )
+    for code, expected_symbol in [
+      ("N225", "^N225"),
+      ("TOPIX", "^TOPX"),
+      ("SP500", "^GSPC"),
+      ("NASDAQ", "^IXIC"),
+    ]:
+      with self.subTest(index_code=code):
+        mock_download.reset_mock()
+        fetch_index_history_yf(code, date(2026, 5, 20), date(2026, 5, 20))
+        self.assertTrue(mock_download.called)
+        args, kwargs = mock_download.call_args
+        symbol = args[0] if args else kwargs.get("tickers")
+        self.assertEqual(symbol, expected_symbol)
+
+  def test_unknown_index_code_returns_empty(self):
+    rows = fetch_index_history_yf("UNKNOWN", date(2026, 5, 20), date(2026, 5, 20))
+    self.assertEqual(rows, [])
+
+  @patch("yfinance.download", side_effect=RuntimeError("api down"))
+  def test_exception_returns_empty(self, _mock_download):
+    rows = fetch_index_history_yf("SP500", date(2026, 5, 20), date(2026, 5, 20))
+    self.assertEqual(rows, [])
+
+  @patch("yfinance.download")
+  def test_empty_dataframe_returns_empty(self, mock_download):
+    mock_download.return_value = pd.DataFrame()
+    rows = fetch_index_history_yf("SP500", date(2026, 5, 20), date(2026, 5, 20))
+    self.assertEqual(rows, [])
+
+  @patch("yfinance.download")
+  def test_zero_close_is_skipped(self, mock_download):
+    mock_download.return_value = pd.DataFrame(
+      {"Close": [0.0, 100.0]},
+      index=pd.to_datetime(["2026-05-19", "2026-05-20"]),
+    )
+    rows = fetch_index_history_yf("SP500", date(2026, 5, 19), date(2026, 5, 20))
+    self.assertEqual(len(rows), 1)
+    self.assertEqual(rows[0]["date"], "2026-05-20")
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from shared.slack import (
     send_webhook,
 )
 
-from src.config import CONFIG
+from src.config import CONFIG, get_strategy_mode, is_offensive
 from src.data_store import fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
@@ -40,15 +40,27 @@ _MODE_LABEL = {
     "full_caution": "全面警戒モード",
 }
 _HOLDING_EMOJI = {
-    "forced_stop":  "🚨",
-    "sl_near":      "⚠️",
-    "sell_watch":   "🟡",
-    "hold":         "🟢",
-    "tp_t1":        "🎯",
-    "tp_t2":        "🎯",
-    "tp_t3":        "🏆",
-    "tp_trailing":  "📉",
+    "forced_stop":   "🚨",
+    "sl_near":       "⚠️",
+    "sell_watch":    "🟡",
+    "hold":          "🟢",
+    "tp_t1":         "🎯",
+    "tp_t2":         "🎯",
+    "tp_t3":         "🏆",
+    "tp_trailing":   "📉",
+    "tp_ma50_exit":  "🛑",
 }
+
+# 戦略モード → バッジ
+_STRATEGY_BADGE = {
+    "defensive": "🛡 守りモード",
+    "offensive": "⚔ 攻めモード",
+}
+
+
+def _strategy_badge() -> str:
+    """現在の戦略モードを表すバッジ文字列を返す。"""
+    return _STRATEGY_BADGE.get(get_strategy_mode(), "🛡 守りモード")
 _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
     "A": {
         "cond_a_ma200_rising":  "MA200上昇中",
@@ -165,7 +177,7 @@ def send_morning_report(
     jp_str = _index_str("日経", market_env.get("n225_close"), market_env.get("n225_ma25"))
     us_str = _index_str("S&P500", market_env.get("sp500_close"), market_env.get("sp500_ma25"))
     blocks.append(_section(
-        f"📅 *朝の投資チェック｜{today_str}* ｜ {env_emoji}{env_label}\n"
+        f"📅 *朝の投資チェック｜{today_str}* ｜ {env_emoji}{env_label} ｜ {_strategy_badge()}\n"
         f"{jp_str}  /  {us_str}"
     ))
     blocks.append(_divider())
@@ -245,6 +257,9 @@ def send_morning_report(
         f"SL接近: {len(sl_near)}件 ｜ 強制損切り: {len(forced)}件"
     ))
 
+    # 買い増し候補（攻めモードのみ）
+    blocks.extend(_add_buy_section(holdings))
+
     # PayPay ポイント運用
     blocks.extend(_paypay_points_blocks(paypay_points, paypay_signals))
 
@@ -303,7 +318,10 @@ def send_evening_report(
     env_label = _MODE_LABEL[mode]
     jp_str = _index_str("日経平均", market_env.get("n225_close"), market_env.get("n225_ma25"))
     us_str = _index_str("S&P500", market_env.get("sp500_close"), market_env.get("sp500_ma25"))
-    header_text = f"🌙 *夜の投資レポート｜{today_str}* ｜ {env_emoji}{env_label}\n{jp_str}\n{us_str}"
+    header_text = (
+        f"🌙 *夜の投資レポート｜{today_str}* ｜ {env_emoji}{env_label} ｜ {_strategy_badge()}\n"
+        f"{jp_str}\n{us_str}"
+    )
     mode_det = _mode_detail(market_env)
     if mode_det:
         header_text += f"\n{mode_det}"
@@ -374,6 +392,9 @@ def send_evening_report(
         for h in sorted(holdings, key=lambda x: priority.get(x["label"], 9)):
             blocks.append(_holding_block(h, detail=True))
         blocks.append(_divider())
+
+    # 買い増し候補（攻めモードのみ）
+    blocks.extend(_add_buy_section(holdings))
 
     # PayPay ポイント運用
     blocks.extend(_paypay_points_blocks(paypay_points, paypay_signals))
@@ -636,14 +657,15 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     reasons = h.get("reasons") or []
 
     label_names = {
-        "forced_stop":  "強制損切り",
-        "sl_near":      "SL接近",
-        "sell_watch":   "売り検討",
-        "hold":         "継続保有",
-        "tp_t1":        "利確検討(T1)",
-        "tp_t2":        "利確検討(T2)",
-        "tp_t3":        "最終利確(T3)",
-        "tp_trailing":  "MA25割れ",
+        "forced_stop":   "強制損切り",
+        "sl_near":       "SL接近",
+        "sell_watch":    "売り検討",
+        "hold":          "継続保有",
+        "tp_t1":         "利確検討(T1)",
+        "tp_t2":         "利確検討(T2)",
+        "tp_t3":         "最終利確(T3)",
+        "tp_trailing":   "MA25割れ",
+        "tp_ma50_exit":  "MA50割れ全撤退",
     }
     label_str = label_names.get(label, label)
 
@@ -683,6 +705,17 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
             else:
                 dist = (price - current) / current * 100
                 tp_parts.append(f"{lbl} {price:,.0f}({dist:+.1f}%)")
+        # 攻めモードは残り枠のトレーリング目安（MA25/MA50）を表示
+        if is_offensive():
+            ma25 = h.get("tech_ma25")
+            ma50 = h.get("tech_ma50")
+            if ma25 is not None or ma50 is not None:
+                trail_parts = []
+                if ma25 is not None:
+                    trail_parts.append(f"MA25:{ma25:,.0f}")
+                if ma50 is not None:
+                    trail_parts.append(f"MA50:{ma50:,.0f}")
+                tp_parts.append("Trail " + "/".join(trail_parts))
         if tp_parts:
             sub_parts.append(" / ".join(tp_parts))
     else:
@@ -853,7 +886,44 @@ def _build_warn_inline(es: dict) -> str:
             parts.append("🈵 保有枠満杯")
         else:
             parts.append(f"📦 残り{remaining}枠")
+    if es.get("_warn_too_small"):
+        parts.append("⚠️ 推奨額が新規エントリー下限未満（攻めモード）")
     return " ｜ ".join(parts)
+
+
+def _add_buy_section(holdings: list[dict]) -> list[dict]:
+    """
+    攻めモード時に買い増し候補（add_buy_signal.eligible == True）を
+    Slack ブロックとしてまとめて返す。該当銘柄がなければ空リスト。
+    """
+    if not is_offensive() or not holdings:
+        return []
+
+    eligible = [
+        h for h in holdings
+        if h.get("add_buy_signal") and h["add_buy_signal"].get("eligible")
+    ]
+    if not eligible:
+        return []
+
+    blocks: list[dict] = []
+    blocks.append(_section(f"📈 *買い増し候補（{len(eligible)}件）*"))
+    for h in eligible:
+        ticker = h["ticker"]
+        name = h.get("name") or ticker
+        market = h.get("market", "")
+        pnl_pct = h.get("pnl_pct", 0)
+        current = h.get("current_price", 0)
+        reasons = h["add_buy_signal"].get("reasons") or []
+        line1 = (
+            f"📈 *{ticker} {name} ({market})* "
+            f"｜ 現値: {current:,.2f} ｜ 含み益: {pnl_pct:+.1f}%"
+        )
+        line2 = "　 " + " / ".join(reasons) if reasons else ""
+        lines = [l for l in [line1, line2] if l]
+        blocks.append(_section("\n".join(lines)))
+    blocks.append(_divider())
+    return blocks
 
 
 def _conditions_met_inline(conditions_json: str | None) -> str:

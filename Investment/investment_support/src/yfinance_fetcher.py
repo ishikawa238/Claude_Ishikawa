@@ -288,6 +288,82 @@ def fetch_daily_yf(
     return fetch_daily_yf_with_status(tickers_with_market, target_date).rows
 
 
+# ============================================================
+# インデックス取得（EODHD fetch_index_history のフォールバック）
+# ============================================================
+
+# 内部コード → yfinance シンボルへの対応表
+# EODHD を解約した場合のフォールバック用。data_fetcher.INDEX_TICKERS と同じキー集合を維持する。
+_YF_INDEX_SYMBOLS = {
+    "N225":   "^N225",    # 日経平均
+    "TOPIX":  "^TOPX",    # TOPIX（不安定な場合は 1306.T などの ETF で代替も可）
+    "SP500":  "^GSPC",    # S&P500
+    "NASDAQ": "^IXIC",    # NASDAQ Composite
+}
+
+
+def fetch_index_history_yf(
+    index_code: str,
+    from_date: date,
+    to_date: date,
+) -> list[dict]:
+    """
+    yfinance で市場インデックスの日足終値を取得する。
+    data_fetcher.fetch_index_history と同じ戻り値形式を返す（index_snapshot 用）。
+
+    返り値: [{"index_code": ..., "date": ..., "close": ..., "ma25": None,
+              "ma75": None, "ma200": None, "ma25_5d_ago": None}, ...]
+    """
+    yf_symbol = _YF_INDEX_SYMBOLS.get(index_code)
+    if not yf_symbol:
+        logger.error(f"yfinance 未定義のインデックスコード: {index_code}")
+        return []
+
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.error("yfinance がインストールされていません: pip install yfinance")
+        return []
+
+    try:
+        df = yf.download(
+            yf_symbol,
+            start=from_date.strftime("%Y-%m-%d"),
+            end=(to_date + timedelta(days=1)).strftime("%Y-%m-%d"),
+            progress=False,
+            auto_adjust=True,
+        )
+    except Exception as e:
+        logger.warning(f"yfinance インデックス取得失敗: {index_code} ({yf_symbol}) ({e})")
+        return []
+
+    if df is None or df.empty:
+        logger.warning(f"yfinance インデックスデータなし: {index_code} ({yf_symbol})")
+        return []
+
+    rows: list[dict] = []
+    for idx, row in df.iterrows():
+        try:
+            close_val = float(row.get("Close", row.get("close", 0)))
+            if close_val == 0:
+                continue
+            rows.append({
+                "index_code": index_code,
+                "date":       idx.strftime("%Y-%m-%d"),
+                "close":      close_val,
+                # MA は technical_calculator で別途計算するため None で初期化
+                "ma25":        None,
+                "ma75":        None,
+                "ma200":       None,
+                "ma25_5d_ago": None,
+            })
+        except (ValueError, TypeError) as e:
+            logger.warning(f"yfinance インデックス行のパース失敗: {index_code} ({e})")
+
+    logger.info(f"yfinance インデックス取得完了: {index_code} {len(rows)} 件")
+    return rows
+
+
 def fetch_usdjpy_rate() -> float | None:
     """
     yfinance で最新の USD/JPY 為替レートを取得する。

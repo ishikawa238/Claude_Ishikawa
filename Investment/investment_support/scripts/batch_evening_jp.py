@@ -36,6 +36,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from shared.batch import start_batch_log, finish_batch_log
 from src.config import CONFIG
 from src.data_fetcher import fetch_index_history
+from src.yfinance_fetcher import fetch_index_history_yf
 from src.data_store import (
     backup_database, fetch_all, get_connection,
     log_error, upsert,
@@ -242,6 +243,9 @@ def _run_batch(
         # JP インデックス取得
         for code in ("N225", "TOPIX"):
             rows = fetch_index_history(code, _TODAY - timedelta(days=5), _TODAY)
+            if not rows:
+                logger.warning(f"EODHD インデックス取得失敗（{code}）。yfinance にフォールバックします。")
+                rows = fetch_index_history_yf(code, _TODAY - timedelta(days=5), _TODAY)
             if rows:
                 with get_connection() as conn:
                     upsert(conn, "index_snapshot", rows)

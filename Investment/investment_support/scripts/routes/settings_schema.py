@@ -1,6 +1,37 @@
 """ダッシュボード設定 API 用スキーマ。"""
 
 EDITABLE_SETTINGS: list[dict] = [
+    # --- 戦略モード ---
+    {"section": "_top", "key": "strategy_mode", "label": "戦略モード",
+     "type": "enum", "default": "defensive", "min": None, "max": None, "step": None,
+     "choices": [
+         {"value": "defensive", "label": "🛡 守りモード（現行ルール）"},
+         {"value": "offensive", "label": "⚔ 攻めモード（2倍・3倍株狙い）"},
+     ],
+     "help": "攻めモードは S/A ランクのみ、利確 +1R/+3R/+5R 各20% + 残り40%トレーリング、買い増し検知、MA50 撤退などを適用",
+     "group": "strategy"},
+    # --- 攻めモード主要パラメータ ---
+    {"section": "strategy.offensive", "key": "min_final_score", "label": "最低スコア",
+     "type": "int", "default": 80, "min": 0, "max": 100, "step": 1,
+     "help": "攻めモードで候補にする最低スコア（既定: 80）", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "max_concurrent_holdings", "label": "最大同時保有数",
+     "type": "int", "default": 8, "min": 1, "max": 50, "step": 1,
+     "help": "攻めモードでの保有上限（推奨: 5〜8）", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "max_per_position_pct", "label": "1銘柄あたり上限（%）",
+     "type": "float", "default": 20.0, "min": 1.0, "max": 50.0, "step": 1.0,
+     "help": "1銘柄に投入できる資金割合の上限", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "new_entry_size_pct_max", "label": "新規エントリー比率 上限（%）",
+     "type": "float", "default": 10.0, "min": 1.0, "max": 30.0, "step": 0.5,
+     "help": "新規買いは資金のこの割合を超えない", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "new_entry_size_pct_min", "label": "新規エントリー比率 下限（%）",
+     "type": "float", "default": 5.0, "min": 0.5, "max": 20.0, "step": 0.5,
+     "help": "投入額がこの割合未満なら警告を表示", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "risk_per_trade_pct", "label": "1トレードあたりリスク（%）",
+     "type": "float", "default": 1.5, "min": 0.1, "max": 5.0, "step": 0.1,
+     "help": "攻めモードのリスク比率（守りモードと別管理）", "group": "strategy"},
+    {"section": "strategy.offensive", "key": "min_cash_reserve_pct", "label": "最低現金比率（%）",
+     "type": "float", "default": 20.0, "min": 0.0, "max": 80.0, "step": 1.0,
+     "help": "この値を下回ると新規候補に警告を出す", "group": "strategy"},
     # --- 資金管理 ---
     {"section": "capital", "key": "total_capital_jpy", "label": "総資金（円）",
      "type": "int", "default": 200000, "min": 0, "max": 100_000_000, "step": 10000,
@@ -109,6 +140,7 @@ EDITABLE_SETTINGS: list[dict] = [
 ]
 
 GROUP_LABELS = {
+    "strategy": "戦略モード（守り / 攻め）",
     "capital": "資金管理",
     "investment_goal": "投資目標",
     "risk_control": "運用停止ルール",

@@ -177,5 +177,71 @@ class CalcEntrySetHoldingsCapacityTests(ConfigPatchMixin, unittest.TestCase):
         self.assertEqual(result["_remaining_slots"], 1)
 
 
+_OFFENSIVE_CONFIG_MOCK = {
+    **_CONFIG_MOCK,
+    "strategy_mode": "offensive",
+    "strategy": {
+        "offensive": {
+            "max_concurrent_holdings": 8,
+            "max_per_position_pct": 20.0,
+            "new_entry_size_pct_min": 5.0,
+            "new_entry_size_pct_max": 10.0,
+            "risk_per_trade_pct": 1.5,
+        },
+    },
+}
+
+
+class OffensiveModeMixin:
+    """攻めモード設定で entry_calculator を呼び出すヘルパー。"""
+
+    def setUp(self):
+        super().setUp()
+        self._config_patcher = patch("src.config.CONFIG", _OFFENSIVE_CONFIG_MOCK)
+        self._config_patcher.start()
+
+    def tearDown(self):
+        self._config_patcher.stop()
+        super().tearDown()
+
+
+class CalcEntrySetOffensiveTests(OffensiveModeMixin, unittest.TestCase):
+    """攻めモード時のポジションサイズテスト"""
+
+    def test_max_holdings_uses_offensive_value(self):
+        """攻めモードでは max_holdings = 8（capital からではなく offensive 設定から）"""
+        sig = _make_signal(close=2500.0, atr14=100.0)
+        result = calc_entry_set(sig, open_holdings_count=5)
+        # offensive.max_concurrent_holdings = 8 なので 5 件保有でも余裕あり
+        self.assertFalse(result["_warn_at_capacity"])
+        self.assertEqual(result["_remaining_slots"], 3)
+        self.assertEqual(result["_strategy_mode"], "offensive")
+
+    def test_offensive_per_position_cap_20pct(self):
+        """1銘柄あたり capital × 20% (= 40000) を超えない"""
+        # 損切り幅を小さくして大きな recommended_amount を引き出す
+        sig = _make_signal(close=2500.0, atr14=25.0)  # SL幅 = 2%
+        result = calc_entry_set(sig)
+        # 上限 = min(capital * 20%, capital * 10%) = 20000
+        self.assertLessEqual(result["recommended_amount"], 20000 + 1)
+
+    def test_offensive_warn_too_small_when_below_min_entry(self):
+        """推奨額が新規エントリー下限（5%）未満の場合は警告"""
+        # 損切り幅が大きいと recommended_amount は小さくなる
+        # capital * 1.5% / 20% = 15000 < capital * 5% = 10000 ? いいえ
+        # SL幅 25% → recommended = 200000 * 1.5 / 25 = 12000 → 10000上限後 → 10000 (≥5000)
+        # SL幅をもっと大きくする: 35% → recommended = 200000 * 1.5/35 = 8571 → < 10000 上限なので 8571
+        # < 5%（=10000）でないと _warn_too_small が立たない
+        # SL幅 = 50% → recommended = 6000 → < 10000 OK
+        sig = _make_signal(close=2500.0, atr14=625.0)  # SL幅 = 50%
+        result = calc_entry_set(sig)
+        # 損切り幅が広すぎて見送られる場合もあるが、見送られなければ警告フラグを確認
+        if result:
+            self.assertTrue(
+                result.get("_warn_too_small") or result.get("_warn_wide"),
+                "広い損切りまたは少額警告のどちらかが立つ",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

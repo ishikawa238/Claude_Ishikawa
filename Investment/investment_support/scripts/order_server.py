@@ -357,7 +357,24 @@ def report():
     except Exception:
         latest_snapshot = None
 
-    return _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback, last_batch, data_insufficient, snapshot=latest_snapshot, buy_candidates=buy_candidates)
+    # 保有銘柄の評価結果（add_buy_signal / tp_trailing_level / tp_double_milestone 等）
+    # 攻めモード時のみ呼び出し、失敗時は空 dict にフォールバックして既存表示を壊さない。
+    holdings_eval_map: dict = {}
+    try:
+        from src.config import is_offensive as _is_offensive_cfg
+        if _is_offensive_cfg():
+            from src.holdings_monitor import evaluate_holdings as _evaluate_holdings
+            for _r in _evaluate_holdings(date.today()):
+                holdings_eval_map[_r["ticker"]] = _r
+    except Exception as _eval_err:
+        logger.debug(f"evaluate_holdings の呼び出しに失敗（report は継続表示）: {_eval_err}")
+
+    return _render_report(
+        today_str, market_env, holdings, candidates, market_history,
+        llm_feedback, last_batch, data_insufficient,
+        snapshot=latest_snapshot, buy_candidates=buy_candidates,
+        holdings_eval_map=holdings_eval_map,
+    )
 
 
 # ============================================================
@@ -728,9 +745,10 @@ def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market
     return cards
 
 
-def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None):
+def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None, holdings_eval_map=None):
     market_env = dict(market_env) if market_env else {}
     holdings = [dict(h) for h in holdings]
+    holdings_eval_map = holdings_eval_map or {}
     candidates = [dict(c) for c in candidates]
     market_history = [dict(m) for m in market_history]
     llm_feedback = [dict(f) for f in llm_feedback] if llm_feedback else []
@@ -923,9 +941,17 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
     sector_values = json.dumps([round(v) for v in sector_map.values()])
 
     # --- 保有銘柄テーブル行リスト構築 ---
+    # 攻めモード時のみ、evaluate_holdings() の追加情報を行に付与する。
+    try:
+        from src.config import is_offensive as _is_offensive_mode
+        _offensive_now = bool(_is_offensive_mode())
+    except Exception:
+        _offensive_now = False
+
     holding_rows = []
     for _h in holdings:
         h = dict(_h)  # sqlite3.Row → dict（.get() を使えるようにする）
+        _eval = holdings_eval_map.get(h["ticker"]) or {}
         ep = float(h["entry_price"] or 0)
         cp = float(h["current_price"] or 0) if h["current_price"] else None
         sl = float(h["stop_loss_price"] or 0)
@@ -946,6 +972,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             pnl_jpy_str = f"¥{pnl_jpy:+,.0f}"
 
         cp_str = f"{cp:,.2f}" if cp else "—"
+        entry_str = f"@{ep:,.2f}" if ep else ""
 
         # 利確ターゲット表示の構築
         profit_type = h.get("profit_type")
@@ -1056,10 +1083,41 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             status_cls = "status-safe"
             status_label = "安心"
 
+        # --- 攻めモード追加シグナル（add_buy / tp_trailing_level / tp_double_milestone） ---
+        offensive_badges: list[str] = []
+        offensive_tips: list[str] = []
+        add_buy_sig = _eval.get("add_buy_signal")
+        if add_buy_sig and add_buy_sig.get("eligible"):
+            offensive_badges.append(
+                "<span class='off-badge off-badge-addbuy' title='買い増し候補（攻めモード）'>📈 買増</span>"
+            )
+            reasons = add_buy_sig.get("reasons") or []
+            if reasons:
+                offensive_tips.append("買い増し: " + " / ".join(reasons))
+        tp_trail = _eval.get("tp_trailing_level")
+        if tp_trail:
+            label_map = {"ma25": "MA25トレ", "ma50": "MA50撤退"}
+            label_jp = label_map.get(str(tp_trail), str(tp_trail))
+            css_cls = "off-badge-ma50" if tp_trail == "ma50" else "off-badge-ma25"
+            offensive_badges.append(
+                f"<span class='off-badge {css_cls}' title='トレーリング段階'>📉 {label_jp}</span>"
+            )
+        if _eval.get("tp_double_milestone"):
+            dbl_qty = _eval.get("tp_double_sell_qty") or 0
+            qty_txt = f"（{dbl_qty:.0f}株）" if dbl_qty else ""
+            offensive_badges.append(
+                f"<span class='off-badge off-badge-double' title='株価2倍特例の発動'>💰 2倍特例{qty_txt}</span>"
+            )
+        offensive_html = " ".join(offensive_badges) if offensive_badges else (
+            "<span class='text-muted-custom'>—</span>" if _offensive_now else ""
+        )
+        offensive_title = " | ".join(offensive_tips) if offensive_tips else ""
+
         holding_rows.append({
             "ticker": h["ticker"],
             "name": h.get("name") or "",
             "cp_str": cp_str,
+            "entry_str": entry_str,
             "pnl_css": pnl_color,
             "pnl_str": pnl_str,
             "pnl_jpy_str": pnl_jpy_str,
@@ -1080,6 +1138,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "score_str": score_str,
             "rank_html": rank_html,
             "trend_str": trend_str,
+            "offensive_html": offensive_html,
+            "offensive_title": offensive_title,
         })
 
     # シグナル履歴テーブル行リスト構築
@@ -1173,6 +1233,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         buy_candidate_date=buy_candidate_date,
         buy_candidate_is_today=buy_candidate_is_today,
         is_market_caution=is_market_caution,
+        is_offensive_mode=_offensive_now,
     )
 
 
@@ -1521,21 +1582,30 @@ def rules_page():
 
 
 def _build_rules_context() -> dict:
+    from src.config import get_offensive_config, get_strategy_mode, is_offensive
+
     cap = CONFIG.get("capital", {})
     sig = CONFIG.get("signal", {})
     screening = CONFIG.get("screening", {})
     goal = CONFIG.get("investment_goal", {})
     risk = CONFIG.get("risk_control", {})
     paper = CONFIG.get("paper_mode", {})
+    off = get_offensive_config()
+    strategy_mode = get_strategy_mode()
 
     monthly_deposit = _cfg_float(goal, "monthly_deposit_jpy", 10_000)
     target_return = _cfg_float(goal, "target_monthly_return_pct", 15.0)
-    risk_pct = _cfg_float(cap, "max_risk_per_trade_pct", 2.0)
-    max_holdings = _cfg_int(cap, "max_concurrent_holdings", 3)
+    if is_offensive():
+        risk_pct = _cfg_float(off, "risk_per_trade_pct", 1.5)
+        max_holdings = _cfg_int(off, "max_concurrent_holdings", 8)
+    else:
+        risk_pct = _cfg_float(cap, "max_risk_per_trade_pct", 2.0)
+        max_holdings = _cfg_int(cap, "max_concurrent_holdings", 3)
     rr_ratio = _cfg_float(sig, "risk_reward_ratio", 2.0)
 
+    mode_label = "⚔ 攻めモード" if strategy_mode == "offensive" else "🛡 守りモード"
     status_cards = [
-        {"label": "毎月の入金", "value": _yen(monthly_deposit), "tone": "info"},
+        {"label": "戦略モード", "value": mode_label, "tone": "info"},
         {"label": "月次利益目標", "value": _pct(target_return), "tone": "warning"},
         {"label": "1トレード損失上限", "value": _pct(risk_pct), "tone": "danger"},
         {"label": "同時保有上限", "value": f"{max_holdings}銘柄", "tone": "success"},
@@ -1601,10 +1671,63 @@ def _build_rules_context() -> dict:
         },
     ]
 
+    # 攻めモード時の専用ルールセクションを挿入
+    if is_offensive():
+        filters = off.get("filters", {}) or {}
+        add_buy = off.get("add_buy", {}) or {}
+        tp_i = off.get("take_profit_type_i", {}) or {}
+        sections.insert(0, {
+            "title": "攻めモード — 銘柄選定",
+            "icon": "target",
+            "rules": [
+                f"スコア {_cfg_int(off, 'min_final_score', 80)} 点以上、ランク {off.get('min_rank', 'A')} 以上のみ候補化します。",
+                f"RSI が {_cfg_float(filters, 'rsi_max_hard', 80):.0f} 以上、または直近"
+                f" {_cfg_int(filters, 'block_recent_surge_days', 5)} 営業日で"
+                f" {_cfg_float(filters, 'block_recent_surge_pct', 30):.0f}% 以上急騰した銘柄は除外します。",
+                "出来高急増直後の陰線・長い上ヒゲをつけた銘柄は除外します。",
+                f"時価総額の上限: JP {_cfg_float(filters, 'jp_max_market_cap_jpy', 5e11):,.0f} 円 / "
+                f"US ${_cfg_float(filters, 'us_max_market_cap_usd', 3e10):,.0f}。",
+            ],
+        })
+        sections.insert(1, {
+            "title": "攻めモード — 利確と撤退",
+            "icon": "trending-up",
+            "rules": [
+                f"タイプI: +{_cfg_float(tp_i, 't1_r_mult', 1.0):.1f}R で"
+                f" {_cfg_float(tp_i, 't1_pct', 20):.0f}%、"
+                f"+{_cfg_float(tp_i, 't2_r_mult', 3.0):.1f}R で"
+                f" {_cfg_float(tp_i, 't2_pct', 20):.0f}%、"
+                f"+{_cfg_float(tp_i, 't3_r_mult', 5.0):.1f}R で"
+                f" {_cfg_float(tp_i, 't3_pct', 20):.0f}% を分割利確します。",
+                "残り枠は MA25 / MA50 のトレーリングで保有し、勝ち銘柄を伸ばします。",
+                "株価が買値の 2 倍に到達した場合、残量の半分の利確を検討します。",
+                "MA50 を割り込んだ場合は大化け枠も含めて全量手仕舞いを推奨します。",
+                "損切りラインの引き下げは原則禁止です（memo に 'force_lower_sl=true' を入れた場合のみ許可）。",
+            ],
+        })
+        sections.insert(2, {
+            "title": "攻めモード — ポジションサイズと買い増し",
+            "icon": "plus-circle",
+            "rules": [
+                f"1 銘柄あたりの上限は資金の {_cfg_float(off, 'max_per_position_pct', 20):.0f}%。"
+                f" 新規エントリーは {_cfg_float(off, 'new_entry_size_pct_min', 5):.0f}〜"
+                f"{_cfg_float(off, 'new_entry_size_pct_max', 10):.0f}% を目安に投入します。",
+                f"含み益 +{_cfg_float(add_buy, 'min_unrealized_gain_pct', 10):.0f}% 以上で"
+                "MA25 維持・出来高維持・直近20日高値再突破を全て満たす銘柄に限り買い増し候補として通知します。",
+                "含み損銘柄へのナンピンは行いません。",
+                f"現金比率は {_cfg_float(off, 'min_cash_reserve_pct', 20):.0f}% 以上を維持します。",
+            ],
+        })
+
     warnings = [
         "月15%は保証ではなく、毎月の検証目標として扱います。",
         "個別株は元本割れの可能性があります。実弾投入前にペーパートレードで期待値を確認してください。",
     ]
+    if is_offensive():
+        warnings.append(
+            "攻めモードは大きな上昇を狙う代わりに、外れ銘柄も多くなります。"
+            "損切りを徹底し、含み損銘柄を放置しないでください。"
+        )
     return {"status_cards": status_cards, "sections": sections, "warnings": warnings}
 
 

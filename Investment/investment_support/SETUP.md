@@ -55,7 +55,11 @@ copy config_template.json config.json
 
 | 項目 | 設定箇所 | 内容 |
 |------|---------|------|
-| J-Quants APIキー | `jquants.api_key` | J-Quants ポータルで取得したリフレッシュトークン。未設定の場合、JP財務データ・決算アラートは機能しない |
+| J-Quants APIキー | `jquants.api_key` | [J-Quants ダッシュボード](https://jpx-jquants.com/dashboard/api-keys) で発行した **V2 API キー**（2025-12-22 以降の新規登録は V2 のみ） |
+| J-Quants 認証方式 | `jquants.auth_type` | 通常は `"api_key"`（既定）。旧 V1 利用者のみ `"refresh_token"` |
+| J-Quants 月次財務 | `jquants.use_bulk_fundamentals` | 有料プランのみ `true`。無料は `false` + `max_fundamentals_per_run: 300`（毎月300銘柄ずつ） |
+| J-Quants 間隔 | `jquants.request_interval_sec` | 無料プランは **13 以上**（5 req/min） |
+| US 株式数 (EODHD) | `screening.us_shares_refresh_enabled` | fundamentals API が使えるプランのみ `true`（多くの安価プランは `false`） |
 | moomoo 接続先 | `moomoo.host` / `moomoo.port` | moomoo OpenD の接続先。未設定でも `holdings.csv` で保有銘柄を管理できる |
 | LLM アドバイザー | `llm.enabled` | `true` に設定し、使用するプロバイダーの `api_key` を入力。未設定の場合、LLMフィードバックは表示されない |
 | 戦略モード | `strategy_mode` | `defensive`（既定）または `offensive`。攻めモードは 2倍・3倍株狙い向けに利確・選定・撤退ルールが厳格化される。詳細は `Investment/offensive_strategy.md` を参照 |

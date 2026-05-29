@@ -129,8 +129,11 @@ EDITABLE_SETTINGS: list[dict] = [
      "help": "直近30日でこの日数以上取引がある銘柄のみ対象", "group": "screening"},
     # --- ペーパーモード ---
     {"section": "screening", "key": "allow_unknown_market_cap", "label": "時価総額不明を許可",
-     "type": "bool", "default": False, "min": None, "max": None, "step": None,
-     "help": "無効の場合、時価総額が計算できない銘柄は除外", "group": "screening"},
+     "type": "bool", "default": True, "min": None, "max": None, "step": None,
+     "help": "無効の場合、時価総額が計算できない銘柄は除外（JP: J-Quants / US: 月次EODHD補完が必要）", "group": "screening"},
+    {"section": "screening", "key": "us_shares_refresh_max_per_monthly", "label": "US株式数 月次更新上限",
+     "type": "int", "default": 200, "min": 0, "max": 5000, "step": 50,
+     "help": "月次バッチで EODHD から取得する US 発行済株式数の上限", "group": "screening"},
     {"section": "paper_mode", "key": "enabled", "label": "ペーパーモード",
      "type": "bool", "default": False, "min": None, "max": None, "step": None,
      "help": "有効にするとシグナル発生時に仮想エントリーを記録し検証する", "group": "paper_mode"},

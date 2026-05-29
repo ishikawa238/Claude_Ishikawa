@@ -151,29 +151,13 @@ def get_current_mode(target_date: date) -> str:
 # 流動性フィルタ
 # ============================================================
 
-def get_screened_tickers(target_date: date, market: str) -> list[dict]:
-    """
-    流動性フィルタを通過した銘柄のテクニカルスナップショットを返す。
-
-    引数:
-        target_date: 対象日
-        market: "JP" または "US"
-
-    返り値: technical_snapshot + universe_master の結合データ
-            （フィルタ通過銘柄のみ）
-    """
-    target_str = target_date.strftime("%Y-%m-%d")
-
-    min_price      = _JP_MIN_PRICE      if market == "JP" else _US_MIN_PRICE
-    min_turnover   = _JP_MIN_TURNOVER   if market == "JP" else _US_MIN_TURNOVER
-    min_market_cap = _JP_MIN_MARKET_CAP if market == "JP" else _US_MIN_MARKET_CAP
+def _liquidity_filter_sql(market: str) -> tuple[str, str]:
+    """流動性フィルタ用 SELECT 文と時価総額条件句を返す。"""
     market_cap_condition = (
         "(t.est_market_cap IS NULL OR t.est_market_cap >= ?)"
         if _ALLOW_UNKNOWN_MARKET_CAP
         else "t.est_market_cap >= ?"
     )
-
-    # technical_snapshot と universe_master を結合してフィルタ適用
     sql = f"""
         SELECT
             t.ticker, t.date, u.market, u.name,
@@ -200,19 +184,87 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
             AND t.est_turnover   >= ?
             AND {market_cap_condition}
     """
-    # est_market_cap が NULL の場合はフィルタをパスさせる
-    # （発行済株式数が取得できない銘柄への対応）
+    return sql, market_cap_condition
+
+
+def _fetch_liquidity_candidates(target_date: date, market: str) -> list[dict]:
+    """非アクティブ除外前の流動性フィルタ通過候補。"""
+    target_str = target_date.strftime("%Y-%m-%d")
+    min_price      = _JP_MIN_PRICE      if market == "JP" else _US_MIN_PRICE
+    min_turnover   = _JP_MIN_TURNOVER   if market == "JP" else _US_MIN_TURNOVER
+    min_market_cap = _JP_MIN_MARKET_CAP if market == "JP" else _US_MIN_MARKET_CAP
+    sql, _ = _liquidity_filter_sql(market)
 
     with get_connection() as conn:
         rows = fetch_all(
             conn, sql,
             (target_str, market, min_price, min_turnover, min_market_cap),
         )
+    return [dict(r) for r in rows]
 
-    # sqlite3.Row → dict に変換（scoring.py 等で .get() を使うため）
-    rows = [dict(r) for r in rows]
 
-    # 非アクティブ（30日中20日未満取引）フィルタ
+def diagnose_screening_empty(target_date: date, market: str) -> Optional[str]:
+    """
+    流動性フィルタ通過が 0 件のとき、Slack/ログ用の原因メッセージを返す。
+    テクニカル未計算など別要因のときは None。
+    """
+    target_str = target_date.strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        snap = fetch_one(
+            conn,
+            """SELECT COUNT(*) AS c FROM technical_snapshot t
+               JOIN universe_master u ON t.ticker = u.ticker
+               WHERE t.date = ? AND u.market = ? AND u.is_active = 1""",
+            (target_str, market),
+        )
+    snap_count = int(snap["c"]) if snap else 0
+    if snap_count == 0:
+        return None
+
+    pre_rows = _fetch_liquidity_candidates(target_date, market)
+    if not pre_rows:
+        if not _ALLOW_UNKNOWN_MARKET_CAP:
+            from src.shares_outstanding import count_shares_known
+            known = count_shares_known(market)
+            if known == 0:
+                hint = (
+                    "J-Quants API キー（JP）または月次バッチの EODHD 取得（US）で "
+                    "発行済株式数を登録してください。"
+                )
+                return (
+                    f"⚠️ *スクリーニング停止*（{market}）\n"
+                    "「時価総額不明を許可」が OFF かつ、全銘柄で時価総額が未計算です。\n"
+                    f"→ {hint}\n"
+                    "→ 設定 `/settings` の「時価総額不明を許可」を ON にすると暫定復旧できます。"
+                )
+        return (
+            f"⚠️ *スクリーニング異常*（{market} {target_str}）\n"
+            f"テクニカル {snap_count:,} 件あるが、株価・売買代金・時価総額条件を満たす銘柄が 0 件です。"
+        )
+
+    filtered = _filter_inactive(pre_rows, target_date)
+    if not filtered:
+        return (
+            f"⚠️ *スクリーニング異常*（{market} {target_str}）\n"
+            f"流動性条件通過 {len(pre_rows):,} 件 → 非アクティブ除外後 0 件です。"
+            f"（直近30日で {_MIN_ACTIVE_DAYS} 日未満取引の銘柄のみ残っています）"
+        )
+    return None
+
+
+def get_screened_tickers(target_date: date, market: str) -> list[dict]:
+    """
+    流動性フィルタを通過した銘柄のテクニカルスナップショットを返す。
+
+    引数:
+        target_date: 対象日
+        market: "JP" または "US"
+
+    返り値: technical_snapshot + universe_master の結合データ
+            （フィルタ通過銘柄のみ）
+    """
+    target_str = target_date.strftime("%Y-%m-%d")
+    rows = _fetch_liquidity_candidates(target_date, market)
     filtered = _filter_inactive(rows, target_date)
 
     logger.info(

@@ -44,7 +44,12 @@ from src.data_store import (
 from src.entry_calculator import save_entry_sets
 from src.holdings_monitor import ensure_holding_prices, evaluate_holdings, sync_holdings_from_csv
 from src.logger import get_logger
-from src.market_filter import get_screened_tickers, judge_market_environment
+from src.market_filter import (
+    diagnose_screening_empty,
+    get_screened_tickers,
+    judge_market_environment,
+)
+from src.shares_outstanding import load_shares_map
 from src.notifier import send_evening_report, send_skip_notification
 from src.signal_detector import detect_and_save_signals
 from src.technical_calculator import (
@@ -305,11 +310,25 @@ def _run_batch(
             entry_sets = []
             near_misses = []
             signals_count = 0
+            screening_alert = None
         else:
-            calculate_and_save_snapshots(tickers_with_market, _TODAY)
+            tickers_only = [t for t, _ in tickers_with_market]
+            shares_map = load_shares_map(tickers_only)
+            calculate_and_save_snapshots(
+                tickers_with_market, _TODAY, shares_map=shares_map,
+            )
 
             logger.info("STEP 4: 流動性フィルタ")
             screened = get_screened_tickers(_TODAY, "JP")
+            screening_alert = (
+                diagnose_screening_empty(_TODAY, "JP") if not screened else None
+            )
+            if screening_alert:
+                logger.warning(screening_alert.replace("\n", " | "))
+                log_error(
+                    _BATCH_TYPE, "get_screened_tickers",
+                    "ScreeningEmpty", screening_alert[:500],
+                )
 
             logger.info("STEP 5: シグナル検出")
             candidates = detect_and_save_signals(screened, _TODAY, mode)
@@ -401,7 +420,13 @@ def _run_batch(
         _progress(_TOTAL, "Slack通知送信")
         logger.info("STEP 8: 夜通知送信")
         data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ma200", "ma25", "rsi14")))
-        screening_stats = {"screened": len(screened), "candidates": signals_count, "entry_sets": len(entry_sets), "data_insufficient": data_insufficient}
+        screening_stats = {
+            "screened": len(screened),
+            "candidates": signals_count,
+            "entry_sets": len(entry_sets),
+            "data_insufficient": data_insufficient,
+            "alert": screening_alert,
+        }
         try:
             send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count,
                                 llm_feedback=llm_feedback, near_misses=near_misses,
@@ -422,12 +447,18 @@ def _run_batch(
         # ────────────────────────────────────────
         # STEP 10: バッチログ更新
         # ────────────────────────────────────────
-        status = "partial_failure" if failed_count > 0 else "success"
+        status = (
+            "partial_failure"
+            if failed_count > 0 or screening_alert
+            else "success"
+        )
         import json as _json
         batch_memo = _json.dumps({
             "jp_price_source": price_result.source,
             "jp_price_status": price_result.status,
             "jp_price_target_date_count": price_result.tickers_with_target_date,
+            "screening_alert": screening_alert,
+            "screened_count": len(screened),
         }, ensure_ascii=False)
         with get_connection() as conn:
             finish_batch_log(conn, batch_id, status,

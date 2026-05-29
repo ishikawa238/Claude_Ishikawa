@@ -567,7 +567,7 @@ def api_system_health():
         error_count = fetch_one(
             conn,
             """SELECT COUNT(*) AS cnt FROM error_log
-               WHERE created_at >= datetime('now', '-24 hours')""",
+               WHERE error_time >= datetime('now', '-24 hours')""",
         )
         latest_price = fetch_one(
             conn,

@@ -13,6 +13,7 @@ order_server のテスト
 - /api/perf-monthly → JSON 構造
 - /api/perf-cumulative → JSON 構造
 - /api/sector-alloc → JSON 構造
+- /api/system-health → JSON 構造（error_log は error_time カラム）
 """
 
 import sys
@@ -177,6 +178,19 @@ def _init_test_db(conn):
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS batch_run_log (
+            id INTEGER PRIMARY KEY, run_date DATE, batch_type TEXT,
+            start_time DATETIME, end_time DATETIME, status TEXT,
+            total_tickers INTEGER, failed_tickers INTEGER,
+            signals_generated INTEGER, memo TEXT
+        );
+        CREATE TABLE IF NOT EXISTS error_log (
+            id INTEGER PRIMARY KEY,
+            error_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            batch_type TEXT, module TEXT, ticker TEXT,
+            error_type TEXT, error_message TEXT,
+            is_fatal INTEGER NOT NULL DEFAULT 0
+        );
     """)
 
     today = date.today()
@@ -301,6 +315,21 @@ def _init_test_db(conn):
         "eps, bps, per, pbr, dividend_yield, fetched_at) "
         "VALUES ('7203', '2024', 'Q4', 250.5, 3200.0, 12.5, 1.1, 2.8, ?)",
         (today_str,),
+    )
+
+    conn.execute(
+        "INSERT INTO batch_run_log (run_date, batch_type, start_time, end_time, status, memo) "
+        "VALUES (?, 'evening_jp', datetime('now', '-2 hours'), datetime('now', '-1 hours'), "
+        "'success', ?)",
+        (today_str, json.dumps({"jp_price_source": "eodhd", "jp_price_status": "ok"})),
+    )
+    conn.execute(
+        "INSERT INTO error_log (error_time, batch_type, module, error_type, error_message, is_fatal) "
+        "VALUES (datetime('now', '-1 hours'), 'evening_jp', 'test_mod', 'TestError', 'recent', 0)"
+    )
+    conn.execute(
+        "INSERT INTO error_log (error_time, batch_type, module, error_type, error_message, is_fatal) "
+        "VALUES (datetime('now', '-48 hours'), 'evening_jp', 'test_mod', 'OldError', 'old', 0)"
     )
 
     conn.commit()
@@ -594,6 +623,23 @@ class OrderServerTestCase(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertIn("sectors", data)
         self.assertIn("values", data)
+
+    # ---- /api/system-health ----
+
+    def test_api_system_health(self):
+        resp = self.client.get("/api/system-health")
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("last_batch", data)
+        self.assertIn("errors_24h", data)
+        self.assertIn("data_date", data)
+        self.assertEqual(data["errors_24h"], 1)
+        self.assertIsNotNone(data["last_batch"])
+        self.assertEqual(data["last_batch"]["type"], "夜(JP)")
+        self.assertEqual(data["last_batch"]["status"], "success")
+        self.assertEqual(data["jp_price_source"], "eodhd")
+        self.assertEqual(data["jp_price_status"], "ok")
+        self.assertEqual(data["data_date"], date.today().isoformat())
 
 
 if __name__ == "__main__":

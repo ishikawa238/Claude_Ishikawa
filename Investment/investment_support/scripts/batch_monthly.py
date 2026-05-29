@@ -67,6 +67,13 @@ def main() -> int:
         fetch_and_save_fundamentals(jp_tickers, _TODAY)
 
         # ────────────────────────────────────────
+        # STEP 1.6: US 発行済株式数（EODHD・欠損分のみ段階更新）
+        # ────────────────────────────────────────
+        logger.info("STEP 1.6: US 発行済株式数更新（EODHD）")
+        from src.shares_outstanding import refresh_us_shares_outstanding
+        refresh_us_shares_outstanding(_TODAY)
+
+        # ────────────────────────────────────────
         # STEP 2: 前月レポート送信
         # ────────────────────────────────────────
         logger.info("STEP 2: 月次レポート送信")

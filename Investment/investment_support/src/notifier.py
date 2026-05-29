@@ -182,6 +182,10 @@ def send_morning_report(
     ))
     blocks.append(_divider())
 
+    if screening_stats and screening_stats.get("alert"):
+        blocks.append(_section(screening_stats["alert"]))
+        blocks.append(_divider())
+
     # 強制損切り（最優先）
     forced = [h for h in holdings if h["label"] == "forced_stop"]
     if forced:
@@ -330,6 +334,10 @@ def send_evening_report(
 
     if price_source_alert:
         blocks.append(_section(price_source_alert))
+        blocks.append(_divider())
+
+    if screening_stats and screening_stats.get("alert"):
+        blocks.append(_section(screening_stats["alert"]))
         blocks.append(_divider())
 
     # 買い候補（市場環境にかかわらずスコア付きで表示）
@@ -972,6 +980,9 @@ def _no_candidates_reason(
     """買い候補が0件だった理由を診断して返す。"""
     lines: list[str] = []
 
+    if screening_stats and screening_stats.get("alert"):
+        lines.append(screening_stats["alert"])
+
     if mode != "normal":
         lines.append(f"→ {_MODE_LABEL[mode]}のため新規検討候補を停止中")
     elif screening_stats:
@@ -979,9 +990,12 @@ def _no_candidates_reason(
         cand = screening_stats.get("candidates", 0)
         entry = screening_stats.get("entry_sets", 0)
 
-        lines.append(f"📊 スクリーニング通過: {screened:,}銘柄 → candidate: {cand}銘柄 → 通知: {entry}銘柄")
+        if screened == 0 and screening_stats.get("alert"):
+            lines.append("→ Screening List は前回分の日付のままです（本日分は未更新）")
+        else:
+            lines.append(f"📊 スクリーニング通過: {screened:,}銘柄 → candidate: {cand}銘柄 → 通知: {entry}銘柄")
 
-        if cand == 0:
+        if cand == 0 and screened > 0:
             lines.append("→ スコア50点以上の銘柄がありませんでした")
         elif entry == 0:
             lines.append(f"→ {cand}銘柄がcandidate判定されましたが、損切り幅・資金条件で全て見送り")

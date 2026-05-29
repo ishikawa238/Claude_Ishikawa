@@ -114,7 +114,10 @@
     "us_min_turnover": 20000000,
     "us_min_market_cap": 2000000000,
     "min_active_days_of_30": 20,
-    "allow_unknown_market_cap": true
+    "allow_unknown_market_cap": true,
+    "us_shares_refresh_enabled": false,
+    "us_shares_refresh_max_per_monthly": 200,
+    "us_shares_refresh_interval_sec": 0.25
   },
 
   "schedule": {
@@ -143,8 +146,13 @@
   },
 
   "jquants": {
-    "api_key": "YOUR_JQUANTS_API_KEY",
-    "request_interval_sec": 1.0,
+    "api_key": "YOUR_JQUANTS_V2_API_KEY",
+    "auth_type": "api_key",
+    "use_bulk_fundamentals": false,
+    "max_fundamentals_per_run": 300,
+    "request_interval_sec": 13.0,
+    "rate_limit_wait_sec": 65.0,
+    "max_retries": 3,
     "earnings_alert_days_warning": 7,
     "earnings_alert_days_critical": 3
   },

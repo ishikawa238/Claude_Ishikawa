@@ -34,6 +34,7 @@ _API_KEY = CONFIG["eodhd"]["api_key"]
 _INTERVAL = float(CONFIG["eodhd"].get("request_interval_sec", 0.5))
 _MAX_RETRIES = 3
 _RETRY_WAIT_SEC = 5
+_EODHD_FUNDAMENTALS_DISABLED = False
 
 # 市場インデックスのティッカー定義
 INDEX_TICKERS = {
@@ -76,6 +77,16 @@ def _get(url: str, params: dict) -> Optional[list | dict]:
                 time.sleep(wait)
             elif response.status_code == 404:
                 # 銘柄が存在しない・廃止等
+                return None
+            elif response.status_code == 403 and "/fundamentals/" in url:
+                global _EODHD_FUNDAMENTALS_DISABLED
+                if not _EODHD_FUNDAMENTALS_DISABLED:
+                    logger.info(
+                        "EODHD fundamentals API は現在のプランでは利用できません。"
+                        "US 発行済株式数の自動取得をスキップします。"
+                        "（allow_unknown_market_cap=true で JP スクリーニングは継続可能）"
+                    )
+                    _EODHD_FUNDAMENTALS_DISABLED = True
                 return None
             else:
                 logger.warning(
@@ -418,6 +429,11 @@ def _check_excluded(asset_type: str) -> tuple[bool, Optional[str]]:
 # 発行済株式数の取得
 # ============================================================
 
+def is_eodhd_fundamentals_disabled() -> bool:
+    """fundamentals API がプラン制限で使えない場合 True。"""
+    return _EODHD_FUNDAMENTALS_DISABLED
+
+
 def fetch_shares_outstanding(ticker: str, market: str) -> Optional[float]:
     """
     EODHD の fundamental API から発行済株式数を取得する。
@@ -426,6 +442,8 @@ def fetch_shares_outstanding(ticker: str, market: str) -> Optional[float]:
     注意: fundamental API は EODHD のプランによっては利用不可の場合がある。
     取得不可の場合は時価総額フィルタを無効化して運用する。
     """
+    if _EODHD_FUNDAMENTALS_DISABLED:
+        return None
     eodhd_tk = _eodhd_ticker(ticker, market)
     url = f"{_BASE_URL}/fundamentals/{eodhd_tk}"
     params = {"filter": "SharesStats::SharesOutstanding"}

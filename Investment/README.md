@@ -334,5 +334,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 - JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応（代替候補は [investment_support/docs/jp_price_sources.md](investment_support/docs/jp_price_sources.md) を参照）
 - JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
 - J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
+- Screening List の日付は `daily_signals` の最新日。流動性フィルタが 0 件だと更新されない（`allow_unknown_market_cap` が OFF かつ時価総額未登録のとき等）。Slack に警告が出る
+- US の発行済株式数は月次バッチで EODHD から段階的に補完（`screening.us_shares_refresh_max_per_monthly`）。JP は J-Quants 月次更新
 - Webダッシュボードは `127.0.0.1` のみで待ち受け。外部公開は不可
 - 初回セットアップ時に `fetch_historical` で3年分の履歴取得が必要（数時間かかる）

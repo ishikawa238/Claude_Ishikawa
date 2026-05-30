@@ -16,7 +16,13 @@ from typing import Optional
 from src.config import CONFIG, get_offensive_config, is_offensive
 from src.data_store import fetch_all, get_connection, upsert
 from src.logger import get_logger
-from src.scoring import compute_score, fetch_recent_lows
+from src.scoring import (
+    SCORE_CANDIDATE_MIN_FINAL,
+    SCORE_CANDIDATE_MIN_PATTERN,
+    SCORE_WATCH_MIN_FINAL,
+    compute_score,
+    fetch_recent_lows,
+)
 
 logger = get_logger(__name__)
 
@@ -84,6 +90,7 @@ def detect_and_save_signals(
         row_b = _eval_pattern_b(tk, target_str, market)
         # パターンC評価（サポートバウンス）
         row_c = _eval_pattern_c(tk, target_str, market)
+        pattern_rows = {"A": row_a, "B": row_b, "C": row_c}
 
         # 最も強いシグナルを採用
         best = _pick_best(_pick_best(row_a, row_b), row_c)
@@ -91,13 +98,19 @@ def detect_and_save_signals(
         # --- スコアベースのラベル決定 ---
         # candidate には2種類ある:
         #   strict: パターン条件をすべて満たした候補
-        #   score:  一部未達だが final_score >= 50 で昇格した候補
+        #   score:  一部未達だが final_score と主要パターン適合度で昇格した候補
         candidate_source = "strict" if best["label"] == "candidate" else None
         final_score = scores["final_score"]
-        if final_score >= 50 and best["label"] != "candidate":
+        score_pattern = _score_candidate_pattern(scores)
+        if (
+            final_score >= SCORE_CANDIDATE_MIN_FINAL
+            and score_pattern
+            and best["label"] != "candidate"
+        ):
+            best = pattern_rows[score_pattern]
             best["label"] = "candidate"
             candidate_source = "score"
-        elif final_score >= 30 and best["label"] == "skip":
+        elif final_score >= SCORE_WATCH_MIN_FINAL and best["label"] == "skip":
             best["label"] = "watch"
 
         # 警戒モード時は新規買い候補を停止（分析ログとしては watch で保存）
@@ -738,6 +751,27 @@ fetch_watch_stocks = fetch_near_misses
 def _flag(condition) -> int:
     """bool → 0 / 1 に変換する。None は 0 扱い。"""
     return 1 if condition else 0
+
+
+def _score_candidate_pattern(scores: dict) -> Optional[str]:
+    """スコア候補として採用できる最も強いパターン適合度を返す。"""
+    fit = scores.get("pattern_fit")
+    if isinstance(fit, dict):
+        pattern_scores = (
+            ("A", fit.get("A") or 0),
+            ("B", fit.get("B") or 0),
+            ("C", fit.get("C") or 0),
+        )
+    else:
+        pattern_scores = (
+            ("A", scores.get("pattern_a_score") or 0),
+            ("B", scores.get("pattern_b_score") or 0),
+            ("C", scores.get("pattern_c_score") or 0),
+        )
+    pattern, score = max(pattern_scores, key=lambda item: item[1])
+    if score >= SCORE_CANDIDATE_MIN_PATTERN:
+        return pattern
+    return None
 
 
 def _pick_best(row_a: dict, row_b: dict) -> dict:

@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% block title %}Scoring Definition{% endblock %}
+
+{% block head_extra %}
+<style>
+.scoring-page .definition-card { height: 100%; border-top: 3px solid var(--color-primary); }
+.scoring-page .definition-icon { color: var(--color-primary); }
+.scoring-page .metric-key { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+.scoring-page .weight-value { font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.scoring-page .definition-list { margin: 0; padding-left: 1.2rem; color: var(--text-secondary); }
+.scoring-page .definition-list li { margin-bottom: 0.5rem; }
+.scoring-page .compact-table { margin-bottom: 0; }
+.scoring-page .compact-table th,
+.scoring-page .compact-table td { vertical-align: middle; font-size: var(--text-sm); }
+.scoring-page .note-band {
+  border: 1px solid var(--color-info-light);
+  border-left: 3px solid var(--color-info);
+  background: rgba(8, 145, 178, 0.07);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="scoring-page">
+  <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
+    <div>
+      <h1 class="h4 mb-1">スコアリング定義</h1>
+      <div class="meta-medium">銘柄候補の総合スコア、ランク、候補昇格条件の読み取り専用ビューです。</div>
+    </div>
+    <a class="btn btn-outline-primary btn-sm" href="/screening">
+      <i data-lucide="filter" style="width:16px;height:16px;vertical-align:-3px;margin-right:4px"></i>Screening
+    </a>
+  </div>
+
+  <div class="row g-3 mb-4">
+    {% for card in status_cards %}
+    <div class="col-6 col-lg-3">
+      <div class="summary-card">
+        <div class="label">{{ card.label }}</div>
+        <div class="value">{{ card.value }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="note-band mb-4">
+    <div class="d-flex gap-2 align-items-start">
+      <i data-lucide="info" style="width:16px;height:16px;min-width:16px;margin-top:3px;color:var(--color-info)"></i>
+      <div>final_score は Pattern A/B/C の加重和ではなく、共通指標の加重平均に市場環境係数を掛けて算出します。Pattern A/B/C は同じ共通指標から算出する適合度で、勝ち筋のラベル付けに使います。</div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-7">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="pie-chart" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">総合スコアの重み</h2>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm compact-table">
+            <thead>
+              <tr>
+                <th>項目</th>
+                <th>重み</th>
+                <th>内容</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in definition.final_weights %}
+              <tr>
+                <td>
+                  <div>{{ item.label }}</div>
+                  <div class="metric-key">{{ item.key }}</div>
+                </td>
+                <td class="weight-value">{{ (item.weight * 100) | round | int }}%</td>
+                <td>{{ item.summary }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="award" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">ランク閾値</h2>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-sm compact-table">
+            <thead>
+              <tr>
+                <th>ランク</th>
+                <th>最低点</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in definition.rank_thresholds %}
+              <tr>
+                <td><span class="badge text-bg-primary">{{ item.rank }}</span></td>
+                <td class="weight-value">{{ item.min_score }}点以上</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    {% for rule in definition.pattern_fit_rules %}
+    <div class="col-md-4">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="tag" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">{{ rule.label }}</h2>
+        </div>
+        <div class="weight-value mb-2">{{ rule.name }}</div>
+        <div class="mb-3">{{ rule.summary }}</div>
+        <table class="table table-sm compact-table">
+          <tbody>
+            {% for key, weight in rule.weights.items() %}
+            <tr>
+              <td class="metric-key">{{ key }}</td>
+              <td class="weight-value">{{ (weight * 100) | round | int }}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="row g-3 mb-4">
+    {% for group in definition.subscores %}
+    <div class="col-md-6">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="list-checks" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">{{ group.label }}</h2>
+        </div>
+        <ol class="definition-list">
+          {% for item in group["items"] %}
+          <li>
+            <span class="weight-value">{{ item.label }} {{ (item.weight * 100) | round | int }}%</span>
+            <div>{{ item.detail }}</div>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="git-branch" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">候補化ルール</h2>
+        </div>
+        <ol class="definition-list">
+          {% for rule in definition.candidate_rules %}
+          <li>
+            <span class="weight-value">{{ rule.label }}</span>
+            <div>{{ rule.detail }}</div>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+    </div>
+
+    <div class="col-lg-6">
+      <div class="summary-card definition-card">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <i class="definition-icon" data-lucide="cloud-sun" style="width:18px;height:18px"></i>
+          <h2 class="mb-0">市場環境係数</h2>
+        </div>
+        <div class="table-responsive mb-4">
+          <table class="table table-sm compact-table">
+            <thead>
+              <tr>
+                <th>モード</th>
+                <th>係数</th>
+                <th>扱い</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in definition.market_multipliers %}
+              <tr>
+                <td>{{ item.label }} <span class="metric-key">{{ item.mode }}</span></td>
+                <td class="weight-value">x{{ "%.2f"|format(item.multiplier) }}</td>
+                <td>{{ item.detail }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <h2 class="mb-3">流動性スコア</h2>
+        <div class="row g-3">
+          {% for market, rows in definition.liquidity_thresholds.items() %}
+          <div class="col-sm-6">
+            <div class="metric-key mb-2">{{ market }}</div>
+            <table class="table table-sm compact-table">
+              <tbody>
+                {% for row in rows %}
+                <tr>
+                  <td>{{ "{:,.0f}".format(row.threshold) }}以上</td>
+                  <td class="weight-value">{{ row.score }}点</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

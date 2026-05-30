@@ -55,6 +55,7 @@ from src.signal_detector import detect_and_save_signals
 from src.technical_calculator import (
     calculate_and_save_index_mas, calculate_and_save_snapshots,
 )
+from src.trading_calendar import resolve_snapshot_date
 
 logger = get_logger(__name__)
 _TODAY = date.today()
@@ -281,30 +282,39 @@ def _run_batch(
             _save_in_chunks(all_rows, "price_history")
             failed_count = price_result.failed_count
 
+        # price_history.date と technical_snapshot.date を揃える（朝バッチ US と同様）
+        jp_price_date = resolve_snapshot_date(
+            _TODAY, "JP", all_rows if all_rows else None,
+        )
+        if jp_price_date and jp_price_date != _TODAY:
+            logger.info(
+                f"JP 最新取引日: {jp_price_date}（本日 {_TODAY} の価格行なし）"
+            )
+
         # ────────────────────────────────────────
         # STEP 2: テクニカル指標計算（インデックスMA）
         # ────────────────────────────────────────
         _progress(2, "テクニカル指標計算")
         logger.info("STEP 2: テクニカル指標計算")
-        calculate_and_save_index_mas("N225", _TODAY)
-        calculate_and_save_index_mas("TOPIX", _TODAY)
+        index_date = jp_price_date or _TODAY
+        calculate_and_save_index_mas("N225", index_date)
+        calculate_and_save_index_mas("TOPIX", index_date)
 
         # ────────────────────────────────────────
         # STEP 3: 市場環境判定（JP のみ）
         # ────────────────────────────────────────
         _progress(3, "市場環境判定")
         logger.info("STEP 3: 市場環境判定")
-        market_env = judge_market_environment(_TODAY, market="JP")
+        market_env = judge_market_environment(index_date, market="JP")
         mode = market_env["mode"]
 
         # ────────────────────────────────────────
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
         # ────────────────────────────────────────
         _progress(4, "スクリーニング・シグナル検出")
-        if price_result.status == "failed" or failed_count == len(tickers_with_market):
-            # 全銘柄の価格取得に失敗 → 古いデータでの誤シグナルを防ぐ
+        if jp_price_date is None:
             logger.warning(
-                "全銘柄の価格取得に失敗したため、テクニカル計算・シグナル検出をスキップします。"
+                "JP 価格データが存在しないため、テクニカル計算・シグナル検出をスキップします。"
             )
             screened = []
             entry_sets = []
@@ -315,13 +325,15 @@ def _run_batch(
             tickers_only = [t for t, _ in tickers_with_market]
             shares_map = load_shares_map(tickers_only)
             calculate_and_save_snapshots(
-                tickers_with_market, _TODAY, shares_map=shares_map,
+                tickers_with_market, jp_price_date, shares_map=shares_map,
             )
+            if _TODAY != jp_price_date:
+                _prune_jp_technical_orphans(_TODAY)
 
             logger.info("STEP 4: 流動性フィルタ")
-            screened = get_screened_tickers(_TODAY, "JP")
+            screened = get_screened_tickers(jp_price_date, "JP")
             screening_alert = (
-                diagnose_screening_empty(_TODAY, "JP") if not screened else None
+                diagnose_screening_empty(jp_price_date, "JP") if not screened else None
             )
             if screening_alert:
                 logger.warning(screening_alert.replace("\n", " | "))
@@ -331,7 +343,7 @@ def _run_batch(
                 )
 
             logger.info("STEP 5: シグナル検出")
-            candidates = detect_and_save_signals(screened, _TODAY, mode)
+            candidates = detect_and_save_signals(screened, jp_price_date, mode)
             signals_count = len(candidates)
 
             _progress(5, "エントリーセット計算")
@@ -339,14 +351,14 @@ def _run_batch(
             entry_sets = save_entry_sets(candidates, mode)
 
             from src.signal_detector import fetch_near_misses
-            near_misses = fetch_near_misses(_TODAY, market="JP", limit=5)
+            near_misses = fetch_near_misses(jp_price_date, market="JP", limit=5)
 
             # ペーパートレード: 仮想エントリー記録 + 日次更新
             from src.paper_trading import is_paper_mode_enabled, record_paper_entries, update_paper_trades
             if is_paper_mode_enabled():
                 logger.info("STEP 6.5: ペーパートレード更新")
                 record_paper_entries(entry_sets)
-                update_paper_trades(_TODAY)
+                update_paper_trades(jp_price_date)
 
         # ────────────────────────────────────────
         # STEP 7: 保有銘柄判定
@@ -360,9 +372,10 @@ def _run_batch(
         except Exception as e:
             logger.warning(f"moomoo 同期スキップ: {e}")
         sync_holdings_from_csv()
-        ensure_holding_prices(_TODAY)  # ETF等 universe_master 未登録銘柄の価格を補完
+        eval_date = jp_price_date or _TODAY
+        ensure_holding_prices(eval_date)  # ETF等 universe_master 未登録銘柄の価格を補完
         _update_earnings_schedule_for_holdings()
-        holdings = evaluate_holdings(_TODAY)
+        holdings = evaluate_holdings(eval_date)
 
         # STEP 7.1: ポートフォリオスナップショット保存
         try:
@@ -457,6 +470,7 @@ def _run_batch(
             "jp_price_source": price_result.source,
             "jp_price_status": price_result.status,
             "jp_price_target_date_count": price_result.tickers_with_target_date,
+            "jp_price_date": jp_price_date.isoformat() if jp_price_date else None,
             "screening_alert": screening_alert,
             "screened_count": len(screened),
         }, ensure_ascii=False)
@@ -493,6 +507,22 @@ def _update_earnings_schedule_for_holdings() -> None:
     jp_tickers = [r["ticker"] for r in rows]
     if jp_tickers:
         fetch_and_save_earnings_schedule(jp_tickers, _TODAY)
+
+
+def _prune_jp_technical_orphans(calendar_date: date) -> None:
+    """価格行のない暦日にだけ残った JP technical_snapshot を削除する。"""
+    orphan = calendar_date.strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        cur = conn.execute(
+            """DELETE FROM technical_snapshot
+               WHERE date = ?
+                 AND ticker IN (
+                   SELECT ticker FROM universe_master WHERE market = 'JP'
+                 )""",
+            (orphan,),
+        )
+        if cur.rowcount:
+            logger.info(f"日付不一致の JP technical_snapshot を {cur.rowcount} 件削除 ({orphan})")
 
 
 def _save_in_chunks(rows: list, table: str, chunk: int = 5000) -> None:

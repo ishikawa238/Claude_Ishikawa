@@ -4,7 +4,7 @@ signal_detector モジュールのテスト
 テスト対象:
 - detect_and_save_signals(): 市場環境モードに関わらず検出を実施すること
 - スコアリング統合: upsert に渡される行に final_score 等が含まれること
-- ラベル昇格: final_score >= 50 の watch → score candidate 昇格
+- ラベル昇格: final_score と主要パターンスコアを満たす watch → score candidate 昇格
 """
 
 import unittest
@@ -106,7 +106,8 @@ class DetectAndSaveSignalsMarketModeTests(unittest.TestCase):
             "est_turnover": 10000000000, "est_market_cap": 3000000000000,
             "return_5d": 0.03, "return_20d": 0.08, "volatility_20d": 0.015,
         }
-        result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+        with patch("src.signal_detector.is_offensive", return_value=False):
+            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
         self.assertTrue(mock_upsert.called)
 
 
@@ -138,7 +139,8 @@ class ScoringIntegrationTests(unittest.TestCase):
             "rsi14": 62.0, "atr14": 200.0,
             "est_turnover": 160_000_000_000, "est_market_cap": 12_000_000_000_000,
         }
-        detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+        with patch("src.signal_detector.is_offensive", return_value=False):
+            detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
 
         # upsert の引数からDB保存行を取り出す
         self.assertTrue(mock_upsert.called)
@@ -158,7 +160,7 @@ class ScoringIntegrationTests(unittest.TestCase):
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
     def test_high_score_watch_promoted_to_candidate(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """既存条件では watch だが final_score >= 50 なら candidate に昇格する。"""
+        """既存条件では watch だがスコア条件を満たせば candidate に昇格する。"""
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
 
@@ -173,7 +175,8 @@ class ScoringIntegrationTests(unittest.TestCase):
             "rsi14": 78.0, "atr14": 80.0,
             "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
         }
-        result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+        with patch("src.signal_detector.is_offensive", return_value=False):
+            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
 
         # upsert 行を確認
         call_args = mock_upsert.call_args_list[0]
@@ -182,11 +185,79 @@ class ScoringIntegrationTests(unittest.TestCase):
 
         # final_score が計算されていること
         self.assertIsNotNone(row.get("final_score"))
-        # スコアが 50 以上なら candidate に昇格し、score 候補として区別される
+        # 総合スコアと主要パターンスコアを満たせば candidate に昇格し、
+        # score 候補として区別される
         if row["final_score"] >= 50:
             self.assertEqual(row["label"], "candidate")
+            self.assertEqual(row["pattern"], "A")
             self.assertEqual(len(result), 1)
             self.assertEqual(result[0].get("_candidate_source"), "score")
+
+    @patch("src.signal_detector.fetch_recent_lows", return_value={})
+    @patch("src.signal_detector.fetch_all")
+    @patch("src.signal_detector.upsert")
+    @patch("src.signal_detector.get_connection")
+    def test_score_candidate_requires_pattern_subscore(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
+        """総合50点以上でも主要パターンスコアが弱ければ candidate にしない。"""
+        mock_conn.return_value = self._mock_conn()
+        mock_fetch_all.return_value = []
+
+        ticker = {
+            "ticker": "WEAK", "market": "JP",
+            "close": 3300.0, "adj_close": 3300.0,
+            "ma5": 3300.0, "ma25": 3000.0, "ma75": 2800.0, "ma200": 2600.0,
+            "ma5_5d_ago": 3200.0, "ma25_5d_ago": 2900.0, "ma200_5d_ago": 2560.0,
+            "volume": 800000, "vol_20d_avg": 1000000,
+            "high_52w": 5000.0, "low_52w": 2000.0,
+            "rsi14": 80.0, "atr14": 80.0,
+            "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
+        }
+        with patch("src.signal_detector.is_offensive", return_value=False):
+            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+
+        rows = mock_upsert.call_args_list[0][0][2]
+        row = rows[0]
+        self.assertGreaterEqual(row["final_score"], 50)
+        self.assertLess(row["pattern_a_score"], 60)
+        self.assertLess(row["pattern_b_score"], 60)
+        self.assertLess(row["pattern_c_score"], 60)
+        self.assertEqual(row["label"], "watch")
+        self.assertEqual(result, [])
+
+    @patch("src.signal_detector.fetch_recent_lows", return_value={})
+    @patch("src.signal_detector.fetch_all")
+    @patch("src.signal_detector.upsert")
+    @patch("src.signal_detector.get_connection")
+    def test_offensive_filter_demotes_score_candidate(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
+        """攻めモードではスコア候補でも offensive 閾値未満なら watch に戻す。"""
+        mock_conn.return_value = self._mock_conn()
+        mock_fetch_all.return_value = []
+
+        ticker = {
+            "ticker": "6758", "market": "JP",
+            "close": 3000.0, "adj_close": 3000.0,
+            "ma5": 2980.0, "ma25": 2900.0, "ma75": 2800.0, "ma200": 2600.0,
+            "ma5_5d_ago": 2950.0, "ma25_5d_ago": 2870.0, "ma200_5d_ago": 2560.0,
+            "volume": 2000000, "vol_20d_avg": 1000000,
+            "high_52w": 3100.0, "low_52w": 2000.0,
+            "rsi14": 78.0, "atr14": 80.0,
+            "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
+        }
+        off_cfg = {
+            "min_rank": "A",
+            "min_final_score": 80,
+            "filters": {},
+        }
+        with patch("src.signal_detector.is_offensive", return_value=True), \
+             patch("src.signal_detector.get_offensive_config", return_value=off_cfg):
+            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+
+        rows = mock_upsert.call_args_list[0][0][2]
+        row = rows[0]
+        self.assertGreaterEqual(row["final_score"], 50)
+        self.assertLess(row["final_score"], 80)
+        self.assertEqual(row["label"], "watch")
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":

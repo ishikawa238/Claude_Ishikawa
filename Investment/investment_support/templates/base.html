@@ -41,6 +41,9 @@
       <a class="nav-link {{ 'active' if active_page == 'rules' }}" href="/rules">
         <i data-lucide="shield-check" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>Rules
       </a>
+      <a class="nav-link {{ 'active' if active_page == 'scoring' }}" href="/scoring">
+        <i data-lucide="gauge" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>Scoring
+      </a>
       <a class="nav-link {{ 'active' if active_page == 'screening' }}" href="/screening">
         <i data-lucide="filter" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>Screening
       </a>
@@ -64,10 +67,13 @@
 </nav>
 
 <!-- System Health Bar -->
-<div id="healthBar" class="d-flex align-items-center gap-3 px-3 mb-3" style="display:none !important;font-size:var(--text-xs);color:var(--text-muted)">
-  <span id="healthBatch"></span>
-  <span id="healthData"></span>
-  <span id="healthErrors"></span>
+<div id="healthBar" class="px-3 mb-3" style="display:none !important;font-size:var(--text-xs);color:var(--text-muted)">
+  <div class="d-flex align-items-center gap-3 flex-wrap">
+    <span id="healthBatch"></span>
+    <span id="healthData"></span>
+    <span id="healthErrors"></span>
+  </div>
+  <ul id="healthErrorDetails" class="health-error-list mb-0 mt-1 ps-3" style="display:none"></ul>
 </div>
 
 {% block content %}{% endblock %}
@@ -109,9 +115,32 @@ lucide.createIcons();
       dataEl.textContent = 'データ: ' + d.data_date;
     }
 
+    function escHtml(s) {
+      var el = document.createElement('span');
+      el.textContent = s || '';
+      return el.innerHTML;
+    }
+
     var errEl = document.getElementById('healthErrors');
+    var errDetails = document.getElementById('healthErrorDetails');
     if (errEl && d.errors_24h > 0) {
-      errEl.innerHTML = '<span style="color:var(--color-danger)">● エラー ' + d.errors_24h + '件(24h)</span>';
+      errEl.innerHTML = '<button type="button" id="healthErrorsToggle" class="btn btn-link p-0 border-0 align-baseline" style="font-size:inherit;color:var(--color-danger);text-decoration:none">● エラー ' + d.errors_24h + '件(24h) ▾</button>';
+      if (errDetails && d.recent_errors && d.recent_errors.length) {
+        errDetails.innerHTML = d.recent_errors.map(function(e) {
+          var fatal = e.fatal ? ' <span style="color:var(--color-danger)">[致命的]</span>' : '';
+          var head = escHtml(e.time) + ' · ' + escHtml(e.batch) + ' · ' + escHtml(e.type) + fatal;
+          var body = escHtml(e.message).replace(/\n/g, '<br>');
+          return '<li class="mb-1"><strong>' + head + '</strong><br><span style="opacity:0.9">' + body + '</span></li>';
+        }).join('');
+        var toggle = document.getElementById('healthErrorsToggle');
+        if (toggle) {
+          toggle.addEventListener('click', function() {
+            var open = errDetails.style.display !== 'none';
+            errDetails.style.display = open ? 'none' : 'block';
+            toggle.textContent = toggle.textContent.replace(open ? '▴' : '▾', open ? '▾' : '▴');
+          });
+        }
+      }
     }
   }).catch(function() {});
 })();

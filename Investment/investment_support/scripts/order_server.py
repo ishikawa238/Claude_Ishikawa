@@ -43,7 +43,7 @@ _REPO_ROOT = _PROJECT_ROOT.parent.parent  # Ishikawa238/ — shared パッケー
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for
 from markupsafe import escape
 
 from src.config import CONFIG
@@ -1581,6 +1581,37 @@ def rules_page():
     return render_template("rules.html", active_page="rules", **context)
 
 
+@app.route("/scoring")
+def scoring_page():
+    """スコアリングシステムの定義と閾値を一覧表示する。"""
+    context = _build_scoring_context()
+    return render_template("scoring.html", active_page="scoring", **context)
+
+
+@app.route("/soring")
+def scoring_typo_redirect():
+    return redirect(url_for("scoring_page"), code=302)
+
+
+def _build_scoring_context() -> dict:
+    from src.config import get_offensive_config, get_strategy_mode
+    from src.scoring import get_scoring_definition
+
+    definition = get_scoring_definition()
+    off = get_offensive_config()
+    strategy_mode = get_strategy_mode()
+    min_rank = off.get("min_rank", "A")
+    min_final_score = _cfg_float(off, "min_final_score", 80)
+
+    status_cards = [
+        {"label": "候補昇格", "value": "総合50点 + 適合60点", "tone": "info"},
+        {"label": "攻めモード閾値", "value": f"{min_final_score:.0f}点 / {min_rank}以上", "tone": "warning"},
+        {"label": "現在モード", "value": "攻め" if strategy_mode == "offensive" else "守り", "tone": "success"},
+        {"label": "市場減点", "value": "0.88 / 0.75", "tone": "danger"},
+    ]
+    return {"definition": definition, "status_cards": status_cards}
+
+
 def _build_rules_context() -> dict:
     from src.config import get_offensive_config, get_strategy_mode, is_offensive
 
@@ -2062,6 +2093,7 @@ def api_prompt_builder_generate():
 def main():
     logger.info(f"レポートサーバーを起動します: http://{_HOST}:{_PORT}/report")
     logger.info("  /report       - メインダッシュボード")
+    logger.info("  /scoring      - スコアリング定義")
     logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
     logger.info("  /paypay       - PayPayポイント運用")

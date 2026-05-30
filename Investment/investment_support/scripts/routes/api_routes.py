@@ -569,21 +569,30 @@ def api_system_health():
             """SELECT COUNT(*) AS cnt FROM error_log
                WHERE error_time >= datetime('now', '-24 hours')""",
         )
+        recent_errors = fetch_all(
+            conn,
+            """SELECT error_time, batch_type, module, error_type, error_message, is_fatal
+               FROM error_log
+               WHERE error_time >= datetime('now', '-24 hours')
+               ORDER BY error_time DESC
+               LIMIT 20""",
+        )
         latest_price = fetch_one(
             conn,
             "SELECT MAX(date) AS d FROM price_history",
         )
 
+    _BTYPES = {"evening_jp": "夜(JP)", "morning_all": "朝(全)", "monthly": "月次"}
     result = {
         "last_batch": None,
         "errors_24h": 0,
+        "recent_errors": [],
         "data_date": None,
         "jp_price_source": None,
         "jp_price_status": None,
     }
     if last_batch:
         lb = dict(last_batch)
-        _BTYPES = {"evening_jp": "夜(JP)", "morning_all": "朝(全)", "monthly": "月次"}
         result["last_batch"] = {
             "type": _BTYPES.get(lb.get("batch_type", ""), lb.get("batch_type", "")),
             "status": lb.get("status", ""),
@@ -603,6 +612,18 @@ def api_system_health():
             result["jp_price_status"] = "partial"
     if error_count:
         result["errors_24h"] = dict(error_count).get("cnt", 0)
+    if recent_errors:
+        result["recent_errors"] = [
+            {
+                "time": row["error_time"],
+                "batch": _BTYPES.get(row["batch_type"], row["batch_type"] or ""),
+                "module": row["module"] or "",
+                "type": row["error_type"] or "",
+                "message": (row["error_message"] or "")[:500],
+                "fatal": bool(row["is_fatal"]),
+            }
+            for row in recent_errors
+        ]
     if latest_price:
         result["data_date"] = dict(latest_price).get("d")
     return jsonify(result)

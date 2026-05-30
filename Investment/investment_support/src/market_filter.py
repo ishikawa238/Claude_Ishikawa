@@ -13,6 +13,7 @@ from typing import Optional
 from src.config import CONFIG
 from src.data_store import fetch_all, fetch_one, get_connection, upsert
 from src.logger import get_logger
+from src.trading_calendar import latest_price_date_for_market
 
 logger = get_logger(__name__)
 
@@ -220,6 +221,14 @@ def diagnose_screening_empty(target_date: date, market: str) -> Optional[str]:
     snap_count = int(snap["c"]) if snap else 0
     if snap_count == 0:
         return None
+
+    latest_price = latest_price_date_for_market(target_date, market)
+    if latest_price and latest_price < target_date:
+        return (
+            f"⚠️ *スクリーニング日付不一致*（{market}）\n"
+            f"テクニカルは {target_str} ですが、価格データの最新日は {latest_price.isoformat()} です。\n"
+            "→ 夜バッチを再実行するか、土日の手動実行は避けてください（営業日に自動補正されます）。"
+        )
 
     pre_rows = _fetch_liquidity_candidates(target_date, market)
     if not pre_rows:

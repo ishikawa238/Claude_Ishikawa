@@ -66,6 +66,10 @@ class ScreeningHealthTestCase(unittest.TestCase):
                 shares_outstanding REAL, last_updated TEXT
             );
             CREATE TABLE technical_snapshot (ticker TEXT, date TEXT, ma200 REAL);
+            CREATE TABLE price_history (
+                ticker TEXT, date TEXT, adj_close REAL, volume REAL,
+                is_holiday INTEGER DEFAULT 0
+            );
         """)
         _test_conn.execute(
             "INSERT INTO universe_master (ticker, name, market) VALUES ('7203', 'Toyota', 'JP')"
@@ -106,6 +110,13 @@ class ScreeningHealthTestCase(unittest.TestCase):
 
         mf._ALLOW_UNKNOWN_MARKET_CAP = False
         today = date.today()
+        today_str = today.strftime("%Y-%m-%d")
+        _test_conn.execute(
+            "INSERT INTO price_history (ticker, date, adj_close, volume, is_holiday) "
+            "VALUES ('7203', ?, 3000, 1000000, 0)",
+            (today_str,),
+        )
+        _test_conn.commit()
         msg = diagnose_screening_empty(today, "JP")
         self.assertIsNotNone(msg)
         self.assertIn("時価総額", msg)

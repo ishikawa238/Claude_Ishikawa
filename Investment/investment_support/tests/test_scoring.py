@@ -46,6 +46,7 @@ def _base_ticker(**overrides) -> dict:
         "ma5_5d_ago": 2900.0, "ma25_5d_ago": 2870.0, "ma200_5d_ago": 2560.0,
         "volume": 1500000, "vol_20d_avg": 1000000,
         "high_52w": 3100.0, "low_52w": 2000.0,
+        "weekly_ma25": 2800.0, "weekly_ma25_5w_ago": 2700.0,
         "rsi14": 60.0, "atr14": 80.0,
         "est_turnover": 4_500_000_000, "est_market_cap": 50_000_000_000,
     }
@@ -254,10 +255,55 @@ class ComputeScoreTests(unittest.TestCase):
         result = compute_score(tk, "normal")
         expected_keys = {
             "trend_score", "pattern_a_score", "pattern_b_score",
-            "liquidity_score", "base_score", "market_multiplier",
+            "pattern_c_score", "liquidity_score", "base_score", "market_multiplier",
             "final_score", "recommend_rank", "recommend_reason",
+            "factor_scores", "pattern_fit", "primary_pattern",
         }
         self.assertTrue(expected_keys.issubset(result.keys()))
+
+    def test_final_score_uses_common_factors_not_pattern_sum(self):
+        """final_score の元になる base_score は Pattern A/B/C の加重和ではない。"""
+        tk = _base_ticker()
+        result = compute_score(tk, "normal", recent_low_5d=2840)
+
+        factors = result["factor_scores"]
+        expected_base = round(
+            0.24 * factors["trend"]
+            + 0.16 * factors["momentum"]
+            + 0.12 * factors["pullback"]
+            + 0.10 * factors["support"]
+            + 0.10 * factors["volume"]
+            + 0.14 * factors["liquidity"]
+            + 0.08 * factors["risk"]
+            + 0.06 * factors["fundamental"],
+            1,
+        )
+        legacy_pattern_sum = round(
+            0.30 * result["trend_score"]
+            + 0.25 * result["pattern_a_score"]
+            + 0.15 * result["pattern_b_score"]
+            + 0.15 * result["pattern_c_score"]
+            + 0.15 * result["liquidity_score"],
+            1,
+        )
+
+        self.assertEqual(result["base_score"], expected_base)
+        self.assertNotEqual(result["base_score"], legacy_pattern_sum)
+
+    def test_pattern_fit_labels_are_derived_from_factor_scores(self):
+        """Pattern A/B/C 適合度と primary_pattern が返る。"""
+        tk = _base_ticker(
+            close=3080,
+            high_52w=3100,
+            volume=2500000,
+            vol_20d_avg=1000000,
+            rsi14=60,
+        )
+        result = compute_score(tk, "normal", recent_low_5d=2840)
+
+        self.assertEqual(set(result["pattern_fit"].keys()), {"A", "B", "C"})
+        self.assertIn(result["primary_pattern"], {"A", "B", "C"})
+        self.assertEqual(result["pattern_a_score"], result["pattern_fit"]["A"])
 
     def test_reason_mentions_caution(self):
         """caution モードの理由文に警戒モードが含まれる"""

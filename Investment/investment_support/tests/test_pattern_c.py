@@ -45,10 +45,13 @@ with patch("src.config.CONFIG", _CONFIG_MOCK):
     from src.scoring import (
         _calc_pattern_c_score,
         W_TREND,
-        W_PATTERN_A,
-        W_PATTERN_B,
-        W_PATTERN_C,
+        W_MOMENTUM,
+        W_PULLBACK,
+        W_SUPPORT,
+        W_VOLUME,
         W_LIQUIDITY,
+        W_RISK,
+        W_FUNDAMENTAL,
     )
 
 
@@ -241,6 +244,8 @@ class PatternCScoreTests(unittest.TestCase):
         tk = {
             "ticker": "7203", "market": "JP",
             "close": 1000.0, "adj_close": 1000.0,
+            "weekly_ma25": 980.0,
+            "weekly_ma25_5w_ago": 960.0,
             "support_level": 990.0,
             "rsi14": 25.0,
             "sar_direction": "up",
@@ -261,7 +266,7 @@ class PatternCScoreTests(unittest.TestCase):
         """サポートレベルなし → サポート成分(40%)が0になり、RSI+SAR分のみ"""
         tk = self._base_ticker(support_level=None, rsi14=25, sar_direction="up")
         score = _calc_pattern_c_score(tk)
-        # RSI(85*0.3=25.5) + SAR(100*0.3=30) = 55.5 → 56, サポート成分なし
+        # 週足(20) + RSI(85*0.2=17) + SAR(20) = 57, サポート成分なし
         self.assertLessEqual(score, 60)
         self.assertGreater(score, 0)
 
@@ -281,15 +286,37 @@ class PatternCScoreTests(unittest.TestCase):
         score_down = _calc_pattern_c_score(tk_down)
         self.assertGreater(score_up, score_down)
 
-    def test_rsi_above_threshold_zero(self):
-        """RSI > 35 → RSI成分は0"""
+    def test_rsi_above_threshold_only_weekly_score_remains(self):
+        """RSI > 35 かつサポート/SARなし → 週足成分のみ残る"""
         tk = self._base_ticker(rsi14=50, sar_direction="down", support_level=None)
         score = _calc_pattern_c_score(tk)
-        self.assertEqual(score, 0)
+        self.assertEqual(score, 20)
+
+    def test_weekly_downtrend_caps_score(self):
+        """週足上昇が確認できない場合はCスコアだけで候補級にしない"""
+        tk = self._base_ticker(
+            close=995,
+            support_level=990,
+            rsi14=20,
+            sar_direction="up",
+            weekly_ma25=950,
+            weekly_ma25_5w_ago=980,
+        )
+        score = _calc_pattern_c_score(tk)
+        self.assertLessEqual(score, 59)
+
+    def test_support_distance_uses_absolute_value(self):
+        """サポート近接度は厳密判定と同じく絶対距離で評価する"""
+        above = self._base_ticker(close=1010, support_level=1000)
+        below = self._base_ticker(close=990, support_level=1000)
+        self.assertEqual(_calc_pattern_c_score(above), _calc_pattern_c_score(below))
 
     def test_weights_sum_to_one(self):
-        """全重みの合計が1.0"""
-        total = W_TREND + W_PATTERN_A + W_PATTERN_B + W_PATTERN_C + W_LIQUIDITY
+        """共通指標の最終スコア重み合計が1.0"""
+        total = (
+            W_TREND + W_MOMENTUM + W_PULLBACK + W_SUPPORT
+            + W_VOLUME + W_LIQUIDITY + W_RISK + W_FUNDAMENTAL
+        )
         self.assertAlmostEqual(total, 1.0, places=10)
 
 

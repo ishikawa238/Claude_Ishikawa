@@ -430,6 +430,27 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("月15%", html)
         self.assertIn("1トレード損失上限", html)
 
+    # ---- /scoring ----
+
+    def test_scoring_returns_200(self):
+        resp = self.client.get("/scoring")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_soring_redirects_to_scoring(self):
+        resp = self.client.get("/soring")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.headers["Location"], "/scoring")
+
+    def test_scoring_contains_definition(self):
+        resp = self.client.get("/scoring")
+        html = resp.data.decode()
+        self.assertIn("スコアリング定義", html)
+        self.assertIn("総合スコアの重み", html)
+        self.assertIn("共通指標", html)
+        self.assertIn("パターン適合度", html)
+        self.assertIn("Pattern C", html)
+        self.assertIn("候補化ルール", html)
+
     # ---- /stock/<ticker> ----
 
     def test_stock_existing_returns_200(self):
@@ -632,8 +653,11 @@ class OrderServerTestCase(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertIn("last_batch", data)
         self.assertIn("errors_24h", data)
+        self.assertIn("recent_errors", data)
         self.assertIn("data_date", data)
         self.assertEqual(data["errors_24h"], 1)
+        self.assertEqual(len(data["recent_errors"]), 1)
+        self.assertEqual(data["recent_errors"][0]["type"], "TestError")
         self.assertIsNotNone(data["last_batch"])
         self.assertEqual(data["last_batch"]["type"], "夜(JP)")
         self.assertEqual(data["last_batch"]["status"], "success")

@@ -9,6 +9,7 @@
 """
 
 import csv
+import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -43,7 +44,7 @@ def sync_holdings_from_csv() -> int:
     - 既存の未決済行（is_closed=0）がある場合は UPDATE する。
     - なければ INSERT する。
     - 同一 ticker で is_closed=0 の重複行がある場合は id が最大の行を残して削除する。
-    - CSV に存在しない行は変更しない（手動決済の記録を保持するため）。
+    - CSV に存在しない未決済行は is_closed=1 に更新する（決済済み履歴は保持）。
     返り値: 同期件数
     """
     if not _HOLDINGS_CSV.exists():
@@ -79,10 +80,16 @@ def sync_holdings_from_csv() -> int:
                 "is_closed":       0,
             })
 
-    if rows:
-        with get_connection() as conn:
-            _dedup_open_holdings(conn)
+    csv_tickers = {row["ticker"] for row in rows}
+    with get_connection() as conn:
+        _dedup_open_holdings(conn)
+        if rows:
             _upsert_holdings(conn, rows)
+        closed = _close_holdings_removed_from_csv(conn, csv_tickers)
+        if closed:
+            logger.info(
+                f"CSV にない未決済銘柄を決済済みに更新: {', '.join(closed)}"
+            )
 
     logger.info(f"保有銘柄同期完了: {len(rows)} 件")
     return len(rows)
@@ -116,6 +123,62 @@ def _dedup_open_holdings(conn) -> None:
             (ticker, ticker),
         )
         logger.info(f"重複行を削除しました: {ticker}")
+
+
+def _close_holdings_removed_from_csv(conn, csv_tickers: set[str]) -> list[str]:
+    """
+    holdings.csv に無い未決済行を決済済みにする。
+    決済済み（is_closed=1）の履歴行は変更しない。
+    """
+    today = date.today().strftime("%Y-%m-%d")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    closed: list[str] = []
+
+    if csv_tickers:
+        placeholders = ",".join("?" * len(csv_tickers))
+        stale = conn.execute(
+            f"""
+            SELECT id, ticker FROM holdings
+            WHERE is_closed = 0 AND ticker NOT IN ({placeholders})
+            """,
+            tuple(csv_tickers),
+        ).fetchall()
+    else:
+        stale = conn.execute(
+            "SELECT id, ticker FROM holdings WHERE is_closed = 0"
+        ).fetchall()
+
+    for row in stale:
+        ticker = row["ticker"]
+        close_price = None
+        try:
+            price_row = conn.execute(
+                """
+                SELECT adj_close FROM price_history
+                WHERE ticker = ? AND is_holiday = 0
+                ORDER BY date DESC LIMIT 1
+                """,
+                (ticker,),
+            ).fetchone()
+            if price_row and price_row[0] is not None:
+                close_price = float(price_row[0])
+        except sqlite3.OperationalError:
+            pass
+        conn.execute(
+            """
+            UPDATE holdings
+            SET is_closed = 1,
+                close_price = ?,
+                close_date = ?,
+                close_reason = 'manual',
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (close_price, today, now, row["id"]),
+        )
+        closed.append(ticker)
+
+    return closed
 
 
 def _upsert_holdings(conn, rows: list[dict]) -> None:

@@ -59,6 +59,9 @@ def _make_temp_db() -> sqlite3.Connection:
             stop_loss_price  REAL,
             memo             TEXT,
             is_closed        INTEGER NOT NULL DEFAULT 0,
+            close_price      REAL,
+            close_date       DATE,
+            close_reason     TEXT,
             created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
@@ -118,6 +121,34 @@ class EmptyCsvTests(unittest.TestCase):
         self.assertEqual(result, 0, "空 CSV では 0 件が返るべき")
         rows = conn.execute("SELECT COUNT(*) as cnt FROM holdings").fetchone()
         self.assertEqual(rows["cnt"], 0, "holdings テーブルに行が追加されていない")
+
+    def test_empty_csv_closes_existing_open_holdings(self):
+        """データ行なし CSV でも、DB の未決済行は決済済みにする。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "holdings.csv"
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=_CSV_FIELDNAMES)
+                writer.writeheader()
+
+            conn = _make_temp_db()
+            conn.execute(
+                "INSERT INTO holdings (ticker, market, entry_price, is_closed) "
+                "VALUES ('NVDA', 'US', 180.0, 0)"
+            )
+            conn.commit()
+
+            with patch.object(hm, "_HOLDINGS_CSV", csv_path), \
+                 patch("src.holdings_monitor.get_connection", _make_fake_connection(conn)):
+                hm.sync_holdings_from_csv()
+
+        open_cnt = conn.execute(
+            "SELECT COUNT(*) as cnt FROM holdings WHERE is_closed = 0"
+        ).fetchone()["cnt"]
+        self.assertEqual(open_cnt, 0)
+        closed = conn.execute(
+            "SELECT is_closed FROM holdings WHERE ticker='NVDA'"
+        ).fetchone()
+        self.assertEqual(closed["is_closed"], 1)
 
 
 class DuplicateTickerTests(unittest.TestCase):
@@ -297,6 +328,80 @@ class MissingFileTests(unittest.TestCase):
             hm.sync_holdings_from_csv()
 
         mock_get_conn.assert_not_called()
+
+
+class RemovedFromCsvTests(unittest.TestCase):
+    """CSV から消えた銘柄は DB 上の未決済行を決済済みにする。"""
+
+    def test_open_holding_not_in_csv_is_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "holdings.csv"
+            _write_csv(csv_path, [
+                {"ticker": "5803", "name": "Fujikura", "market": "JP",
+                 "entry_price": "5650", "entry_date": "2026-05-26",
+                 "quantity": "1", "stop_loss_price": "", "memo": ""},
+            ])
+
+            conn = _make_temp_db()
+            conn.execute(
+                "INSERT INTO holdings (ticker, name, market, entry_price, is_closed) "
+                "VALUES ('GOOG', 'Alphabet', 'US', 194.0, 0)"
+            )
+            conn.execute(
+                "INSERT INTO holdings (ticker, name, market, entry_price, is_closed) "
+                "VALUES ('NVDA', 'NVIDIA', 'US', 173.0, 0)"
+            )
+            conn.commit()
+
+            with patch.object(hm, "_HOLDINGS_CSV", csv_path), \
+                 patch("src.holdings_monitor.get_connection", _make_fake_connection(conn)):
+                hm.sync_holdings_from_csv()
+
+        open_tickers = {
+            r["ticker"]
+            for r in conn.execute(
+                "SELECT ticker FROM holdings WHERE is_closed = 0"
+            ).fetchall()
+        }
+        self.assertEqual(open_tickers, {"5803"})
+        for ticker in ("GOOG", "NVDA"):
+            row = conn.execute(
+                "SELECT is_closed, close_reason FROM holdings "
+                "WHERE ticker = ? AND is_closed = 1",
+                (ticker,),
+            ).fetchone()
+            self.assertIsNotNone(row, f"{ticker} should be closed")
+            self.assertEqual(row["close_reason"], "manual")
+
+    def test_closed_history_not_reopened_when_ticker_returns_to_csv(self):
+        """決済済み履歴は触らず、CSV 再登録時は新しい未決済行になる。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "holdings.csv"
+            _write_csv(csv_path, [
+                {"ticker": "GOOG", "name": "Alphabet", "market": "US",
+                 "entry_price": "200", "entry_date": "2026-05-01",
+                 "quantity": "0.07", "stop_loss_price": "184", "memo": ""},
+            ])
+
+            conn = _make_temp_db()
+            conn.execute(
+                "INSERT INTO holdings (ticker, market, entry_price, is_closed, close_reason) "
+                "VALUES ('GOOG', 'US', 150.0, 1, 'manual')"
+            )
+            conn.commit()
+
+            with patch.object(hm, "_HOLDINGS_CSV", csv_path), \
+                 patch("src.holdings_monitor.get_connection", _make_fake_connection(conn)):
+                hm.sync_holdings_from_csv()
+
+        closed = conn.execute(
+            "SELECT entry_price FROM holdings WHERE ticker='GOOG' AND is_closed=1"
+        ).fetchone()
+        self.assertAlmostEqual(closed["entry_price"], 150.0)
+        open_row = conn.execute(
+            "SELECT entry_price FROM holdings WHERE ticker='GOOG' AND is_closed=0"
+        ).fetchone()
+        self.assertAlmostEqual(open_row["entry_price"], 200.0)
 
 
 class StopLossDefaultTests(unittest.TestCase):

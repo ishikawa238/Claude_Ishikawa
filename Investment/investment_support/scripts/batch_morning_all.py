@@ -48,7 +48,7 @@ from src.market_filter import (
 )
 from src.shares_outstanding import load_shares_map
 from src.notifier import send_morning_report, send_skip_notification
-from src.signal_detector import detect_and_save_signals
+from src.signal_detector import diagnose_signal_save_count, detect_and_save_signals
 from src.technical_calculator import (
     calculate_and_save_index_mas, calculate_and_save_snapshots,
 )
@@ -175,6 +175,7 @@ def _run_batch(
                                    {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
     failed_count = 0
     signals_count = 0
+    signal_save_alert = None
 
     try:
         _progress(1, "US価格データ取得")
@@ -286,6 +287,15 @@ def _run_batch(
                 )
             candidates = detect_and_save_signals(screened, us_price_date, mode)
             signals_count = len(candidates)
+            signal_save_alert = diagnose_signal_save_count(
+                us_price_date, "US", len(screened),
+            )
+            if signal_save_alert:
+                logger.warning(signal_save_alert)
+                log_error(
+                    _BATCH_TYPE, "detect_and_save_signals",
+                    "SignalSaveMismatch", signal_save_alert,
+                )
             us_entry_sets = save_entry_sets(candidates, mode)
 
             from src.signal_detector import fetch_near_misses
@@ -394,13 +404,14 @@ def _run_batch(
         # ────────────────────────────────────────
         status = (
             "partial_failure"
-            if failed_count > 0 or screening_alert
+            if failed_count > 0 or screening_alert or signal_save_alert
             else "success"
         )
         import json as _json
         batch_memo = _json.dumps({
             "us_price_date": us_price_date.strftime("%Y-%m-%d"),
             "screening_alert": screening_alert,
+            "signal_save_alert": signal_save_alert,
             "screened_count": len(screened),
         }, ensure_ascii=False)
         with get_connection() as conn:

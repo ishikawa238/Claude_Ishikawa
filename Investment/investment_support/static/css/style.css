@@ -193,6 +193,96 @@ h2 {
 .trend-up { color: var(--color-success); }
 .trend-down { color: var(--color-danger); }
 .trend-flat { color: var(--color-warning); }
+
+/* スコア短期トレンド（final_score の推移） */
+.score-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.score-trend {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+}
+.score-trend-up {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+}
+.score-trend-down {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+}
+.score-trend-flat {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+/* Screening → Prompt */
+.screening-ticker-cell {
+  white-space: nowrap;
+}
+.screening-prompt-link {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.05rem 0.35rem;
+  border-radius: 4px;
+  text-decoration: none;
+  color: var(--color-primary);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+  vertical-align: middle;
+}
+.screening-prompt-link:hover {
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+/* Screening 株価フィルタ */
+.screening-price-input {
+  width: 7rem;
+  display: inline-block;
+}
+.price-jpy-col {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Screening ブックマーク */
+.bookmark-col,
+.bookmark-cell {
+  width: 2.25rem;
+  text-align: center;
+  vertical-align: middle;
+  padding-left: 0.35rem !important;
+  padding-right: 0.35rem !important;
+}
+.bookmark-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: 0.1rem 0.25rem;
+  color: var(--text-muted);
+  transition: color var(--transition-fast), transform var(--transition-fast);
+}
+.bookmark-btn:hover {
+  color: var(--color-warning);
+  transform: scale(1.12);
+}
+.bookmark-btn-on {
+  color: var(--color-warning);
+}
+.bookmark-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
 .text-profit { color: var(--color-profit); }
 .text-loss { color: var(--color-loss); }
 .text-muted-custom { color: var(--text-muted); }

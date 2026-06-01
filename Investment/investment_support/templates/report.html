@@ -138,7 +138,7 @@
         {% if card.score_str != '—' %}
         <div class="candidate-score-row">
           <div class="candidate-score-bar"><div class="candidate-score-fill" style="width:{{ card.score_pct }}%"></div></div>
-          <span class="candidate-score-value">{{ card.score_str }}点</span>
+          <span class="candidate-score-value">{{ card.score_html|safe }}点</span>
           <span class="rank-badge {{ card.rank_css }}">{{ card.rank }}</span>
         </div>
         {% endif %}
@@ -318,7 +318,7 @@
           <th class="detail-col"><span class="tip" data-tip="RSI：0〜100の数値。70以上は買われすぎ、30以下は売られすぎ">RSI</span></th>
           <th class="detail-col"><span class="tip" data-tip="ATR：1日あたりの値動きの大きさ（値が大きいほど変動が激しい）">ATR</span></th>
           <th class="detail-col"><span class="tip" data-tip="MA25乖離：25日平均線からどれだけ離れているか（%）">MA25乖離</span></th>
-          <th class="detail-col">Score</th><th class="detail-col">Rank</th><th class="detail-col">Trend</th>
+          <th class="detail-col"><span class="tip" data-tip="総合スコアと直近の推移（↑上昇 ↓下降 →横ばい。最大5営業日前比）">Score</span></th><th class="detail-col">Rank</th><th class="detail-col"><span class="tip" data-tip="MAの並びによる価格トレンド">Trend</span></th>
         </tr>
       </thead>
       <tbody>
@@ -347,7 +347,7 @@
           <td class="detail-col {{ h.rsi_css }}">{{ h.rsi_str }}</td>
           <td class="detail-col">{{ h.atr_str }}</td>
           <td class="detail-col">{{ h.ma25_dev_str }}</td>
-          <td class="detail-col">{{ h.score_str }}</td>
+          <td class="detail-col">{{ h.score_html|safe }}</td>
           <td class="detail-col">{{ h.rank_html|safe }}</td>
           <td class="detail-col">{{ h.trend_str|safe }}</td>
         </tr>

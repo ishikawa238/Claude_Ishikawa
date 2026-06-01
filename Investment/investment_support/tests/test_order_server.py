@@ -277,18 +277,18 @@ def _init_test_db(conn):
 
     # daily_signals（スコア付き）
     conn.execute(
-        "INSERT INTO daily_signals (ticker, date, market, pattern, label, "
+        "INSERT INTO daily_signals (ticker, date, market, pattern, label, close, "
         "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('7203', ?, 'JP', 'A', 'candidate', 80, 65, 50, 10, 90, 78, 'A', "
+        "VALUES ('7203', ?, 'JP', 'A', 'candidate', 3000, 80, 65, 50, 10, 90, 78, 'A', "
         "'上昇トレンドが継続中。52週高値に接近。流動性が高い', 'normal')",
         (today_str,),
     )
     conn.execute(
-        "INSERT INTO daily_signals (ticker, date, market, pattern, label, "
+        "INSERT INTO daily_signals (ticker, date, market, pattern, label, close, "
         "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('AAPL', ?, 'US', 'B', 'candidate', 70, 55, 75, 15, 85, 72, 'B', "
+        "VALUES ('AAPL', ?, 'US', 'B', 'candidate', 180, 70, 55, 75, 15, 85, 72, 'B', "
         "'中期トレンドは良好。押し目反発の形成を確認', 'normal')",
         (today_str,),
     )
@@ -450,6 +450,22 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("パターン適合度", html)
         self.assertIn("Pattern C", html)
         self.assertIn("候補化ルール", html)
+
+    # ---- /screening ----
+
+    def test_screening_returns_200(self):
+        resp = self.client.get("/screening")
+        self.assertEqual(resp.status_code, 200)
+
+    def test_screening_shows_price_jpy_column(self):
+        resp = self.client.get("/screening")
+        html = resp.data.decode()
+        self.assertIn("株価（円）", html)
+        self.assertIn("data-price-jpy", html)
+        self.assertIn("3,000円", html)
+        self.assertIn("27,000円", html)  # AAPL 180 USD × 150
+        self.assertIn("filterPriceMin", html)
+        self.assertIn("sortPriceJpy", html)
 
     # ---- /stock/<ticker> ----
 

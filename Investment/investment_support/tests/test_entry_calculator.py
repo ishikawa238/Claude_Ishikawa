@@ -29,7 +29,7 @@ _CONFIG_MOCK = {
 }
 
 with patch("src.config.CONFIG", _CONFIG_MOCK):
-    from src.entry_calculator import calc_entry_set
+    from src.entry_calculator import calc_entry_set, save_entry_sets
 
 
 class ConfigPatchMixin:
@@ -241,6 +241,36 @@ class CalcEntrySetOffensiveTests(OffensiveModeMixin, unittest.TestCase):
                 result.get("_warn_too_small") or result.get("_warn_wide"),
                 "広い損切りまたは少額警告のどちらかが立つ",
             )
+
+
+class SaveEntrySetsIdempotencyTests(unittest.TestCase):
+    """同一候補の再処理で通知ログを重複保存しない。"""
+
+    @patch(
+        "src.entry_calculator.calc_entry_set",
+        return_value={
+            "signal_date": "2026-06-01",
+            "ticker": "7203",
+            "market": "JP",
+            "pattern": "A",
+        },
+    )
+    @patch("src.entry_calculator._count_open_holdings", return_value=0)
+    @patch("src.entry_calculator._get_trade_pause_reason", return_value=None)
+    @patch("src.entry_calculator._find_existing_entry_set_id", return_value=10)
+    @patch("src.entry_calculator.insert_one")
+    def test_existing_entry_set_is_not_inserted_again(
+        self,
+        mock_insert,
+        _mock_existing,
+        _mock_pause,
+        _mock_holdings,
+        _mock_calc,
+    ):
+        result = save_entry_sets([_make_signal()], "normal")
+
+        self.assertEqual(result, [])
+        mock_insert.assert_not_called()
 
 
 if __name__ == "__main__":

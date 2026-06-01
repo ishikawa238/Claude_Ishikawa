@@ -63,6 +63,10 @@
   </h1>
 </div>
 
+<div id="prefillBanner" class="alert alert-info py-2 mb-4" style="display:none;font-size:var(--text-sm)">
+  Screening から <strong id="prefillCount">0</strong> 銘柄を読み込みました。テーマとチェックを確認してプロンプトを生成してください。
+</div>
+
 <!-- Theme Selection -->
 <div class="section mb-4">
   <h2>1. テーマを選択</h2>
@@ -87,7 +91,12 @@
   </div>
 
   <div id="multiSelect" style="display:none">
-    <div class="d-flex flex-wrap gap-2" id="multiCheckboxes"></div>
+    <p id="multiSelectHint" class="text-muted mb-2" style="font-size:var(--text-sm);display:none"></p>
+    <div class="d-flex flex-wrap gap-2 mb-2" id="multiCheckboxes"></div>
+    <div id="multiSelectActions" style="display:none">
+      <button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="selectAllMulti(true)">すべて選択</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="selectAllMulti(false)">選択解除</button>
+    </div>
   </div>
 
   <div id="noSelectMsg" style="display:none">
@@ -147,6 +156,7 @@
 <script>
 var _holdings = {{ holdings | tojson }};
 var _candidates = {{ candidates | tojson }};
+var _prefill = {{ prefill | tojson }};
 var _selectedTheme = null;
 
 function selectTheme(theme) {
@@ -170,15 +180,25 @@ function selectTheme(theme) {
   singleSel.style.display = 'none';
   multiSel.style.display = 'none';
   noSelMsg.style.display = 'none';
+  var multiHint = document.getElementById('multiSelectHint');
+  var multiActions = document.getElementById('multiSelectActions');
+  if (multiHint) multiHint.style.display = 'none';
+  if (multiActions) multiActions.style.display = 'none';
 
   if (theme === 'sell') {
     singleSel.style.display = '';
     populateSelect(_holdings, 'holding');
   } else if (theme === 'buy') {
-    singleSel.style.display = '';
-    populateSelect(_candidates, 'candidate');
+    multiSel.style.display = '';
+    multiHint.style.display = '';
+    multiHint.textContent = '複数の買い候補を選べます（比較・優先順位・資金配分の相談向け）。';
+    multiActions.style.display = '';
+    populateMultiCandidates();
   } else if (theme === 'custom') {
     multiSel.style.display = '';
+    multiHint.style.display = '';
+    multiHint.textContent = '保有銘柄・買い候補から複数選択できます。';
+    multiActions.style.display = '';
     populateMulti();
   } else {
     noSelMsg.style.display = '';
@@ -204,6 +224,37 @@ function populateSelect(items, type) {
       opt.textContent = item.ticker + ' ' + (item.name || '') + ' [' + (item.pattern || '') + '] ' + rank + ' ' + score + ' ' + labelMark + ' ' + dt;
     }
     sel.appendChild(opt);
+  });
+}
+
+function candidateLabel(item) {
+  var dt = (item.signal_date || '').slice(5);
+  var rank = item.recommend_rank || '-';
+  var score = (item.final_score != null) ? Math.round(item.final_score) : '-';
+  var labelMark = (item.ds_label === 'candidate') ? '\u2605\u5019\u88dc' : '\u25B3\u76E3\u8996';
+  var src = item._from_screening ? ' [Screening]' : '';
+  return item.ticker + ' ' + (item.name || '') + ' [' + (item.pattern || '') + '] '
+    + rank + ' ' + score + ' ' + labelMark + ' ' + dt + src;
+}
+
+function populateMultiCandidates() {
+  var container = document.getElementById('multiCheckboxes');
+  container.innerHTML = '';
+  _candidates.forEach(function(item) {
+    var div = document.createElement('div');
+    div.className = 'form-check form-check-inline';
+    div.innerHTML =
+      '<input class="form-check-input" type="checkbox" value="' + item.ticker + '" id="chk_' + item.ticker + '">' +
+      '<label class="form-check-label" for="chk_' + item.ticker + '" style="font-size:var(--text-sm)">' +
+        candidateLabel(item) +
+      '</label>';
+    container.appendChild(div);
+  });
+}
+
+function selectAllMulti(checked) {
+  document.querySelectorAll('#multiCheckboxes input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = checked;
   });
 }
 
@@ -235,11 +286,11 @@ function populateMulti() {
 }
 
 function getSelectedTickers() {
-  if (_selectedTheme === 'sell' || _selectedTheme === 'buy') {
+  if (_selectedTheme === 'sell') {
     var val = document.getElementById('tickerSelect').value;
     return val ? [val] : [];
   }
-  if (_selectedTheme === 'custom') {
+  if (_selectedTheme === 'buy' || _selectedTheme === 'custom') {
     var checked = [];
     document.querySelectorAll('#multiCheckboxes input:checked').forEach(function(cb) {
       checked.push(cb.value);
@@ -260,6 +311,7 @@ function generatePrompt() {
     options: {
       beginner_glossary: document.getElementById('glossaryCheck').checked,
       custom_question: document.getElementById('customQuestion').value,
+      from_screening: !!(_prefill && _prefill.from_screening),
     }
   };
 
@@ -307,6 +359,29 @@ function copyPrompt() {
   });
 }
 
+function applyPrefillTickers(tickers) {
+  if (!tickers || !tickers.length) return;
+  var wanted = new Set(tickers.map(function(t) { return String(t).toUpperCase(); }));
+  document.querySelectorAll('#multiCheckboxes input[type="checkbox"]').forEach(function(cb) {
+    cb.checked = wanted.has(String(cb.value).toUpperCase());
+  });
+  var banner = document.getElementById('prefillBanner');
+  var countEl = document.getElementById('prefillCount');
+  if (banner && countEl) {
+    countEl.textContent = String(tickers.length);
+    banner.style.display = '';
+  }
+}
+
+function initFromScreeningPrefill() {
+  if (!_prefill || !_prefill.tickers || !_prefill.tickers.length) return;
+  var theme = _prefill.theme || 'buy';
+  if (['buy', 'custom', 'sell'].indexOf(theme) < 0) theme = 'buy';
+  selectTheme(theme);
+  applyPrefillTickers(_prefill.tickers);
+}
+
+initFromScreeningPrefill();
 lucide.createIcons();
 </script>
 {% endblock %}

@@ -14,7 +14,7 @@ from datetime import date
 from typing import Optional
 
 from src.config import CONFIG, get_offensive_config, is_offensive
-from src.data_store import fetch_all, get_connection, upsert
+from src.data_store import fetch_all, fetch_one, get_connection, upsert
 from src.logger import get_logger
 from src.scoring import (
     SCORE_CANDIDATE_MIN_FINAL,
@@ -38,7 +38,15 @@ _PB_LOOKBACK      = int(_SIG["pattern_b_lookback_days"])
 _PB_BOUNCE_DAYS   = int(_SIG.get("pattern_b_bounce_confirm_days", 1))
 _PC_RSI_MAX       = float(_SIG.get("pattern_c_rsi_max", 35))
 _PC_SUPPORT_TOL   = float(_SIG.get("pattern_c_support_tolerance_pct", 3.0))
-_MAX_CANDIDATES   = int(_SIG["max_candidates_per_pattern"])
+
+
+def _max_entry_sets_per_batch() -> int:
+    """通知へ渡す候補数。旧設定キーも後方互換として読む。"""
+    value = _SIG.get(
+        "max_entry_sets_per_batch",
+        _SIG.get("max_candidates_per_pattern", 3),
+    )
+    return max(int(value), 1)
 
 
 # ============================================================
@@ -194,7 +202,31 @@ def detect_and_save_signals(
             f"シグナル検出完了: {len(screened_tickers)} 銘柄中 "
             f"candidate={candidate_count} 件 / watch={watch_count} 件{insufficient_str}"
         )
-    return candidates[:_MAX_CANDIDATES]  # 最大件数に絞って返す
+    return candidates[:_max_entry_sets_per_batch()]  # 通知へ渡す最大件数
+
+
+def diagnose_signal_save_count(
+    target_date: date,
+    market: str,
+    expected_count: int,
+) -> Optional[str]:
+    """daily_signals の保存件数がスクリーニング件数と一致するか確認する。"""
+    if expected_count <= 0:
+        return None
+
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            "SELECT COUNT(*) AS c FROM daily_signals WHERE date = ? AND market = ?",
+            (target_date.strftime("%Y-%m-%d"), market),
+        )
+    actual_count = int(row["c"]) if row else 0
+    if actual_count == expected_count:
+        return None
+    return (
+        f"daily_signals 保存件数不一致（{market} {target_date.isoformat()}）: "
+        f"期待={expected_count:,} / 実績={actual_count:,}"
+    )
 
 
 # ============================================================

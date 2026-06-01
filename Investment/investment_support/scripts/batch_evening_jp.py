@@ -51,7 +51,7 @@ from src.market_filter import (
 )
 from src.shares_outstanding import load_shares_map
 from src.notifier import send_evening_report, send_skip_notification
-from src.signal_detector import detect_and_save_signals
+from src.signal_detector import diagnose_signal_save_count, detect_and_save_signals
 from src.technical_calculator import (
     calculate_and_save_index_mas, calculate_and_save_snapshots,
 )
@@ -236,6 +236,7 @@ def _run_batch(
                                    {"total_tickers": 0, "failed_tickers": 0, "signals_generated": 0})
     failed_count = 0
     signals_count = 0
+    signal_save_alert = None
 
     try:
         # ────────────────────────────────────────
@@ -345,6 +346,15 @@ def _run_batch(
             logger.info("STEP 5: シグナル検出")
             candidates = detect_and_save_signals(screened, jp_price_date, mode)
             signals_count = len(candidates)
+            signal_save_alert = diagnose_signal_save_count(
+                jp_price_date, "JP", len(screened),
+            )
+            if signal_save_alert:
+                logger.warning(signal_save_alert)
+                log_error(
+                    _BATCH_TYPE, "detect_and_save_signals",
+                    "SignalSaveMismatch", signal_save_alert,
+                )
 
             _progress(5, "エントリーセット計算")
             logger.info("STEP 6: エントリーセット計算")
@@ -462,7 +472,7 @@ def _run_batch(
         # ────────────────────────────────────────
         status = (
             "partial_failure"
-            if failed_count > 0 or screening_alert
+            if failed_count > 0 or screening_alert or signal_save_alert
             else "success"
         )
         import json as _json
@@ -472,6 +482,7 @@ def _run_batch(
             "jp_price_target_date_count": price_result.tickers_with_target_date,
             "jp_price_date": jp_price_date.isoformat() if jp_price_date else None,
             "screening_alert": screening_alert,
+            "signal_save_alert": signal_save_alert,
             "screened_count": len(screened),
         }, ensure_ascii=False)
         with get_connection() as conn:

@@ -25,8 +25,12 @@
 - スクリーニングファネルで全銘柄→最終候補への絞り込み過程・各条件の充足率を可視化
 - Webダッシュボード上で資金管理・シグナル・スクリーニングの各パラメータを変更可能（`http://127.0.0.1:5100/settings`）
 - 月次レポートで毎月の入金額を控除したリターンと、月15%目標との差を確認
+- パフォーマンス画面（`http://127.0.0.1:5100/performance`）で総資産推移を S&P500 と比較（インデックス投資との優劣の目安）
+- ダッシュボード・スクリーニング・銘柄詳細で、総合スコアの直近推移（↑上昇 / ↓下降 / →横ばい）を表示
+- スクリーニング画面（`http://127.0.0.1:5100/screening`）で1株あたりの株価（円建て、USはUSD/JPY換算）を表示し、株価帯でフィルタ・列ヘッダでソート可能。銘柄はブックマーク（`screening_bookmarks.csv`）し、★フィルタで絞り込み。気になった銘柄は行の「Prompt」リンク、または「Prompt（表示中／★のみ）」から Prompt Builder へ渡して購入相談プロンプトを作成可能（`daily_signals` ベース。シグナル通知が無い watch 銘柄も可）
 - 月間損失・連続損失が設定ラインに達した場合、新規エントリーを自動停止
 - ペーパートレードはシグナル当日の終値ではなく、翌営業日の始値で仮想約定し、約定当日は利確・損切り判定を行わない
+- Prompt Builder（`http://127.0.0.1:5100/prompt-builder`）：売却・購入判断などの相談用プロンプトを生成。購入判断テーマでは複数の買い候補をまとめて選択し、比較・優先順位の相談が可能。Screening から `?from=screening&tickers=...` で遷移すると銘柄が自動選択される
 - LLMアドバイザー（任意）：検討候補・保有銘柄のデータに加え、直近の市場ニュースをChatGPT・Claude・Geminiに自動送信し、フィードバックをSlack通知に表示
 - PayPayポイント運用トラッキング（任意）：コース別のポイント残高・損益率をSlack通知に表示、S&P 500/NASDAQのMA25に基づく追加・引き出しタイミングシグナルを提供。ダッシュボード（`http://127.0.0.1:5100/paypay`）から残高の確認・編集が可能
 
@@ -122,7 +126,12 @@ python -m scripts.add_trade_result      # トレード結果の手動記録
 python -m scripts.fetch_historical      # 履歴データの再取得（冪等）
 python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30  # バックテスト
 python -m scripts.update_paper_trades --summary  # ペーパートレードのサマリー表示
+python -m scripts.cleanup_duplicate_trade_signals  # 通知ログ重複の確認（dry-run）
 ```
+
+`trade_signal_log` の既存重複を整理する場合は、dry-run の件数を確認してから
+`python -m scripts.cleanup_duplicate_trade_signals --apply` を実行する。
+`--apply` 時は処理前にDBバックアップを作成する。
 
 ### 保有銘柄の管理
 
@@ -336,6 +345,10 @@ python -m unittest tests.test_notifier      # 個別テスト
 - JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
 - J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
 - Screening List の日付は `daily_signals` の最新日。流動性フィルタが 0 件だと更新されない（`allow_unknown_market_cap` が OFF かつ時価総額未登録のとき等）。Slack に警告が出る
+- 通知へ渡す候補数は `signal.max_entry_sets_per_batch` で指定する。全パターン合算のスコア上位N件で、旧キー `max_candidates_per_pattern` も後方互換として読み込む
+- スクリーニング件数と `daily_signals` 保存件数が一致しない場合、バッチは `partial_failure` として記録する
+- 同種バッチの `running` 状態が3時間を超えて残っている場合、次回バッチ開始時に `failed` として回収する
 - US の発行済株式数は月次バッチで EODHD から段階的に補完（`screening.us_shares_refresh_max_per_monthly`）。JP は J-Quants 月次更新
+- US銘柄マスタでは ETF、投資信託、REIT、優先株、権利、ワラント、ユニット、OTC、清算銘柄等をスクリーニング対象外にする
 - Webダッシュボードは `127.0.0.1` のみで待ち受け。外部公開は不可
 - 初回セットアップ時に `fetch_historical` で3年分の履歴取得が必要（数時間かかる）

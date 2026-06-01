@@ -16,6 +16,7 @@ Slack 通知のレポートリンクをクリック → ブラウザで保有銘
   /api/market-timeline - 市場環境推移 JSON
   /api/perf-monthly    - 月別損益 JSON
   /api/perf-cumulative - 累積損益 JSON
+  /api/benchmark-comparison - 総資産 vs S&P500 ベンチマーク比較 JSON
   /api/sector-alloc    - セクター配分 JSON
   /api/screening-funnel - スクリーニングファネル統計 JSON
   /api/recent-signals  - 指定ティッカーの直近シグナル JSON（GET）
@@ -89,6 +90,21 @@ def _get_usdjpy() -> float:
     _fx_cache["USDJPY"] = (fallback, now)
     logger.warning(f"USD/JPY レート取得失敗。フォールバック値使用: {fallback}")
     return fallback
+
+
+def _close_price_jpy(close: float | None, market: str, usdjpy: float) -> float | None:
+    """終値を1株あたりの円建て価格に変換する。JP はそのまま、US は USD/JPY で換算。"""
+    if close is None:
+        return None
+    try:
+        price = float(close)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(price) or price <= 0:
+        return None
+    if (market or "").upper() == "JP":
+        return price
+    return price * usdjpy
 
 
 app = Flask(
@@ -219,6 +235,7 @@ def health():
 def report():
     """メインダッシュボードページ"""
     today_str = date.today().strftime("%Y-%m-%d")
+    score_trend_map: dict = {}
 
     with get_connection() as conn:
         market_env = fetch_one(
@@ -350,6 +367,15 @@ def report():
         except Exception:
             data_insufficient = 0
 
+        from src.score_trend import fetch_score_trends_for_tickers
+
+        _trend_tickers = list({
+            dict(h)["ticker"] for h in holdings
+        } | {
+            dict(bc)["ticker"] for bc in buy_candidates
+        })
+        score_trend_map = fetch_score_trends_for_tickers(conn, _trend_tickers)
+
     # 最新ポートフォリオスナップショット
     try:
         from src.portfolio_snapshot import get_latest_snapshot
@@ -374,6 +400,7 @@ def report():
         llm_feedback, last_batch, data_insufficient,
         snapshot=latest_snapshot, buy_candidates=buy_candidates,
         holdings_eval_map=holdings_eval_map,
+        score_trend_map=score_trend_map,
     )
 
 
@@ -472,9 +499,20 @@ def stock_detail(ticker: str):
         # リスク指標: キャッシュ確認
         risk_data = _get_or_calc_risk(conn, ticker, today_str, master.get("market", "JP"))
 
+        from src.score_trend import (
+            compute_score_trend,
+            fetch_score_history,
+            format_score_trend_badge,
+        )
+
+        score_history = fetch_score_history(conn, ticker, limit=14)
+        score_trend = compute_score_trend([h["final_score"] for h in score_history])
+
     return _render_stock_detail(
         ticker, master, tech, price, prev_price, range_52w,
         score, signals, fundamentals, risk_data,
+        score_trend=score_trend,
+        score_history=score_history,
     )
 
 
@@ -580,6 +618,12 @@ def screening():
                ORDER BY d.final_score DESC""",
         )
 
+        from src.score_trend import fetch_score_trends_for_tickers
+
+        score_trend_map = fetch_score_trends_for_tickers(
+            conn, [dict(r)["ticker"] for r in rows],
+        )
+
     # 表示用日付文字列
     if len(target_dates) == 1:
         display_date = target_dates[0]
@@ -587,7 +631,7 @@ def screening():
         parts = [f"{m}: {d}" for m, d in sorted(date_map.items())]
         display_date = " / ".join(parts)
 
-    return _render_screening(display_date, [dict(r) for r in rows])
+    return _render_screening(display_date, [dict(r) for r in rows], score_trend_map)
 
 
 
@@ -662,8 +706,16 @@ register_api_routes(
 # ============================================================
 
 
-def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market: int = 3) -> list[dict]:
+def _build_candidate_cards(
+    buy_candidates: list[dict],
+    mode: str,
+    max_per_market: int = 3,
+    score_trend_map: dict | None = None,
+) -> list[dict]:
     """買い候補カード用のテンプレートデータを構築する。JP/US各最大 max_per_market 件。"""
+    from src.score_trend import format_score_cell_html
+
+    score_trend_map = score_trend_map or {}
     # スコア降順で JP/US それぞれ上位 max_per_market 件に絞る
     jp_count = us_count = 0
     filtered: list[dict] = []
@@ -701,6 +753,11 @@ def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market
         fscore = bc.get("final_score")
         score_pct = min(int(fscore), 100) if fscore is not None else 0
         score_str = f"{fscore:.0f}" if fscore is not None else "—"
+        score_html = format_score_cell_html(
+            float(fscore) if fscore is not None else None,
+            score_trend_map.get(bc["ticker"]),
+            score_str=score_str,
+        )
         frank = bc.get("recommend_rank") or "—"
         rank_css = _RANK_CSS.get(frank, "rank-default")
 
@@ -733,6 +790,7 @@ def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market
             "source_css": source_css,
             "score_pct": score_pct,
             "score_str": score_str,
+            "score_html": score_html,
             "rank": frank,
             "rank_css": rank_css,
             "entry_str": f"{entry:,.2f}",
@@ -745,10 +803,13 @@ def _build_candidate_cards(buy_candidates: list[dict], mode: str, max_per_market
     return cards
 
 
-def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None, holdings_eval_map=None):
+def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None, holdings_eval_map=None, score_trend_map=None):
+    from src.score_trend import format_score_cell_html
+
     market_env = dict(market_env) if market_env else {}
     holdings = [dict(h) for h in holdings]
     holdings_eval_map = holdings_eval_map or {}
+    score_trend_map = score_trend_map or {}
     candidates = [dict(c) for c in candidates]
     market_history = [dict(m) for m in market_history]
     llm_feedback = [dict(f) for f in llm_feedback] if llm_feedback else []
@@ -1039,6 +1100,11 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         fscore = h.get("final_score")
         frank = h.get("recommend_rank")
         score_str = f"{fscore:.0f}" if fscore is not None else "—"
+        score_html = format_score_cell_html(
+            float(fscore) if fscore is not None else None,
+            score_trend_map.get(h["ticker"]),
+            score_str=score_str,
+        )
         rank_css = _RANK_CSS.get(frank, "rank-default")
         rank_html = f"<span class='rank-badge {rank_css}'>{escape(frank or '—')}</span>"
 
@@ -1136,6 +1202,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "atr_str": atr_str,
             "ma25_dev_str": ma25_dev_str,
             "score_str": score_str,
+            "score_html": score_html,
             "rank_html": rank_html,
             "trend_str": trend_str,
             "offensive_html": offensive_html,
@@ -1180,7 +1247,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
     # --- 買い候補カード構築 ---
     buy_cands = [dict(b) for b in buy_candidates] if buy_candidates else []
-    buy_candidate_cards = _build_candidate_cards(buy_cands, mode)
+    buy_candidate_cards = _build_candidate_cards(buy_cands, mode, score_trend_map=score_trend_map)
     buy_candidate_date = buy_cands[0].get("signal_date", "") if buy_cands else ""
     buy_candidate_is_today = (buy_candidate_date == today_str)
     is_market_caution = mode in ("caution", "full_caution")
@@ -1242,7 +1309,9 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 # ============================================================
 
 def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
-                         score, signals, fundamentals, risk_data):
+                         score, signals, fundamentals, risk_data,
+                         score_trend=None, score_history=None):
+    from src.score_trend import format_score_trend_badge, score_trend_label
     name = master.get("name", "")
     market = master.get("market", "")
     sector = master.get("sector") or "—"
@@ -1276,6 +1345,12 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
     frank = score.get("recommend_rank") or "—"
     reason = score.get("recommend_reason") or "—"
     rank_css = _RANK_CSS.get(frank, "rank-default")
+    score_trend_badge = format_score_trend_badge(score_trend or {})
+    score_trend_label_jp = score_trend_label((score_trend or {}).get("direction", "unknown"))
+    score_history_rows = [
+        {"date": h["date"], "score": f"{h['final_score']:.0f}"}
+        for h in (score_history or [])[-8:]
+    ]
 
     # ファンダメンタルズ
     has_fundamentals = bool(fundamentals and fundamentals.get("per"))
@@ -1340,6 +1415,9 @@ def _render_stock_detail(ticker, master, tech, price, prev_price, range_52w,
         fscore=fscore,
         frank=frank,
         rank_css=rank_css,
+        score_trend_badge=score_trend_badge,
+        score_trend_label=score_trend_label_jp,
+        score_history_rows=score_history_rows,
         reason=reason,
         rsi_str=rsi_str,
         rsi_width=rsi_width,
@@ -1452,7 +1530,26 @@ def _cond_dot(value: int | None, label: str) -> str:
     return f'<span class="tip cond-dot {css}" data-tip="{label}"></span>'
 
 
-def _render_screening(target_date: str, rows: list[dict]) -> str:
+def _bookmark_btn_html(ticker: str, name: str, market: str, bookmarked: bool) -> str:
+    """Screening 行用のブックマークボタン HTML。"""
+    css = "bookmark-btn bookmark-btn-on" if bookmarked else "bookmark-btn"
+    star = "★" if bookmarked else "☆"
+    title = "ブックマーク解除" if bookmarked else "ブックマークに追加"
+    return (
+        f'<button type="button" class="{css}" data-ticker="{escape(ticker)}"'
+        f' data-name="{escape(name)}" data-market="{escape(market)}"'
+        f' title="{title}" aria-label="{title}" aria-pressed="{"true" if bookmarked else "false"}">'
+        f"{star}</button>"
+    )
+
+
+def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict | None = None) -> str:
+    from src.score_trend import format_score_cell_html
+    from src.screening_bookmarks import get_bookmark_tickers
+
+    usdjpy = _get_usdjpy()
+    score_trend_map = score_trend_map or {}
+    bookmark_tickers = get_bookmark_tickers()
     total = len(rows)
     cand_cnt = sum(1 for r in rows if r["label"] == "candidate")
     watch_cnt = sum(1 for r in rows if r["label"] == "watch")
@@ -1467,6 +1564,7 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         pattern = r.get("pattern") or ""
         label = r.get("label") or "skip"
         close = r.get("close")
+        price_jpy = _close_price_jpy(close, market, usdjpy)
         rsi = r.get("rsi14")
         vol_ratio = r.get("vol_ratio")
         fscore = r.get("final_score")
@@ -1492,6 +1590,12 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
 
         # Score 表示
         score_str = f"{fscore:.0f}" if fscore is not None else "—"
+        score_html = format_score_cell_html(
+            float(fscore) if fscore is not None else None,
+            score_trend_map.get(ticker),
+            score_str=score_str,
+        )
+        trend_dir = (score_trend_map.get(ticker) or {}).get("direction", "")
 
         # 買い判定 — 条件フラグから未達の条件名を列挙
         reason_text = r.get("recommend_reason") or ""
@@ -1515,6 +1619,15 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         # 理由
         reason_html = f'<span class="reason-text">{escape(reason_text)}</span>' if reason_text else "—"
 
+        # 株価（円/株）
+        if price_jpy is not None:
+            price_jpy_rounded = int(round(price_jpy))
+            price_jpy_str = f"{price_jpy_rounded:,}円"
+            price_jpy_attr = str(price_jpy_rounded)
+        else:
+            price_jpy_str = "—"
+            price_jpy_attr = ""
+
         # 詳細列
         close_str = f"{close:,.2f}" if close else "—"
         rsi_str = f"{rsi:.0f}" if rsi is not None else "—"
@@ -1526,17 +1639,33 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
                 rsi_css = "rsi-low"
         vr_str = f"{vol_ratio:.1f}x" if vol_ratio is not None else "—"
 
+        is_bm = ticker in bookmark_tickers
+        bookmark_html = _bookmark_btn_html(ticker, name, market, is_bm)
+
+        prompt_href = (
+            f"/prompt-builder?from=screening&theme=buy&tickers={escape(ticker)}"
+        )
         row_html = (
-            f'<tr data-label="{escape(label)}" data-market="{escape(market)}"'
-            f' data-pattern="{escape(pattern)}" data-score="{fscore or 0}">'
-            f'<td><a class="ticker-link" href="/stock/{escape(ticker)}">{escape(ticker)}</a></td>'
+            f'<tr data-ticker="{escape(ticker)}" data-label="{escape(label)}"'
+            f' data-market="{escape(market)}"'
+            f' data-pattern="{escape(pattern)}" data-score="{fscore or 0}"'
+            f' data-price-jpy="{escape(price_jpy_attr)}"'
+            f' data-score-trend="{escape(trend_dir)}"'
+            f' data-bookmarked="{"1" if is_bm else "0"}">'
+            f'<td class="bookmark-cell">{bookmark_html}</td>'
+            f'<td class="screening-ticker-cell">'
+            f'<a class="ticker-link" href="/stock/{escape(ticker)}">{escape(ticker)}</a>'
+            f'<a class="screening-prompt-link tip" href="{prompt_href}"'
+            f' data-tip="Prompt Builder で購入相談プロンプトを作成">Prompt</a>'
+            f"</td>"
             f'<td class="mobile-hide">{escape(name)}</td>'
             f'<td class="mobile-hide">{escape(market)}</td>'
             f"<td>{pat_html}</td>"
             f'<td><span class="rank-badge {lbl_css}">{lbl_text}</span></td>'
             f'<td class="mobile-hide" style="white-space:nowrap">{conds_html}</td>'
-            f"<td>{score_str}</td>"
+            f"<td>{score_html}</td>"
             f'<td><span class="rank-badge {rank_css}">{escape(frank)}</span></td>'
+            f'<td class="price-jpy-col text-end">{price_jpy_str}</td>'
             f'<td class="mobile-hide">{verdict_detail}</td>'
             f'<td class="mobile-hide">{reason_html}</td>'
             f'<td class="detail-col">{close_str}</td>'
@@ -1555,6 +1684,8 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         cand_cnt=cand_cnt,
         watch_cnt=watch_cnt,
         skip_cnt=skip_cnt,
+        bookmark_cnt=len(bookmark_tickers),
+        usdjpy_rate=usdjpy,
         table_rows=table_rows,
     )
 
@@ -1659,7 +1790,7 @@ def _build_rules_context() -> dict:
             "rules": [
                 f"パターンAは上昇トレンド、52週高値接近、出来高増、RSI {_cfg_float(sig, 'pattern_a_rsi_min', 50):.0f}-{_cfg_float(sig, 'pattern_a_rsi_max', 70):.0f} を確認します。",
                 f"パターンBは上昇トレンド中の押し目、MA25反発、RSI {_cfg_float(sig, 'pattern_b_rsi_min', 40):.0f}-{_cfg_float(sig, 'pattern_b_rsi_max', 60):.0f} を確認します。",
-                f"各パターンの通知上限は {_cfg_int(sig, 'max_candidates_per_pattern', 3)}件です。",
+                f"1バッチの通知上限は {_cfg_int(sig, 'max_entry_sets_per_batch', _cfg_int(sig, 'max_candidates_per_pattern', 3))}件です。",
             ],
         },
         {
@@ -1875,75 +2006,9 @@ def _dedup_candidates(rows: list[dict]) -> list[dict]:
     )
 
 
-@app.route("/prompt-builder")
-def prompt_builder_page():
-    """プロンプト作成ページ"""
-    today_str = date.today().strftime("%Y-%m-%d")
-
-    with get_connection() as conn:
-        holdings_rows = fetch_all(
-            conn,
-            """
-            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
-                   h.quantity, h.stop_loss_price,
-                   (SELECT adj_close FROM price_history
-                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
-                    ORDER BY date DESC LIMIT 1) AS current_price,
-                   (SELECT target_price FROM trade_signal_log
-                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
-                   t.rsi14 AS tech_rsi14, t.ma5 AS tech_ma5, t.ma25 AS tech_ma25,
-                   t.ma75 AS tech_ma75, t.ma200 AS tech_ma200
-            FROM holdings h
-            LEFT JOIN technical_snapshot t
-              ON t.ticker = h.ticker
-              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
-            WHERE h.is_closed = 0
-            ORDER BY h.entry_date
-            """,
-            (today_str,),
-        )
-        candidates_rows = fetch_all(
-            conn,
-            """
-            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
-                   tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
-                   tsl.target_price, tsl.recommended_amount, tsl.signal_date,
-                   tsl.conditions_met,
-                   ds.final_score, ds.recommend_rank,
-                   ds.label AS ds_label,
-                   ds.trend_score AS _trend_score,
-                   ds.pattern_a_score AS _pattern_a_score,
-                   ds.pattern_b_score AS _pattern_b_score,
-                   ds.pattern_c_score AS _pattern_c_score,
-                   ds.liquidity_score AS _liquidity_score,
-                   t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
-                   t.ma75 AS _ma75, t.ma200 AS _ma200,
-                   t.vol_20d_avg, t.high_52w AS _high_52w,
-                   ph.adj_close AS _close,
-                   CASE WHEN t.vol_20d_avg > 0
-                        THEN ph.volume * 1.0 / t.vol_20d_avg
-                        ELSE NULL END AS _vol_ratio
-            FROM trade_signal_log tsl
-            LEFT JOIN daily_signals ds
-              ON ds.ticker = tsl.ticker AND ds.date = tsl.signal_date
-            LEFT JOIN technical_snapshot t
-              ON t.ticker = tsl.ticker
-              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = tsl.ticker)
-            LEFT JOIN price_history ph
-              ON ph.ticker = tsl.ticker
-              AND ph.date = (SELECT MAX(date) FROM price_history WHERE ticker = tsl.ticker AND is_holiday = 0)
-            WHERE tsl.signal_date >= date(?, '-7 days')
-            ORDER BY tsl.signal_date DESC, tsl.ticker
-            """,
-            (today_str,),
-        )
-        market_env = fetch_one(
-            conn,
-            "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
-        )
-
+def _enrich_holdings_for_prompt(rows) -> list[dict]:
     holdings = []
-    for row in holdings_rows:
+    for row in rows:
         h = dict(row)
         entry = h.get("entry_price") or 0
         current = h.get("current_price") or 0
@@ -1965,11 +2030,134 @@ def prompt_builder_page():
                 h["label"] = "sl_near"
         h["reasons"] = []
         holdings.append(h)
+    return holdings
 
+
+def _load_prompt_data(
+    conn,
+    today_str: str,
+    screening_tickers: list[str] | None = None,
+    *,
+    prefer_screening: bool = False,
+) -> tuple[list[dict], list[dict], dict]:
+    """Prompt Builder 用の保有・候補・市場環境を読み込む。"""
+    from src.prompt_screening import (
+        count_open_holdings,
+        enrich_tickers_from_daily_signals,
+        merge_prompt_candidates,
+    )
+
+    holdings_rows = fetch_all(
+        conn,
+        """
+        SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
+               h.quantity, h.stop_loss_price,
+               (SELECT adj_close FROM price_history
+                WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
+                ORDER BY date DESC LIMIT 1) AS current_price,
+               (SELECT target_price FROM trade_signal_log
+                WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
+               t.rsi14 AS tech_rsi14, t.ma5 AS tech_ma5, t.ma25 AS tech_ma25,
+               t.ma75 AS tech_ma75, t.ma200 AS tech_ma200
+        FROM holdings h
+        LEFT JOIN technical_snapshot t
+          ON t.ticker = h.ticker
+          AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
+        WHERE h.is_closed = 0
+        ORDER BY h.entry_date
+        """,
+        (today_str,),
+    )
+    candidates_rows = fetch_all(
+        conn,
+        """
+        SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
+               tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
+               tsl.target_price, tsl.recommended_amount, tsl.signal_date,
+               tsl.conditions_met,
+               ds.final_score, ds.recommend_rank,
+               ds.label AS ds_label,
+               ds.trend_score AS _trend_score,
+               ds.pattern_a_score AS _pattern_a_score,
+               ds.pattern_b_score AS _pattern_b_score,
+               ds.pattern_c_score AS _pattern_c_score,
+               ds.liquidity_score AS _liquidity_score,
+               t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
+               t.ma75 AS _ma75, t.ma200 AS _ma200,
+               t.vol_20d_avg, t.high_52w AS _high_52w,
+               ph.adj_close AS _close,
+               CASE WHEN t.vol_20d_avg > 0
+                    THEN ph.volume * 1.0 / t.vol_20d_avg
+                    ELSE NULL END AS _vol_ratio
+        FROM trade_signal_log tsl
+        LEFT JOIN daily_signals ds
+          ON ds.ticker = tsl.ticker AND ds.date = tsl.signal_date
+        LEFT JOIN technical_snapshot t
+          ON t.ticker = tsl.ticker
+          AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = tsl.ticker)
+        LEFT JOIN price_history ph
+          ON ph.ticker = tsl.ticker
+          AND ph.date = (SELECT MAX(date) FROM price_history WHERE ticker = tsl.ticker AND is_holiday = 0)
+        WHERE tsl.signal_date >= date(?, '-7 days')
+        ORDER BY tsl.signal_date DESC, tsl.ticker
+        """,
+        (today_str,),
+    )
+    market_env = fetch_one(
+        conn,
+        "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
+    )
+
+    holdings = _enrich_holdings_for_prompt(holdings_rows)
     candidates = _dedup_candidates([dict(r) for r in candidates_rows])
+
+    if screening_tickers:
+        screening = enrich_tickers_from_daily_signals(
+            conn,
+            screening_tickers,
+            open_holdings_count=count_open_holdings(conn),
+        )
+        candidates = merge_prompt_candidates(
+            candidates, screening, prefer_screening=prefer_screening,
+        )
+
     me = dict(market_env) if market_env else {}
+    return holdings, candidates, me
+
+
+def _parse_screening_tickers_param(raw: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        t = part.strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+@app.route("/prompt-builder")
+def prompt_builder_page():
+    """プロンプト作成ページ"""
+    today_str = date.today().strftime("%Y-%m-%d")
+    from_screening = request.args.get("from") == "screening"
+    prefill_tickers = _parse_screening_tickers_param(request.args.get("tickers", ""))
+
+    with get_connection() as conn:
+        holdings, candidates, me = _load_prompt_data(
+            conn,
+            today_str,
+            prefill_tickers if prefill_tickers else None,
+            prefer_screening=from_screening,
+        )
 
     from src.prompt_builder import THEMES
+
+    prefill = {
+        "from_screening": from_screening,
+        "theme": request.args.get("theme", "buy"),
+        "tickers": prefill_tickers,
+    }
     return render_template(
         "prompt_builder.html",
         active_page="prompt_builder",
@@ -1977,6 +2165,7 @@ def prompt_builder_page():
         candidates=candidates,
         market_env=me,
         themes=THEMES,
+        prefill=prefill,
     )
 
 
@@ -1991,97 +2180,21 @@ def api_prompt_builder_generate():
 
     theme = data.get("theme", "")
     tickers = data.get("tickers", [])
-    options = data.get("options", {})
+    options = dict(data.get("options") or {})
     today_str = date.today().strftime("%Y-%m-%d")
+    from_screening = bool(options.get("from_screening"))
 
     with get_connection() as conn:
-        holdings_rows = fetch_all(
+        holdings, candidates, me = _load_prompt_data(
             conn,
-            """
-            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
-                   h.quantity, h.stop_loss_price,
-                   (SELECT adj_close FROM price_history
-                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
-                    ORDER BY date DESC LIMIT 1) AS current_price,
-                   (SELECT target_price FROM trade_signal_log
-                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
-                   t.rsi14 AS tech_rsi14, t.ma5 AS tech_ma5, t.ma25 AS tech_ma25,
-                   t.ma75 AS tech_ma75, t.ma200 AS tech_ma200
-            FROM holdings h
-            LEFT JOIN technical_snapshot t
-              ON t.ticker = h.ticker
-              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
-            WHERE h.is_closed = 0
-            ORDER BY h.entry_date
-            """,
-            (today_str,),
-        )
-        candidates_rows = fetch_all(
-            conn,
-            """
-            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern,
-                   tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
-                   tsl.target_price, tsl.recommended_amount, tsl.signal_date,
-                   tsl.conditions_met,
-                   ds.final_score, ds.recommend_rank,
-                   ds.label AS ds_label,
-                   ds.trend_score AS _trend_score,
-                   ds.pattern_a_score AS _pattern_a_score,
-                   ds.pattern_b_score AS _pattern_b_score,
-                   ds.pattern_c_score AS _pattern_c_score,
-                   ds.liquidity_score AS _liquidity_score,
-                   t.rsi14 AS _rsi14, t.ma5 AS _ma5, t.ma25 AS _ma25,
-                   t.ma75 AS _ma75, t.ma200 AS _ma200,
-                   t.vol_20d_avg, t.high_52w AS _high_52w,
-                   ph.adj_close AS _close,
-                   CASE WHEN t.vol_20d_avg > 0
-                        THEN ph.volume * 1.0 / t.vol_20d_avg
-                        ELSE NULL END AS _vol_ratio
-            FROM trade_signal_log tsl
-            LEFT JOIN daily_signals ds
-              ON ds.ticker = tsl.ticker AND ds.date = tsl.signal_date
-            LEFT JOIN technical_snapshot t
-              ON t.ticker = tsl.ticker
-              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = tsl.ticker)
-            LEFT JOIN price_history ph
-              ON ph.ticker = tsl.ticker
-              AND ph.date = (SELECT MAX(date) FROM price_history WHERE ticker = tsl.ticker AND is_holiday = 0)
-            WHERE tsl.signal_date >= date(?, '-7 days')
-            ORDER BY tsl.signal_date DESC, tsl.ticker
-            """,
-            (today_str,),
-        )
-        market_env = fetch_one(
-            conn,
-            "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
+            today_str,
+            tickers if tickers else None,
+            prefer_screening=from_screening,
         )
 
-    holdings = []
-    for row in holdings_rows:
-        h = dict(row)
-        entry = h.get("entry_price") or 0
-        current = h.get("current_price") or 0
-        h["pnl_pct"] = ((current - entry) / entry * 100) if entry > 0 else 0
-        if h.get("entry_date"):
-            try:
-                ed = date.fromisoformat(h["entry_date"])
-                h["holding_days"] = (date.today() - ed).days
-            except (ValueError, TypeError):
-                h["holding_days"] = "?"
-        else:
-            h["holding_days"] = "?"
-        h["label"] = "hold"
-        if h.get("stop_loss_price") and current > 0:
-            sl = h["stop_loss_price"]
-            if current <= sl:
-                h["label"] = "forced_stop"
-            elif (current - sl) / current * 100 < 2.0:
-                h["label"] = "sl_near"
-        h["reasons"] = []
-        holdings.append(h)
+    if from_screening:
+        options["from_screening"] = True
 
-    candidates = _dedup_candidates([dict(r) for r in candidates_rows])
-    me = dict(market_env) if market_env else {}
     result = generate_prompt(theme, tickers, holdings, candidates, me, options)
     return jsonify({"success": True, **result})
 

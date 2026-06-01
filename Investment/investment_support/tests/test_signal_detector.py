@@ -29,7 +29,11 @@ _CONFIG_MOCK = {
 }
 
 with patch("src.config.CONFIG", _CONFIG_MOCK):
-    from src.signal_detector import detect_and_save_signals
+    from src.signal_detector import (
+        _max_entry_sets_per_batch,
+        diagnose_signal_save_count,
+        detect_and_save_signals,
+    )
 
 
 class DetectAndSaveSignalsMarketModeTests(unittest.TestCase):
@@ -258,6 +262,58 @@ class ScoringIntegrationTests(unittest.TestCase):
         self.assertLess(row["final_score"], 80)
         self.assertEqual(row["label"], "watch")
         self.assertEqual(result, [])
+
+
+class SignalDetectorConfigCompatibilityTests(unittest.TestCase):
+    """通知上限の新旧設定キー互換を確認する。"""
+
+    def test_legacy_max_candidates_key_is_still_supported(self):
+        with patch.dict(
+            "src.signal_detector._SIG",
+            {"max_candidates_per_pattern": "4"},
+            clear=True,
+        ):
+            self.assertEqual(_max_entry_sets_per_batch(), 4)
+
+    def test_new_max_entry_sets_key_has_priority(self):
+        with patch.dict(
+            "src.signal_detector._SIG",
+            {
+                "max_entry_sets_per_batch": "5",
+                "max_candidates_per_pattern": "2",
+            },
+            clear=True,
+        ):
+            self.assertEqual(_max_entry_sets_per_batch(), 5)
+
+
+class SignalSaveHealthTests(unittest.TestCase):
+    """daily_signals 保存件数の異常検知テスト。"""
+
+    def _mock_conn(self):
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=MagicMock())
+        cm.__exit__ = MagicMock(return_value=False)
+        return cm
+
+    @patch("src.signal_detector.fetch_one", return_value={"c": 2})
+    @patch("src.signal_detector.get_connection")
+    def test_mismatch_returns_alert(self, mock_conn, _mock_fetch):
+        mock_conn.return_value = self._mock_conn()
+
+        alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 3)
+
+        self.assertIn("期待=3", alert)
+        self.assertIn("実績=2", alert)
+
+    @patch("src.signal_detector.fetch_one", return_value={"c": 3})
+    @patch("src.signal_detector.get_connection")
+    def test_matching_count_returns_none(self, mock_conn, _mock_fetch):
+        mock_conn.return_value = self._mock_conn()
+
+        alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 3)
+
+        self.assertIsNone(alert)
 
 
 if __name__ == "__main__":

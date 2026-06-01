@@ -165,6 +165,14 @@ def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:
 
         # 警告フラグは保存しない（_ プレフィックスで除外）
         db_row = {k: v for k, v in entry_set.items() if not k.startswith("_")}
+        existing_id = _find_existing_entry_set_id(db_row)
+        if existing_id is not None:
+            logger.info(
+                f"エントリーセット保存スキップ（登録済み）: "
+                f"{entry_set['ticker']} {entry_set['signal_date']} [{entry_set['pattern']}]"
+            )
+            continue
+
         with get_connection() as conn:
             entry_set["id"] = insert_one(conn, "trade_signal_log", db_row)
 
@@ -190,6 +198,31 @@ def _get_trade_pause_reason(candidates: list[dict]) -> str | None:
 # ============================================================
 # ヘルパー
 # ============================================================
+
+def _find_existing_entry_set_id(entry_set: dict) -> int | None:
+    """同一日に自動生成済みのエントリーセットがあれば id を返す。"""
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            """
+            SELECT id
+            FROM trade_signal_log
+            WHERE signal_date = ?
+              AND ticker = ?
+              AND market = ?
+              AND pattern = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (
+                entry_set["signal_date"],
+                entry_set["ticker"],
+                entry_set["market"],
+                entry_set["pattern"],
+            ),
+        )
+    return int(row["id"]) if row else None
+
 
 def _count_open_holdings() -> int:
     """保有中（未決済）のポジション数を返す。"""

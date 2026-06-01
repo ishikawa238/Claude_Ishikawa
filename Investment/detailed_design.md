@@ -879,7 +879,7 @@ investment_support/
     "pattern_b_lookback_days": 5,
     "atr_stop_multiplier": 2.0,
     "risk_reward_ratio": 2.0,
-    "max_candidates_per_pattern": 3,
+    "max_entry_sets_per_batch": 3,
     "stop_loss_warning_min_pct": 1.0,
     "stop_loss_warning_max_pct": 15.0
   },

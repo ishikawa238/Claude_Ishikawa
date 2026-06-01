@@ -10,8 +10,8 @@
 本モジュールはプロジェクト固有の接続設定と運用機能を追加する。
 """
 
-import shutil
-from contextlib import contextmanager
+import sqlite3
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -75,7 +75,7 @@ def log_error(
 
 def backup_database() -> bool:
     """
-    DB ファイルを backup_dir にタイムスタンプ付きでコピーする。
+    DB を backup_dir にタイムスタンプ付きでスナップショット保存する。
     古いバックアップ（retention_days 超過分）を削除する。
     返り値: 成功なら True、失敗なら False
     """
@@ -88,7 +88,10 @@ def backup_database() -> bool:
     backup_path = _BACKUP_DIR / f"investment_{timestamp}.db"
 
     try:
-        shutil.copy2(_DB_PATH, backup_path)
+        with closing(sqlite3.connect(_DB_PATH)) as source, closing(
+            sqlite3.connect(backup_path)
+        ) as target:
+            source.backup(target)
         logger.info(f"DBバックアップ完了: {backup_path}")
     except Exception as e:
         logger.error(f"DBバックアップ失敗: {e}")

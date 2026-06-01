@@ -107,6 +107,16 @@ AAPL,Apple Inc,US,185.5,2025-01-10,5,170.0,
 
 ---
 
+## 5.1 Screening ブックマーク（任意）
+
+`investment_support/screening_bookmarks.csv` に、スクリーニング画面で ☆ を押して登録した銘柄が保存される。未作成の場合は初回登録時に自動生成される。
+
+```
+ticker,name,market,memo,added_at
+```
+
+---
+
 ## 6. 動作確認
 
 DB初期化後、以下のコマンドでテーブル一覧を確認できる。

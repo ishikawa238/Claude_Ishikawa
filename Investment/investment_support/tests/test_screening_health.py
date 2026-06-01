@@ -84,6 +84,7 @@ class ScreeningHealthTestCase(unittest.TestCase):
             patch("src.data_store.get_connection", _get_test_connection),
             patch("src.market_filter.get_connection", _get_test_connection),
             patch("src.shares_outstanding.get_connection", _get_test_connection),
+            patch("src.trading_calendar.get_connection", _get_test_connection),
         ]
         for p in cls._patches:
             p.start()

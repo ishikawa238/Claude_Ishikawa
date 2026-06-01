@@ -131,6 +131,7 @@ def _evening_patches(**overrides) -> list:
         "scripts.batch_evening_jp._fetch_jp_daily_with_status": MagicMock(
             return_value=_empty_price_result(),
         ),
+        "scripts.batch_evening_jp.resolve_snapshot_date": MagicMock(return_value=None),
         "scripts.batch_evening_jp.calculate_and_save_index_mas": MagicMock(),
         "scripts.batch_evening_jp.judge_market_environment": MagicMock(return_value={"mode": "normal"}),
         "scripts.batch_evening_jp.calculate_and_save_snapshots": MagicMock(),

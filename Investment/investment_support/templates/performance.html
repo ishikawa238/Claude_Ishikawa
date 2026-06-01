@@ -119,6 +119,62 @@
   </div>
 </div>
 
+<!-- S&P500 ベンチマーク比較 -->
+<div class="section mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <h2 class="mb-0">S&amp;P500 との比較</h2>
+    <div class="d-flex align-items-center gap-2">
+      <label class="meta-small mb-0" for="benchmarkDays">期間</label>
+      <select id="benchmarkDays" class="form-select form-select-sm" style="width:auto">
+        <option value="90">直近90日</option>
+        <option value="180">直近180日</option>
+        <option value="365" selected>直近1年</option>
+      </select>
+    </div>
+  </div>
+  <p class="meta-small text-muted-custom mb-3">
+    個別株運用の総資産推移を、同じ期間の S&amp;P500（インデックス投資の目安）と並べて表示します。
+    開始日を 100 として正規化しています。入金控除後は <code>investment_goal.monthly_deposit_jpy</code> の毎月入金を差し引いた概算です。
+  </p>
+  <div id="benchmarkEmpty" class="alert alert-secondary" style="display:none"></div>
+  <div id="benchmarkPanel">
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label"><span class="tip" data-tip="期間の総資産増減率（入金・出金の影響を含む）">あなたの資産（総資産）</span></div>
+          <div class="value" id="bmPortfolioReturn">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label"><span class="tip" data-tip="毎月入金額を差し引いたあとの運用リターン（概算）">あなたの資産（入金控除後）</span></div>
+          <div class="value" id="bmPortfolioAdjReturn">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label">S&amp;P500</div>
+          <div class="value" id="bmSp500Return">—</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label"><span class="tip" data-tip="入金控除後リターン − S&P500リターン。プラスならインデックス投資より上回り">超過リターン</span></div>
+          <div class="value" id="bmExcessReturn">—</div>
+          <div class="meta-small" id="bmBeatLabel"></div>
+        </div>
+      </div>
+    </div>
+    <div class="summary-card">
+      <div class="label">資産推移 vs S&amp;P500（開始日 = 100）</div>
+      <div class="chart-container" style="height:280px">
+        <canvas id="benchmarkChart"></canvas>
+      </div>
+      <div class="meta-small text-muted-custom mt-2" id="benchmarkMeta"></div>
+    </div>
+  </div>
+</div>
+
 <!-- チャート -->
 <div class="row g-3 mb-4">
   <div class="col-md-6">

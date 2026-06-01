@@ -276,16 +276,25 @@ def fetch_exchange_symbols(market: str) -> list[dict]:
             continue
 
         ticker = ticker_raw.replace(".T", "").replace(".US", "").strip()
+        name = (r.get("Name") or "").strip()
         asset_type = (r.get("Type") or "").lower()
+        exchange_detail = " ".join(
+            str(r.get(key) or "")
+            for key in ("Exchange", "ExchangeCode", "ExchangeName")
+        ).strip()
 
-        is_excluded, exclude_reason = _check_excluded(asset_type)
+        is_excluded, exclude_reason = _check_excluded(
+            asset_type,
+            name=name,
+            exchange_detail=exchange_detail,
+        )
 
         sector_raw = (r.get("Sector") or "").strip() or None
         industry_raw = (r.get("Industry") or "").strip() or None
 
         rows.append({
             "ticker":             ticker,
-            "name":               (r.get("Name") or "").strip(),
+            "name":               name,
             "market":             market,
             "exchange":           exchange,
             "shares_outstanding": None,
@@ -407,20 +416,51 @@ def _classify_jpx_segment(segment: str) -> tuple[bool, Optional[str]]:
     return False, None
 
 
-def _check_excluded(asset_type: str) -> tuple[bool, Optional[str]]:
+def _check_excluded(
+    asset_type: str,
+    *,
+    name: str = "",
+    exchange_detail: str = "",
+) -> tuple[bool, Optional[str]]:
     """
     資産タイプが対象外かどうかを判定する。
     返り値: (is_excluded: bool, reason: str or None)
     """
+    normalized_exchange = exchange_detail.lower()
+    if any(key in normalized_exchange for key in ("otc", "pink", "grey", "expert market")):
+        return True, "OTC"
+
     excluded_types = {
         "etf":             "ETF",
         "fund":            "投資信託",
         "reit":            "REIT",
-        "preferred stock": "優先株",
+        "preferred":       "優先株",
         "warrant":         "ワラント",
+        "right":           "権利",
+        "unit":            "ユニット",
+        "bond":            "債券",
+        "note":            "債券",
+        "option":          "オプション",
+        "certificate":     "証書",
     }
     for key, reason in excluded_types.items():
         if key in asset_type:
+            return True, reason
+
+    normalized_name = name.lower().strip()
+    if "liquidation" in normalized_name or "liquidating" in normalized_name:
+        return True, "清算銘柄"
+
+    excluded_name_suffixes = {
+        " warrant": "ワラント",
+        " warrants": "ワラント",
+        " right": "権利",
+        " rights": "権利",
+        " unit": "ユニット",
+        " units": "ユニット",
+    }
+    for suffix, reason in excluded_name_suffixes.items():
+        if normalized_name.endswith(suffix):
             return True, reason
     return False, None
 

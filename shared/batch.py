@@ -6,14 +6,51 @@
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from shared.db import insert_one
+
+STALE_RUNNING_MINUTES = 180
 
 
 def now_str() -> str:
     """現在時刻を ``YYYY-MM-DD HH:MM:SS`` 形式で返す。"""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def mark_stale_running_batches(
+    conn: sqlite3.Connection,
+    batch_type: str,
+    *,
+    stale_after_minutes: int = STALE_RUNNING_MINUTES,
+    now: datetime | None = None,
+) -> int:
+    """同種バッチの古い running レコードを failed に更新する。"""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(batch_run_log)").fetchall()
+    }
+    required = {"batch_type", "start_time", "end_time", "status"}
+    if not required.issubset(columns):
+        return 0
+
+    current = now or datetime.now()
+    threshold = current - timedelta(minutes=stale_after_minutes)
+    cursor = conn.execute(
+        """
+        UPDATE batch_run_log
+        SET status = 'failed', end_time = ?
+        WHERE batch_type = ?
+          AND status = 'running'
+          AND start_time IS NOT NULL
+          AND start_time < ?
+        """,
+        (
+            current.strftime("%Y-%m-%d %H:%M:%S"),
+            batch_type,
+            threshold.strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+    return cursor.rowcount
 
 
 def start_batch_log(
@@ -31,6 +68,7 @@ def start_batch_log(
         run_date: 実行日（"YYYY-MM-DD"）
         extra: 追加カラムの初期値（例: {"total_tickers": 0}）
     """
+    mark_stale_running_batches(conn, batch_type)
     row: dict = {
         "run_date": run_date,
         "batch_type": batch_type,

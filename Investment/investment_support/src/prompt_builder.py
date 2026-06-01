@@ -39,6 +39,8 @@ THEMES = {
 }
 
 _CAPITAL_CFG = CONFIG.get("capital", {})
+# 購入相談プロンプトに含める候補の上限（トークン肥大化防止）
+_MAX_BUY_PROMPT_TICKERS = 10
 
 # テクニカル用語の解説（初心者向けオプション）
 _GLOSSARY = (
@@ -156,20 +158,31 @@ def _build_buy_prompt(
     market_env: dict,
     options: dict,
 ) -> str:
-    """買い候補の購入判断プロンプト"""
-    target_ticker = tickers[0] if tickers else None
-    candidate = None
-    if target_ticker:
-        candidate = next((c for c in candidates if c.get("ticker") == target_ticker), None)
+    """買い候補の購入判断プロンプト（複数銘柄の同時相談に対応）"""
+    selected, truncated = _pick_items_by_tickers(
+        candidates, tickers, _MAX_BUY_PROMPT_TICKERS,
+    )
+    multi = len(selected) > 1
 
-    sections = [_system_instruction("buy")]
+    sections = [_system_instruction("buy", multi=multi, count=len(selected))]
 
     # 市場環境
     sections.append(_format_market_env_rich(market_env))
 
+    if options.get("from_screening"):
+        sections.append(
+            "## 出典\n"
+            "Screening List で選んだ銘柄です（daily_signals の最新スコア・テクニカルに基づく）。"
+        )
+
     # 対象候補データ
-    if candidate:
-        sections.append(_format_entry_sets_rich([candidate]))
+    if selected:
+        sections.append(_format_entry_sets_rich(selected))
+        if truncated:
+            sections.append(
+                f"※ 選択銘柄が {_MAX_BUY_PROMPT_TICKERS} 件を超えたため、"
+                f"先頭 {_MAX_BUY_PROMPT_TICKERS} 件のみ掲載しています。"
+            )
     else:
         sections.append("## 対象候補\n候補が選択されていません。")
 
@@ -187,14 +200,25 @@ def _build_buy_prompt(
 
     # 質問
     custom_q = options.get("custom_question", "").strip()
-    question = (
-        "## 質問\n"
-        "上記の買い候補について、以下の観点で分析してください：\n"
-        "1. テクニカル指標（MA配置・RSI・出来高）から見た買いシグナルの信頼性\n"
-        "2. エントリー価格・損切りライン・利確目標の妥当性\n"
-        "3. 推奨投入額と現在のポートフォリオバランスへの影響\n"
-        "4. 購入を見送るべき警戒要因があるか\n"
-    )
+    if multi:
+        question = (
+            "## 質問\n"
+            f"上記の買い候補 {len(selected)} 銘柄について、以下の観点で分析してください：\n"
+            "1. 各銘柄のテクニカル指標（MA配置・RSI・出来高）から見た買いシグナルの信頼性\n"
+            "2. 各銘柄のエントリー価格・損切りライン・利確目標の妥当性\n"
+            "3. 推奨投入額と現在のポートフォリオバランスへの影響\n"
+            "4. 購入を見送るべき警戒要因がある銘柄はどれか\n"
+            "5. 複数銘柄を同時に検討する場合の優先順位と資金配分の考え方\n"
+        )
+    else:
+        question = (
+            "## 質問\n"
+            "上記の買い候補について、以下の観点で分析してください：\n"
+            "1. テクニカル指標（MA配置・RSI・出来高）から見た買いシグナルの信頼性\n"
+            "2. エントリー価格・損切りライン・利確目標の妥当性\n"
+            "3. 推奨投入額と現在のポートフォリオバランスへの影響\n"
+            "4. 購入を見送るべき警戒要因があるか\n"
+        )
     if custom_q:
         question += f"\n追加の質問: {custom_q}\n"
     question += "\n具体的な根拠を挙げて、分かりやすい日本語で回答してください。投資助言ではなく、判断材料の整理としてお願いします。"
@@ -355,7 +379,27 @@ def _build_custom_prompt(
 # ヘルパー
 # ============================================================
 
-def _system_instruction(theme: str) -> str:
+def _pick_items_by_tickers(
+    items: list[dict],
+    tickers: list[str],
+    max_items: int | None = None,
+) -> tuple[list[dict], bool]:
+    """tickers の順序で items を抽出する。max_items 超過時は切り詰め、truncated=True。"""
+    if not tickers:
+        return [], False
+    by_ticker = {item.get("ticker"): item for item in items if item.get("ticker")}
+    ordered = [by_ticker[t] for t in tickers if t in by_ticker]
+    if max_items is not None and len(ordered) > max_items:
+        return ordered[:max_items], True
+    return ordered, False
+
+
+def _system_instruction(
+    theme: str,
+    *,
+    multi: bool = False,
+    count: int = 0,
+) -> str:
     """テーマに応じたシステム指示を生成する。"""
     today_str = date.today().strftime("%Y-%m-%d")
     base = (
@@ -371,4 +415,9 @@ def _system_instruction(theme: str) -> str:
         "custom": "これから投資に関する質問を受けます。",
     }
     hint = theme_hints.get(theme, "")
+    if theme == "buy" and multi and count > 1:
+        hint = (
+            f"これから買い候補 {count} 銘柄の購入判断をまとめて相談されます。"
+            "銘柄ごとの分析に加え、比較・優先順位・資金配分の観点も含めてください。"
+        )
     return f"## システム指示\n{base}\n{hint}"

@@ -189,6 +189,59 @@ def api_market_timeline():
     })
 
 
+@api_bp.route("/api/screening-bookmarks", methods=["GET"])
+def api_screening_bookmarks_get():
+    """Screening ブックマーク一覧"""
+    from src.screening_bookmarks import load_bookmarks
+
+    items = load_bookmarks()
+    return jsonify({
+        "success": True,
+        "tickers": [i["ticker"] for i in items],
+        "items": items,
+        "count": len(items),
+    })
+
+
+@api_bp.route("/api/screening-bookmarks/toggle", methods=["POST"])
+def api_screening_bookmarks_toggle():
+    """Screening ブックマークの追加/解除"""
+    from src.screening_bookmarks import toggle_bookmark
+
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"success": False, "error": "無効なリクエスト"}), 400
+
+    ticker = (data.get("ticker") or "").strip()
+    if not ticker:
+        return jsonify({"success": False, "error": "ティッカーを指定してください"}), 400
+
+    try:
+        result = toggle_bookmark(
+            ticker,
+            name=data.get("name"),
+            market=data.get("market"),
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.exception("ブックマーク切替エラー")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    msg = f"{ticker.upper()} をブックマーク{'に追加' if result['bookmarked'] else 'から解除'}しました"
+    return jsonify({"success": True, "message": msg, **result})
+
+
+@api_bp.route("/api/benchmark-comparison")
+def api_benchmark_comparison():
+    """ポートフォリオ総資産 vs S&P500 の正規化推移（ベンチマーク比較）"""
+    days = int(request.args.get("days", 365))
+    from src.benchmark_comparison import build_benchmark_comparison
+
+    return jsonify(build_benchmark_comparison(days=days))
+
+
 @api_bp.route("/api/perf-monthly")
 def api_perf_monthly():
     """月別損益データ"""
@@ -934,6 +987,8 @@ def _get_config_value(section: str, key: str, default):
         obj = obj.get(p, {})
     if not isinstance(obj, dict):
         return default
+    if section == "signal" and key == "max_entry_sets_per_batch":
+        return obj.get(key, obj.get("max_candidates_per_pattern", default))
     return obj.get(key, default)
 
 

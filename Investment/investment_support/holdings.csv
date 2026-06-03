@@ -1,5 +1,6 @@
 ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
 TIGO,Millicom International Cellular,US,86.4,2026-06-02,0.3,,moomoo同期
 ONDS,Ondas,US,13.227,2026-06-02,3.0,,moomoo同期
+7011,Mitsubishi Heavy Industries,JP,3573.0,2026-06-03,1.0,,moomoo同期
 5803,Fujikura,JP,5650.0,2026-05-26,1.0,,moomoo同期
-3687,Fixstars,JP,1662.7143,2026-04-29,7.0,1108.8,moomoo同期
+3687,Fixstars,JP,1103.8,2026-04-29,5.0,1108.8,moomoo同期

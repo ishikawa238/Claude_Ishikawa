@@ -109,6 +109,10 @@ def calculate_snapshot(ticker: str, target_date: date, prices: list[dict]) -> di
         "rsi14":        _rsi(closes, 14),
         "atr14":        _atr(closes, highs, lows, 14),
         "volatility_20d": _volatility(closes, 20),
+        # EMA / MACD（スイング戦略）
+        "ema25":        _ema(closes, 25),
+        "ema75":        _ema(closes, 75),
+        **_macd_fields(closes),
         # 推計値
         "est_turnover":   today_close * today_vol if today_vol else None,
         "est_market_cap": None,  # 呼び出し元で shares_outstanding × today_close を設定
@@ -550,6 +554,78 @@ def _find_strongest_cluster(
     return round(sum(best) / len(best), 4)
 
 
+def _ema(closes: list[float], period: int) -> Optional[float]:
+    series = _ema_series(closes, period)
+    return series[-1] if series else None
+
+
+def _ema_series(closes: list[float], period: int) -> list[Optional[float]]:
+    if len(closes) < period:
+        return []
+    k = 2 / (period + 1)
+    ema = sum(closes[:period]) / period
+    series = [None] * (period - 1) + [ema]
+    for price in closes[period:]:
+        ema = price * k + ema * (1 - k)
+        series.append(ema)
+    return series
+
+
+def _macd_fields(
+    closes: list[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> dict:
+    """MACD の当日値と前日値を返す。"""
+    empty = {
+        "macd_diff": None, "macd_dea": None, "macd_hist": None,
+        "macd_diff_prev": None, "macd_dea_prev": None, "macd_hist_prev": None,
+    }
+    if len(closes) < slow + signal:
+        return empty
+
+    fast_series = _ema_series(closes, fast)
+    slow_series = _ema_series(closes, slow)
+    diff_series: list[Optional[float]] = []
+    for f, s in zip(fast_series, slow_series):
+        if f is None or s is None:
+            diff_series.append(None)
+        else:
+            diff_series.append(f - s)
+
+    valid_diffs = [d for d in diff_series if d is not None]
+    if len(valid_diffs) < signal:
+        return empty
+
+    dea_tail = _ema_series(valid_diffs, signal)
+    if not dea_tail:
+        return empty
+
+    diff = diff_series[-1]
+    dea = dea_tail[-1]
+    if diff is None or dea is None:
+        return empty
+    hist = diff - dea
+
+    diff_prev = diff_series[-2] if len(diff_series) >= 2 else None
+    dea_prev = dea_tail[-2] if len(dea_tail) >= 2 else None
+    hist_prev = (
+        diff_prev - dea_prev
+        if diff_prev is not None and dea_prev is not None
+        else None
+    )
+
+    return {
+        "macd_diff": diff,
+        "macd_dea": dea,
+        "macd_hist": hist,
+        "macd_diff_prev": diff_prev,
+        "macd_dea_prev": dea_prev,
+        "macd_hist_prev": hist_prev,
+    }
+
+
 def _volatility(closes: list[float], period: int = 20) -> Optional[float]:
     """
     終値対数収益率の標準偏差（年率換算・%）。
@@ -583,6 +659,9 @@ def _empty_snapshot(ticker: str, target_date: date) -> dict:
         "vol_20d_avg": None, "high_20d": None, "high_52w": None, "low_52w": None,
         "return_5d": None, "return_20d": None,
         "rsi14": None, "atr14": None, "volatility_20d": None,
+        "ema25": None, "ema75": None,
+        "macd_diff": None, "macd_dea": None, "macd_hist": None,
+        "macd_diff_prev": None, "macd_dea_prev": None, "macd_hist_prev": None,
         "est_turnover": None, "est_market_cap": None,
         "weekly_ma25": None, "weekly_ma25_5w_ago": None,
         "parabolic_sar": None, "sar_direction": None,

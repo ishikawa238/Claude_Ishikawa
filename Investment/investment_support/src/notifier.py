@@ -15,7 +15,7 @@ from shared.slack import (
     send_webhook,
 )
 
-from src.config import CONFIG, get_strategy_mode, is_offensive
+from src.config import CONFIG
 from src.data_store import fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
@@ -49,18 +49,17 @@ _HOLDING_EMOJI = {
     "tp_t3":         "🏆",
     "tp_trailing":   "📉",
     "tp_ma50_exit":  "🛑",
+    "tp_full":       "🎯",
+    "tp_partial":    "🎯",
+    "tp_extend_hold": "📈",
+    "tp_extend_exit": "📉",
+    "stale_watch":   "⏳",
+    "stale_exit":    "⏰",
 }
-
-# 戦略モード → バッジ
-_STRATEGY_BADGE = {
-    "defensive": "🛡 守りモード",
-    "offensive": "⚔ 攻めモード",
-}
-
 
 def _strategy_badge() -> str:
-    """現在の戦略モードを表すバッジ文字列を返す。"""
-    return _STRATEGY_BADGE.get(get_strategy_mode(), "🛡 守りモード")
+    """現在の戦略を表すバッジ文字列を返す。"""
+    return "📈 スイング"
 _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
     "A": {
         "cond_a_ma200_rising":  "MA200上昇中",
@@ -79,10 +78,9 @@ _NEAR_MISS_COND_LABELS: dict[str, dict[str, str]] = {
         "cond_b_rsi_ok":        "RSI適正範囲",
     },
     "C": {
-        "cond_c_weekly_uptrend": "週足MA25上昇中",
-        "cond_c_at_support":     "サポートレベル近傍",
-        "cond_c_rsi_oversold":   "RSI売られ過ぎ圏",
-        "cond_c_sar_reversal":   "パラボリックSAR反転",
+        "cond_c_weekly_uptrend": "EMA25>EMA75",
+        "cond_c_rsi_oversold":   "RSI≤35",
+        "cond_c_sar_reversal":   "MACD確認",
     },
 }
 
@@ -150,8 +148,6 @@ def send_morning_report(
     llm_feedback: list[dict] | None = None,
     near_misses: list[dict] | None = None,
     screening_stats: dict | None = None,
-    paypay_points: list[dict] | None = None,
-    paypay_signals: list[dict] | None = None,
 ) -> bool:
     """
     朝通知を生成して Slack に送信する。
@@ -164,8 +160,6 @@ def send_morning_report(
         llm_feedback:     LLM アドバイザーからのフィードバック（任意）
         near_misses:      惜しかった銘柄（任意）
         screening_stats:  スクリーニング統計（screened, candidates, entry_sets 件数）
-        paypay_points:    PayPayポイント運用の評価結果（任意）
-        paypay_signals:   PayPayポイント運用のタイミングシグナル（任意）
     """
     mode = market_env.get("mode", "caution")
     today_str = target_date.strftime("%Y-%m-%d (%a)")
@@ -261,12 +255,6 @@ def send_morning_report(
         f"SL接近: {len(sl_near)}件 ｜ 強制損切り: {len(forced)}件"
     ))
 
-    # 買い増し候補（攻めモードのみ）
-    blocks.extend(_add_buy_section(holdings))
-
-    # PayPay ポイント運用
-    blocks.extend(_paypay_points_blocks(paypay_points, paypay_signals))
-
     # LLM アドバイザー意見
     blocks.extend(_llm_feedback_blocks(llm_feedback))
 
@@ -295,8 +283,6 @@ def send_evening_report(
     llm_feedback: list[dict] | None = None,
     near_misses: list[dict] | None = None,
     screening_stats: dict | None = None,
-    paypay_points: list[dict] | None = None,
-    paypay_signals: list[dict] | None = None,
     price_source_alert: str | None = None,
 ) -> bool:
     """
@@ -401,12 +387,6 @@ def send_evening_report(
             blocks.append(_holding_block(h, detail=True))
         blocks.append(_divider())
 
-    # 買い増し候補（攻めモードのみ）
-    blocks.extend(_add_buy_section(holdings))
-
-    # PayPay ポイント運用
-    blocks.extend(_paypay_points_blocks(paypay_points, paypay_signals))
-
     # 明日の注目ポイント
     tomorrow_notes = _build_tomorrow_notes(holdings)
     if tomorrow_notes:
@@ -441,52 +421,6 @@ def send_evening_report(
 _PROVIDER_DISPLAY = {"openai": "ChatGPT", "anthropic": "Claude", "gemini": "Gemini"}
 
 _SIGNAL_EMOJI = {"good": "🟢", "caution": "⚠️", "neutral": "⚪"}
-
-
-def _paypay_points_blocks(
-    points: list[dict] | None,
-    signals: list[dict] | None,
-) -> list[dict]:
-    """PayPay ポイント運用セクションを Slack Block Kit ブロックに変換する。"""
-    if not points:
-        return []
-
-    blocks: list[dict] = []
-    blocks.append(_divider())
-
-    # サマリー行
-    total_current = sum(p["current_points"] for p in points)
-    total_invested = sum(p["invested_points"] for p in points)
-    total_return = total_current - total_invested
-    total_pct = (total_return / total_invested * 100) if total_invested > 0 else 0
-    sign = "+" if total_return >= 0 else ""
-    blocks.append(_section(
-        f"💰 *ポイント運用（{total_current:,}pt / {sign}{total_pct:.1f}%）*"
-    ))
-
-    # コース別
-    course_parts: list[str] = []
-    for p in points:
-        sign_c = "+" if p["return_pct"] >= 0 else ""
-        stale_mark = "⏳" if p.get("stale") else ""
-        course_parts.append(
-            f"{p['course_name']}: {p['current_points']:,}pt({sign_c}{p['return_pct']:.1f}%){stale_mark}"
-        )
-    # 2コースずつ改行で区切る
-    lines: list[str] = []
-    for i in range(0, len(course_parts), 2):
-        lines.append(" ｜ ".join(course_parts[i:i + 2]))
-    blocks.append(_section("\n".join(lines)))
-
-    # シグナル
-    if signals:
-        sig_lines: list[str] = []
-        for s in signals:
-            emoji = _SIGNAL_EMOJI.get(s["signal"], "⚪")
-            sig_lines.append(f"{emoji} {s['course_name']}: {s['reason']}")
-        blocks.append(_section("📊 *ポイント運用シグナル*\n" + "\n".join(sig_lines)))
-
-    return blocks
 
 
 def _llm_feedback_blocks(feedback: list[dict] | None) -> list[dict]:
@@ -674,6 +608,12 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
         "tp_t3":         "最終利確(T3)",
         "tp_trailing":   "MA25割れ",
         "tp_ma50_exit":  "MA50割れ全撤退",
+        "tp_full":       "利確（全売）",
+        "tp_partial":    "利確（半分売却）",
+        "tp_extend_hold": "利確到達・延長保有",
+        "tp_extend_exit": "延長終了・全売",
+        "stale_watch":   "長期停滞・売却検討",
+        "stale_exit":    "長期停滞・全売推奨",
     }
     label_str = label_names.get(label, label)
 
@@ -695,9 +635,19 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     if holding_days is not None:
         sub_parts.append(f"保有: {holding_days}日")
 
-    # 分割ターゲット表示（利確タイプI/IIの場合）
+    # 利確目標表示
     profit_type = h.get("profit_type")
-    if profit_type in ("I", "II") and current > 0:
+    eff_pct = h.get("exit_effective_target_pct")
+    eff_price = h.get("exit_effective_target_price")
+    if eff_pct is not None and eff_price and current > 0:
+        dist = (eff_price - current) / current * 100
+        sub_parts.append(f"利確目標: +{eff_pct:g}%（{eff_price:,.2f} / あと{dist:+.1f}%）")
+        if h.get("exit_extend_active"):
+            sub_parts.append("延長保有中")
+        sell_q = h.get("exit_sell_qty") or 0
+        if sell_q > 0:
+            sub_parts.append(f"推奨売却: {sell_q:.0f}株")
+    elif profit_type in ("I", "II") and current > 0:
         tp_parts = []
         for stage, lbl in [("tp_t1", "T1"), ("tp_t2", "T2"), ("tp_t3", "T3")]:
             price_key = f"{stage.replace('tp_', '')}_price"
@@ -713,17 +663,6 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
             else:
                 dist = (price - current) / current * 100
                 tp_parts.append(f"{lbl} {price:,.0f}({dist:+.1f}%)")
-        # 攻めモードは残り枠のトレーリング目安（MA25/MA50）を表示
-        if is_offensive():
-            ma25 = h.get("tech_ma25")
-            ma50 = h.get("tech_ma50")
-            if ma25 is not None or ma50 is not None:
-                trail_parts = []
-                if ma25 is not None:
-                    trail_parts.append(f"MA25:{ma25:,.0f}")
-                if ma50 is not None:
-                    trail_parts.append(f"MA50:{ma50:,.0f}")
-                tp_parts.append("Trail " + "/".join(trail_parts))
         if tp_parts:
             sub_parts.append(" / ".join(tp_parts))
     else:

@@ -10,7 +10,7 @@
 from datetime import date
 from typing import Optional
 
-from src.config import CONFIG
+from src.config import CONFIG, get_swing_config
 from src.data_store import fetch_all, fetch_one, get_connection, upsert
 from src.logger import get_logger
 from src.trading_calendar import latest_price_date_for_market
@@ -152,6 +152,18 @@ def get_current_mode(target_date: date) -> str:
 # 流動性フィルタ
 # ============================================================
 
+def _price_band(market: str) -> tuple[float, float | None]:
+    """市場別の株価帯（最低・最高）を返す。swing 設定を優先する。"""
+    swing = get_swing_config()
+    if market == "JP":
+        min_p = float(swing.get("jp_min_price", _JP_MIN_PRICE))
+        max_p = swing.get("jp_max_price")
+        return min_p, float(max_p) if max_p is not None else None
+    min_p = float(swing.get("us_min_price", _US_MIN_PRICE))
+    max_p = swing.get("us_max_price")
+    return min_p, float(max_p) if max_p is not None else None
+
+
 def _liquidity_filter_sql(market: str) -> tuple[str, str]:
     """流動性フィルタ用 SELECT 文と時価総額条件句を返す。"""
     market_cap_condition = (
@@ -163,6 +175,9 @@ def _liquidity_filter_sql(market: str) -> tuple[str, str]:
         SELECT
             t.ticker, t.date, u.market, u.name,
             t.ma5, t.ma25, t.ma75, t.ma200,
+            t.ema25, t.ema75,
+            t.macd_diff, t.macd_dea, t.macd_hist,
+            t.macd_diff_prev, t.macd_dea_prev, t.macd_hist_prev,
             t.ma5_5d_ago, t.ma25_5d_ago, t.ma200_5d_ago,
             t.vol_20d_avg, t.high_20d, t.high_52w, t.low_52w,
             t.return_5d, t.return_20d,
@@ -180,8 +195,10 @@ def _liquidity_filter_sql(market: str) -> tuple[str, str]:
             AND u.market      = ?
             AND u.is_active   = 1
             AND u.is_excluded = 0
-            AND t.ma200       IS NOT NULL
+            AND t.ema25       IS NOT NULL
+            AND t.ema75       IS NOT NULL
             AND p.adj_close   >= ?
+            AND p.adj_close   <= ?
             AND t.est_turnover   >= ?
             AND {market_cap_condition}
     """
@@ -191,7 +208,9 @@ def _liquidity_filter_sql(market: str) -> tuple[str, str]:
 def _fetch_liquidity_candidates(target_date: date, market: str) -> list[dict]:
     """非アクティブ除外前の流動性フィルタ通過候補。"""
     target_str = target_date.strftime("%Y-%m-%d")
-    min_price      = _JP_MIN_PRICE      if market == "JP" else _US_MIN_PRICE
+    min_price, max_price = _price_band(market)
+    if max_price is None:
+        max_price = 1e12 if market == "US" else 1e9
     min_turnover   = _JP_MIN_TURNOVER   if market == "JP" else _US_MIN_TURNOVER
     min_market_cap = _JP_MIN_MARKET_CAP if market == "JP" else _US_MIN_MARKET_CAP
     sql, _ = _liquidity_filter_sql(market)
@@ -199,7 +218,7 @@ def _fetch_liquidity_candidates(target_date: date, market: str) -> list[dict]:
     with get_connection() as conn:
         rows = fetch_all(
             conn, sql,
-            (target_str, market, min_price, min_turnover, min_market_cap),
+            (target_str, market, min_price, max_price, min_turnover, min_market_cap),
         )
     return [dict(r) for r in rows]
 

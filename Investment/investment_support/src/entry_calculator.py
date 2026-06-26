@@ -39,7 +39,7 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     atr14   = float(signal.get("atr14") or 0)
     market  = signal["market"]
     ticker  = signal["ticker"]
-    pattern = signal.get("pattern") or "A"
+    pattern = signal.get("pattern") or "C"
     settings = _settings()
 
     if close <= 0:
@@ -48,12 +48,16 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
 
     entry_price = close  # 翌日寄付目安
 
-    # 損切りライン: ATR × 2 を下回った水準
-    stop_loss_price = (
-        entry_price - atr14 * settings["atr_mult"]
-        if atr14 > 0
-        else entry_price * (1 - settings["default_stop_loss_pct"] / 100)
-    )
+    swing_cfg = config_module.get_swing_config()
+    support = signal.get("support_level")
+    buffer_pct = float(swing_cfg.get("support_stop_buffer_pct", 1.0))
+
+    if pattern == "C" and support and float(support) > 0:
+        stop_loss_price = float(support) * (1 - buffer_pct / 100)
+    elif atr14 > 0:
+        stop_loss_price = entry_price - atr14 * settings["atr_mult"]
+    else:
+        stop_loss_price = entry_price * (1 - settings["default_stop_loss_pct"] / 100)
     stop_loss_pct   = (entry_price - stop_loss_price) / entry_price * 100
 
     # 損切り幅が1%未満 → エントリー候補から除外
@@ -74,20 +78,9 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     # --- 投入額の上限制御 ---
     warn_too_small = False
     if recommended_amount is not None:
-        # (1) 総資金を超えない
         recommended_amount = min(recommended_amount, capital)
-        if settings.get("offensive"):
-            # 攻めモード: 1銘柄上限 max_per_position_pct と
-            # 新規エントリー上限 new_entry_size_pct_max を適用
-            max_per_position = capital * settings["max_per_position_pct"] / 100
-            entry_max = capital * settings["new_entry_size_pct_max"] / 100
-            entry_min = capital * settings["new_entry_size_pct_min"] / 100
-            recommended_amount = min(recommended_amount, max_per_position, entry_max)
-            warn_too_small = recommended_amount < entry_min
-        else:
-            # 守りモード: max_holdings に基づく1ポジション上限
-            max_per_position = capital / settings["max_holdings"]
-            recommended_amount = min(recommended_amount, max_per_position)
+        max_per_position = capital / settings["max_holdings"]
+        recommended_amount = min(recommended_amount, max_per_position)
 
     # --- 決算近接チェック ---
     warn_earnings = _check_earnings_near(ticker, signal["date"])
@@ -115,25 +108,11 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         "_warn_at_capacity": open_holdings_count >= settings["max_holdings"],
         "_warn_too_small": warn_too_small,
         "_remaining_slots": max(settings["max_holdings"] - open_holdings_count, 0),
-        "_strategy_mode": "offensive" if settings.get("offensive") else "defensive",
-        "_candidate_source": signal.get("_candidate_source"),
         "_conditions_met_count": signal.get("_conditions_met_count"),
         "_conditions_total": signal.get("_conditions_total"),
-        # 通知の根拠数値（DB保存対象外・notifier で使用）
-        "_rsi14":    float(signal["rsi14"])    if signal.get("rsi14")    else None,
+        "_rsi14": float(signal["rsi14"]) if signal.get("rsi14") else None,
         "_vol_ratio": float(signal["vol_ratio"]) if signal.get("vol_ratio") else None,
-        "_rs_rank":   signal.get("rs_rank"),
-        # スコアリング情報（DB保存対象外・notifier で使用）
-        "_final_score":      signal.get("final_score"),
-        "_recommend_rank":   signal.get("recommend_rank"),
-        "_recommend_reason": signal.get("recommend_reason"),
-        # サブスコア内訳（DB保存対象外・notifier で使用）
-        "_trend_score":      signal.get("trend_score"),
-        "_pattern_a_score":  signal.get("pattern_a_score"),
-        "_pattern_b_score":  signal.get("pattern_b_score"),
-        "_pattern_c_score":  signal.get("pattern_c_score"),
-        "_liquidity_score":  signal.get("liquidity_score"),
-        # テクニカル指標（DB保存対象外・notifier で使用）
+        "_rs_rank": signal.get("rs_rank"),
         "_high_52w": signal.get("high_52w"),
         "_close":    signal.get("close"),
         "_ma5":      signal.get("ma5"),
@@ -246,16 +225,15 @@ def _build_conditions_met(signal: dict, pattern: str) -> list[str]:
         "B": {
             "cond_b_ma200_rising":     "MA200上昇中",
             "cond_b_ma_aligned":       "中期〜長期MA整列",
-            "cond_b_pullback_touched": f"MA25へのタッチ確認（直近{sig_cfg['pattern_b_lookback_days']}日）",
+            "cond_b_pullback_touched": f"MA25へのタッチ確認（直近{sig_cfg.get('pattern_b_lookback_days', 5)}日）",
             "cond_b_bounced":          "MA25からの反発確認",
             "cond_b_ma25_rising":      "MA25上昇中",
             "cond_b_rsi_ok":           f"RSI適正（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI適正",
         },
         "C": {
-            "cond_c_weekly_uptrend": "週足MA25上昇中（長期上昇トレンド確認）",
-            "cond_c_at_support":     "サポートレベル近傍",
-            "cond_c_rsi_oversold":   f"RSI売られ過ぎ圏（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI売られ過ぎ圏",
-            "cond_c_sar_reversal":   "パラボリックSAR上昇転換",
+            "cond_c_weekly_uptrend": "EMA25 > EMA75（上昇トレンド）",
+            "cond_c_rsi_oversold":   f"RSI売られ過ぎ（{signal.get('rsi14', 0):.0f}）" if signal.get("rsi14") else "RSI売られ過ぎ",
+            "cond_c_sar_reversal":   "MACD確認（反転 or GC）",
         },
     }
     met = []
@@ -292,37 +270,25 @@ def _check_earnings_near(ticker: str, date_str: str) -> str | None:
 
 
 def _signal_config() -> dict:
-    return config_module.CONFIG["signal"]
+    return config_module.CONFIG.get("signal", {})
 
 
 def _settings() -> dict:
     """実行時点の config から計算パラメータを取得する。"""
-    sig_cfg = config_module.CONFIG["signal"]
-    cap_cfg = config_module.CONFIG["capital"]
-    settings = {
-        "atr_mult": float(sig_cfg["atr_stop_multiplier"]),
-        "rr_ratio": float(sig_cfg["risk_reward_ratio"]),
-        "warn_min_pct": float(sig_cfg["stop_loss_warning_min_pct"]),
-        "warn_max_pct": float(sig_cfg["stop_loss_warning_max_pct"]),
-        "risk_pct": float(cap_cfg["max_risk_per_trade_pct"]) / 100,
-        "capital_jpy": float(cap_cfg["total_capital_jpy"]),
-        "capital_usd": float(cap_cfg["total_capital_usd"]),
+    sig_cfg = config_module.CONFIG.get("signal", {})
+    cap_cfg = config_module.CONFIG.get("capital", {})
+    swing_cfg = config_module.get_swing_config()
+    return {
+        "atr_mult": float(sig_cfg.get("atr_stop_multiplier", 2.0)),
+        "rr_ratio": float(swing_cfg.get("risk_reward_ratio", sig_cfg.get("risk_reward_ratio", 2.0))),
+        "warn_min_pct": float(sig_cfg.get("stop_loss_warning_min_pct", 1.0)),
+        "warn_max_pct": float(sig_cfg.get("stop_loss_warning_max_pct", 15.0)),
+        "risk_pct": float(swing_cfg.get("max_risk_per_trade_pct", cap_cfg.get("max_risk_per_trade_pct", 2.0))) / 100,
+        "capital_jpy": float(cap_cfg.get("total_capital_jpy", 0)),
+        "capital_usd": float(cap_cfg.get("total_capital_usd", 0)),
         "max_holdings": max(int(cap_cfg.get("max_concurrent_holdings", 3)), 1),
         "default_stop_loss_pct": float(cap_cfg.get("default_stop_loss_pct", 8)),
-        "offensive": False,
     }
-
-    # 攻めモード時: リスク比率・保有上限・1銘柄サイズの上書き
-    if config_module.is_offensive():
-        off = config_module.get_offensive_config()
-        settings["offensive"] = True
-        settings["risk_pct"] = float(off.get("risk_per_trade_pct", 1.5)) / 100
-        settings["max_holdings"] = max(int(off.get("max_concurrent_holdings", 8)), 1)
-        settings["max_per_position_pct"] = float(off.get("max_per_position_pct", 20.0))
-        settings["new_entry_size_pct_min"] = float(off.get("new_entry_size_pct_min", 5.0))
-        settings["new_entry_size_pct_max"] = float(off.get("new_entry_size_pct_max", 10.0))
-
-    return settings
 
 
 def _log_entry_set(es: dict) -> None:

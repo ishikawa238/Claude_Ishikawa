@@ -128,6 +128,22 @@ _PROFIT_TYPE_LABEL = {"I": "ブレイクアウト", "II": "トレンドフォロ
 
 def _build_tp_target_html(h: dict, cp: float) -> str:
     """保有銘柄の利確ターゲットをHTML文字列で構築する。"""
+    eff_pct = h.get("exit_effective_target_pct")
+    if eff_pct is not None and cp > 0:
+        eff_price = float(h.get("exit_effective_target_price") or 0)
+        dist = (eff_price - cp) / cp * 100 if eff_price else 0
+        parts = ["<span class='tp-type-label'>シンプル利確</span>"]
+        parts.append(
+            f"<span class='tp-pending'>目標 +{eff_pct:g}% {eff_price:,.0f}"
+            f" <span class='tp-sub'>（あと{dist:+.1f}%）</span></span>"
+        )
+        if h.get("exit_extend_active"):
+            parts.append("<span class='tp-active'>&#8594; 延長保有中</span>")
+        sell_q = float(h.get("exit_sell_qty") or 0)
+        if sell_q > 0:
+            parts.append(f"<span class='tp-active'>&#8594; 推奨売却 {sell_q:.0f}株</span>")
+        return "<br>".join(parts)
+
     from src.take_profit import _split_quantity
 
     profit_type = h.get("profit_type", "")
@@ -893,10 +909,17 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
     else:
         freshness_html = '<div class="freshness-warn">⚠ バッチ実行履歴なし</div>'
 
+    try:
+        from src.exit_simple import is_exit_simple_enabled
+        _simple_exit_global = is_exit_simple_enabled()
+    except Exception:
+        _simple_exit_global = False
+
     # --- 今日の行動セクション構築 ---
     action_items = []
     for _ha in holdings:
         h = dict(_ha)
+        _eval = holdings_eval_map.get(h["ticker"]) or {}
         cp = float(h["current_price"] or 0) if h["current_price"] else 0
         sl = float(h["stop_loss_price"] or 0)
         ep = float(h["entry_price"] or 0)
@@ -911,38 +934,50 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             if pnl <= -5:
                 action_items.append(("warn", f"📉 {h['ticker']} {h.get('name', '')} — 含み損{pnl:.1f}%（早期警戒水準）"))
         # 利確ターゲット到達チェック
-        _pt = h.get("profit_type")
-        if _pt in ("I", "II") and cp > 0:
-            from src.take_profit import _split_quantity
-            _r_val = float(h.get("r_value") or 0)
-            _qty_total = int(float(h.get("quantity") or 1)) or 1
-            _t1_pct = float(h.get("t1_pct") or 50)
-            _t2_pct = float(h.get("t2_pct") or 30)
-            _t3_pct = float(h.get("t3_pct") or 20)
-            _sq1, _sq2, _sq3 = _split_quantity(_qty_total, _t1_pct, _t2_pct, _t3_pct)
-            _sell_map = {"t1": _sq1, "t2": _sq2, "t3": _sq3}
-            for stage, label_str in [("t1", "T1"), ("t2", "T2"), ("t3", "T3")]:
-                t_price = h.get(f"{stage}_price")
-                t_reached = h.get(f"{stage}_reached")
-                if t_price and not t_reached and cp >= t_price:
-                    _r_mult = f"+{(t_price - ep) / _r_val:.1f}R" if _r_val > 0 else ""
-                    _sell_n = _sell_map.get(stage, 0)
-                    _sell_str = f"{_sell_n}株売却" if _sell_n > 0 else "売却検討"
+        _eval_label = _eval.get("label", "")
+        if _simple_exit_global and _eval_label in (
+            "tp_full", "tp_partial", "tp_extend_hold", "stale_watch", "stale_exit",
+        ):
+            _sell_n = _eval.get("exit_sell_qty") or 0
+            _sell_str = f"{_sell_n:.0f}株売却" if _sell_n > 0 else "売却検討"
+            action_items.append((
+                "info",
+                f"🎯 {h['ticker']} {h.get('name', '')} — "
+                f"{_eval_label}。{_sell_str}を検討",
+            ))
+        else:
+            _pt = h.get("profit_type")
+            if _pt in ("I", "II") and cp > 0:
+                from src.take_profit import _split_quantity
+                _r_val = float(h.get("r_value") or 0)
+                _qty_total = int(float(h.get("quantity") or 1)) or 1
+                _t1_pct = float(h.get("t1_pct") or 50)
+                _t2_pct = float(h.get("t2_pct") or 30)
+                _t3_pct = float(h.get("t3_pct") or 20)
+                _sq1, _sq2, _sq3 = _split_quantity(_qty_total, _t1_pct, _t2_pct, _t3_pct)
+                _sell_map = {"t1": _sq1, "t2": _sq2, "t3": _sq3}
+                for stage, label_str in [("t1", "T1"), ("t2", "T2"), ("t3", "T3")]:
+                    t_price = h.get(f"{stage}_price")
+                    t_reached = h.get(f"{stage}_reached")
+                    if t_price and not t_reached and cp >= t_price:
+                        _r_mult = f"+{(t_price - ep) / _r_val:.1f}R" if _r_val > 0 else ""
+                        _sell_n = _sell_map.get(stage, 0)
+                        _sell_str = f"{_sell_n}株売却" if _sell_n > 0 else "売却検討"
+                        action_items.append((
+                            "info",
+                            f"🎯 {h['ticker']} {h.get('name', '')} — "
+                            f"{label_str}到達（{_r_mult}）。{_sell_str}を検討"
+                        ))
+                # SL引き上げ推奨
+                _adj = h.get("adjusted_stop")
+                if _adj and _adj > sl:
                     action_items.append((
                         "info",
-                        f"🎯 {h['ticker']} {h.get('name', '')} — "
-                        f"{label_str}到達（{_r_mult}）。{_sell_str}を検討"
+                        f"📋 {h['ticker']} — 損切りライン引き上げ推奨: "
+                        f"{sl:,.2f} → {_adj:,.2f}（買値付近）",
+                        {"type": "sl_update", "ticker": h["ticker"],
+                         "old_sl": sl, "new_sl": round(float(_adj), 2)},
                     ))
-            # SL引き上げ推奨
-            _adj = h.get("adjusted_stop")
-            if _adj and _adj > sl:
-                action_items.append((
-                    "info",
-                    f"📋 {h['ticker']} — 損切りライン引き上げ推奨: "
-                    f"{sl:,.2f} → {_adj:,.2f}（買値付近）",
-                    {"type": "sl_update", "ticker": h["ticker"],
-                     "old_sl": sl, "new_sl": round(float(_adj), 2)},
-                ))
 
     if mode in ("caution", "full_caution"):
         action_items.append(("info", f"🔴 {mode_label}中 — 新規検討候補は自動停止しています"))
@@ -1048,7 +1083,15 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
                 profit_type = "III"
         target_str = "—"
         target_html = "—"
-        if profit_type in ("I", "II") and cp:
+        h_merged = {**h, **_eval}
+        try:
+            from src.exit_simple import is_exit_simple_enabled
+            _simple_exit = is_exit_simple_enabled()
+        except Exception:
+            _simple_exit = False
+        if _simple_exit and _eval.get("exit_effective_target_pct") is not None and cp:
+            target_html = _build_tp_target_html(h_merged, cp)
+        elif profit_type in ("I", "II") and cp:
             target_html = _build_tp_target_html(h, cp)
         elif profit_type == "III":
             target_html = "<span class='tp-type-label'>手動管理</span>"
@@ -1126,8 +1169,10 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
 
         # 状態バッジ（信号機方式: 損益 + トレンド + SL距離 + 利確到達で総合判定）
         sl_dist_pct = ((cp - sl) / cp * 100) if cp and sl else 99
-        # 利確到達チェック: いずれかのTに到達しているか
-        _any_tp_reached = (
+        _exit_label = _eval.get("label", "")
+        _any_tp_reached = _exit_label in (
+            "tp_full", "tp_partial", "tp_extend_hold", "tp_extend_exit", "stale_exit",
+        ) if _simple_exit else (
             profit_type in ("I", "II")
             and cp
             and (
@@ -1698,10 +1743,6 @@ def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict 
 # (section, key, label, type, default, min, max, step, help)
 
 # ============================================================
-# PayPay ポイント運用ページ
-# ============================================================
-
-# ============================================================
 # 投資ルール確認ページ
 # ============================================================
 
@@ -1713,38 +1754,13 @@ def rules_page():
 
 
 @app.route("/scoring")
-def scoring_page():
-    """スコアリングシステムの定義と閾値を一覧表示する。"""
-    context = _build_scoring_context()
-    return render_template("scoring.html", active_page="scoring", **context)
-
-
 @app.route("/soring")
 def scoring_typo_redirect():
-    return redirect(url_for("scoring_page"), code=302)
-
-
-def _build_scoring_context() -> dict:
-    from src.config import get_offensive_config, get_strategy_mode
-    from src.scoring import get_scoring_definition
-
-    definition = get_scoring_definition()
-    off = get_offensive_config()
-    strategy_mode = get_strategy_mode()
-    min_rank = off.get("min_rank", "A")
-    min_final_score = _cfg_float(off, "min_final_score", 80)
-
-    status_cards = [
-        {"label": "候補昇格", "value": "総合50点 + 適合60点", "tone": "info"},
-        {"label": "攻めモード閾値", "value": f"{min_final_score:.0f}点 / {min_rank}以上", "tone": "warning"},
-        {"label": "現在モード", "value": "攻め" if strategy_mode == "offensive" else "守り", "tone": "success"},
-        {"label": "市場減点", "value": "0.88 / 0.75", "tone": "danger"},
-    ]
-    return {"definition": definition, "status_cards": status_cards}
+    return redirect(url_for("rules_page"), code=302)
 
 
 def _build_rules_context() -> dict:
-    from src.config import get_offensive_config, get_strategy_mode, is_offensive
+    from src.config import get_exit_simple_config, get_swing_config
 
     cap = CONFIG.get("capital", {})
     sig = CONFIG.get("signal", {})
@@ -1752,22 +1768,18 @@ def _build_rules_context() -> dict:
     goal = CONFIG.get("investment_goal", {})
     risk = CONFIG.get("risk_control", {})
     paper = CONFIG.get("paper_mode", {})
-    off = get_offensive_config()
-    strategy_mode = get_strategy_mode()
+    swing = get_swing_config()
+    exit_cfg = get_exit_simple_config()
 
     monthly_deposit = _cfg_float(goal, "monthly_deposit_jpy", 10_000)
     target_return = _cfg_float(goal, "target_monthly_return_pct", 15.0)
-    if is_offensive():
-        risk_pct = _cfg_float(off, "risk_per_trade_pct", 1.5)
-        max_holdings = _cfg_int(off, "max_concurrent_holdings", 8)
-    else:
-        risk_pct = _cfg_float(cap, "max_risk_per_trade_pct", 2.0)
-        max_holdings = _cfg_int(cap, "max_concurrent_holdings", 3)
-    rr_ratio = _cfg_float(sig, "risk_reward_ratio", 2.0)
+    risk_pct = _cfg_float(swing, "max_risk_per_trade_pct", _cfg_float(cap, "max_risk_per_trade_pct", 2.0))
+    max_holdings = _cfg_int(cap, "max_concurrent_holdings", 3)
+    rr_ratio = _cfg_float(swing, "risk_reward_ratio", _cfg_float(sig, "risk_reward_ratio", 2.0))
 
-    mode_label = "⚔ 攻めモード" if strategy_mode == "offensive" else "🛡 守りモード"
+    mode_label = "📈 EMA押し目スイング"
     status_cards = [
-        {"label": "戦略モード", "value": mode_label, "tone": "info"},
+        {"label": "戦略", "value": mode_label, "tone": "info"},
         {"label": "月次利益目標", "value": _pct(target_return), "tone": "warning"},
         {"label": "1トレード損失上限", "value": _pct(risk_pct), "tone": "danger"},
         {"label": "同時保有上限", "value": f"{max_holdings}銘柄", "tone": "success"},
@@ -1780,17 +1792,17 @@ def _build_rules_context() -> dict:
             "rules": [
                 "市場環境が normal のときだけ新規買いを検討します。",
                 "警戒モードでは候補を監視に回し、全体が弱い日は新規買いを止めます。",
-                "スクリーニングは株価、売買代金、時価総額、直近30日の取引日数で足切りします。",
-                f"時価総額が不明な銘柄を通す設定: {'有効' if _cfg_bool(screening, 'allow_unknown_market_cap', False) else '無効'}",
+                f"米国株は ${swing.get('us_min_price', 10):.0f}〜${swing.get('us_max_price', 50):.0f}、日本株は ¥{swing.get('jp_min_price', 300):.0f}〜¥{swing.get('jp_max_price', 3000):.0f} の株価帯に限定します。",
+                "流動性（売買代金・時価総額・直近30日の取引日数）で足切りします。",
             ],
         },
         {
-            "title": "シグナル条件",
+            "title": "シグナル条件（スイング）",
             "icon": "activity",
             "rules": [
-                f"パターンAは上昇トレンド、52週高値接近、出来高増、RSI {_cfg_float(sig, 'pattern_a_rsi_min', 50):.0f}-{_cfg_float(sig, 'pattern_a_rsi_max', 70):.0f} を確認します。",
-                f"パターンBは上昇トレンド中の押し目、MA25反発、RSI {_cfg_float(sig, 'pattern_b_rsi_min', 40):.0f}-{_cfg_float(sig, 'pattern_b_rsi_max', 60):.0f} を確認します。",
-                f"1バッチの通知上限は {_cfg_int(sig, 'max_entry_sets_per_batch', _cfg_int(sig, 'max_candidates_per_pattern', 3))}件です。",
+                f"監視リスト: EMA{swing.get('ema_short', 25)} > EMA{swing.get('ema_long', 75)}（上昇トレンド）。",
+                f"候補: RSI ≤ {swing.get('rsi_max', 35)}（直近{swing.get('rsi_lookback_days', 5)}日以内可）+ MACD反転またはゴールデンクロス。",
+                f"1バッチの通知上限は {_cfg_int(sig, 'max_entry_sets_per_batch', 3)}件です。",
             ],
         },
         {
@@ -1807,9 +1819,27 @@ def _build_rules_context() -> dict:
             "title": "出口ルール",
             "icon": "door-open",
             "rules": [
-                f"損切りは ATR x {_cfg_float(sig, 'atr_stop_multiplier', 2.0):.1f} を基本にします。",
-                f"利確目標は損切り幅に対して {rr_ratio:.1f}:1 のリスクリワードで置きます。",
-                "損切りと利確の両方に触れた日は、保守的に損切りを優先して検証します。",
+                f"損切りはサポートライン下（バッファ {_cfg_float(swing, 'support_stop_buffer_pct', 1.0):.1f}%）を優先します。",
+                f"サポートが不明な場合は ATR x {_cfg_float(sig, 'atr_stop_multiplier', 2.0):.1f} を使います。",
+                (
+                    f"利確目標は保有日数で段階的に低下します（"
+                    f"+{_cfg_float(exit_cfg, 'initial_target_pct', 20):.0f}%"
+                    f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
+                    f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - 2 * _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
+                    f"→+{_cfg_float(exit_cfg, 'target_floor_pct', 5):.0f}%、"
+                    f"{_cfg_int(exit_cfg, 'target_decay_every_days', 30)}日ごと）。"
+                ),
+                (
+                    f"目標到達時: 延長条件（EMA25>EMA75 / MA25上 / RSI≤"
+                    f"{_cfg_float(exit_cfg, 'rsi_max_for_hold', 70):.0f}）を満たせば2株以上は半分売却・1株は温存。"
+                    "満たさなければ全売却を推奨します。"
+                ),
+                (
+                    f"保有{_cfg_int(exit_cfg, 'stale_days_soft', 90)}日超かつ"
+                    f"+{_cfg_float(exit_cfg, 'stale_min_pnl_pct', 5):.0f}%未満は売却検討、"
+                    f"{_cfg_int(exit_cfg, 'stale_days_hard', 120)}日超かつ"
+                    f"+{_cfg_float(exit_cfg, 'stale_hard_min_pnl_pct', 10):.0f}%未満（または含み損）は全売推奨。"
+                ),
             ],
         },
         {
@@ -1833,63 +1863,10 @@ def _build_rules_context() -> dict:
         },
     ]
 
-    # 攻めモード時の専用ルールセクションを挿入
-    if is_offensive():
-        filters = off.get("filters", {}) or {}
-        add_buy = off.get("add_buy", {}) or {}
-        tp_i = off.get("take_profit_type_i", {}) or {}
-        sections.insert(0, {
-            "title": "攻めモード — 銘柄選定",
-            "icon": "target",
-            "rules": [
-                f"スコア {_cfg_int(off, 'min_final_score', 80)} 点以上、ランク {off.get('min_rank', 'A')} 以上のみ候補化します。",
-                f"RSI が {_cfg_float(filters, 'rsi_max_hard', 80):.0f} 以上、または直近"
-                f" {_cfg_int(filters, 'block_recent_surge_days', 5)} 営業日で"
-                f" {_cfg_float(filters, 'block_recent_surge_pct', 30):.0f}% 以上急騰した銘柄は除外します。",
-                "出来高急増直後の陰線・長い上ヒゲをつけた銘柄は除外します。",
-                f"時価総額の上限: JP {_cfg_float(filters, 'jp_max_market_cap_jpy', 5e11):,.0f} 円 / "
-                f"US ${_cfg_float(filters, 'us_max_market_cap_usd', 3e10):,.0f}。",
-            ],
-        })
-        sections.insert(1, {
-            "title": "攻めモード — 利確と撤退",
-            "icon": "trending-up",
-            "rules": [
-                f"タイプI: +{_cfg_float(tp_i, 't1_r_mult', 1.0):.1f}R で"
-                f" {_cfg_float(tp_i, 't1_pct', 20):.0f}%、"
-                f"+{_cfg_float(tp_i, 't2_r_mult', 3.0):.1f}R で"
-                f" {_cfg_float(tp_i, 't2_pct', 20):.0f}%、"
-                f"+{_cfg_float(tp_i, 't3_r_mult', 5.0):.1f}R で"
-                f" {_cfg_float(tp_i, 't3_pct', 20):.0f}% を分割利確します。",
-                "残り枠は MA25 / MA50 のトレーリングで保有し、勝ち銘柄を伸ばします。",
-                "株価が買値の 2 倍に到達した場合、残量の半分の利確を検討します。",
-                "MA50 を割り込んだ場合は大化け枠も含めて全量手仕舞いを推奨します。",
-                "損切りラインの引き下げは原則禁止です（memo に 'force_lower_sl=true' を入れた場合のみ許可）。",
-            ],
-        })
-        sections.insert(2, {
-            "title": "攻めモード — ポジションサイズと買い増し",
-            "icon": "plus-circle",
-            "rules": [
-                f"1 銘柄あたりの上限は資金の {_cfg_float(off, 'max_per_position_pct', 20):.0f}%。"
-                f" 新規エントリーは {_cfg_float(off, 'new_entry_size_pct_min', 5):.0f}〜"
-                f"{_cfg_float(off, 'new_entry_size_pct_max', 10):.0f}% を目安に投入します。",
-                f"含み益 +{_cfg_float(add_buy, 'min_unrealized_gain_pct', 10):.0f}% 以上で"
-                "MA25 維持・出来高維持・直近20日高値再突破を全て満たす銘柄に限り買い増し候補として通知します。",
-                "含み損銘柄へのナンピンは行いません。",
-                f"現金比率は {_cfg_float(off, 'min_cash_reserve_pct', 20):.0f}% 以上を維持します。",
-            ],
-        })
-
     warnings = [
         "月15%は保証ではなく、毎月の検証目標として扱います。",
         "個別株は元本割れの可能性があります。実弾投入前にペーパートレードで期待値を確認してください。",
     ]
-    if is_offensive():
-        warnings.append(
-            "攻めモードは大きな上昇を狙う代わりに、外れ銘柄も多くなります。"
-            "損切りを徹底し、含み損銘柄を放置しないでください。"
-        )
     return {"status_cards": status_cards, "sections": sections, "warnings": warnings}
 
 
@@ -1926,46 +1903,6 @@ def _usd(value: float) -> str:
 
 def _pct(value: float) -> str:
     return f"{value:.1f}%"
-
-
-@app.route("/paypay")
-def paypay_page():
-    """PayPay ポイント運用ページ"""
-    from src.paypay_points import PAYPAY_COURSES, evaluate_paypay_points, generate_points_signals
-
-    points = []
-    signals = []
-    try:
-        points = evaluate_paypay_points()
-        signals = generate_points_signals(date.today())
-    except Exception as e:
-        logger.warning(f"PayPayポイント評価エラー: {e}")
-
-    # シグナルをコースキーで引けるように dict 化
-    signal_map = {s["course"]: s for s in signals}
-
-    total_current = sum(p["current_points"] for p in points)
-    total_invested = sum(p["invested_points"] for p in points)
-    total_return = total_current - total_invested
-    total_pct = (total_return / total_invested * 100) if total_invested > 0 else 0.0
-
-    # 利用可能なコース一覧（新規追加フォーム用）
-    available_courses = [
-        {"key": k, "name": v["name"]}
-        for k, v in PAYPAY_COURSES.items()
-    ]
-
-    return render_template(
-        "paypay.html",
-        active_page="paypay",
-        points=points,
-        signal_map=signal_map,
-        total_current=total_current,
-        total_invested=total_invested,
-        total_return=total_return,
-        total_pct=total_pct,
-        available_courses=available_courses,
-    )
 
 
 # ============================================================
@@ -2206,10 +2143,9 @@ def api_prompt_builder_generate():
 def main():
     logger.info(f"レポートサーバーを起動します: http://{_HOST}:{_PORT}/report")
     logger.info("  /report       - メインダッシュボード")
-    logger.info("  /scoring      - スコアリング定義")
+    logger.info("  /rules        - 投資ルール確認")
     logger.info("  /screening    - スクリーニング銘柄一覧")
     logger.info("  /performance  - パフォーマンス分析")
-    logger.info("  /paypay       - PayPayポイント運用")
     logger.info("  /prompt-builder - プロンプト作成")
     logger.info("  /settings     - 設定")
     logger.info("  /stock/<ticker> - 個別銘柄詳細")

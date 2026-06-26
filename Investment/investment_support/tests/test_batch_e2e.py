@@ -158,6 +158,14 @@ _DDL = [
         sar_direction     TEXT,
         support_level     REAL,
         resistance_level  REAL,
+        ema25             REAL,
+        ema75             REAL,
+        macd_diff         REAL,
+        macd_dea          REAL,
+        macd_hist         REAL,
+        macd_diff_prev    REAL,
+        macd_dea_prev     REAL,
+        macd_hist_prev    REAL,
         created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_ts_ticker_date ON technical_snapshot(ticker, date)",
@@ -456,8 +464,17 @@ class TestSignalDetectorPipeline(unittest.TestCase):
             "vol_20d_avg":   800_000.0,
             "high_52w":      last_price * 1.05,
             "low_52w":       last_price * 0.70,
-            "rsi14":         58.0,
+            "rsi14":         32.0,
             "atr14":         100.0,
+            "ema25":         last_price - 100.0,
+            "ema75":         last_price - 300.0,
+            "support_level": last_price - 200.0,
+            "macd_diff":     5.0,
+            "macd_dea":      3.0,
+            "macd_hist":     2.0,
+            "macd_diff_prev": -1.0,
+            "macd_dea_prev": 2.0,
+            "macd_hist_prev": -1.0,
             "est_turnover":  last_price * 2_000_000.0,
             "est_market_cap": last_price * 100_000_000.0,
             "return_5d":     0.03,
@@ -472,37 +489,34 @@ class TestSignalDetectorPipeline(unittest.TestCase):
         screened = [self._make_screened_ticker()]
 
         with patch("src.signal_detector.get_connection", self._fake_conn), \
-             patch("src.scoring.get_connection", self._fake_conn), \
              patch("src.data_store.get_connection", self._fake_conn):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 
         rows = self.conn.execute(
-            "SELECT ticker, label, final_score FROM daily_signals WHERE date = ?",
+            "SELECT ticker, label, cond_c_weekly_uptrend FROM daily_signals WHERE date = ?",
             (_TARGET_DATE.strftime("%Y-%m-%d"),),
         ).fetchall()
         self.assertEqual(len(rows), 1, "1 銘柄分のシグナル行が保存されるはず")
 
-    def test_daily_signals_has_score_fields(self):
-        """保存された行に final_score / market_mode 等のスコアフィールドが含まれること。"""
+    def test_daily_signals_has_swing_fields(self):
+        """保存された行にスイング条件フィールドが含まれること。"""
         screened = [self._make_screened_ticker()]
 
         with patch("src.signal_detector.get_connection", self._fake_conn), \
-             patch("src.scoring.get_connection", self._fake_conn), \
              patch("src.data_store.get_connection", self._fake_conn):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 
         row = self.conn.execute(
-            "SELECT final_score, market_mode, recommend_rank FROM daily_signals LIMIT 1"
+            "SELECT cond_c_weekly_uptrend, cond_c_rsi_oversold, market_mode FROM daily_signals LIMIT 1"
         ).fetchone()
-        self.assertIsNotNone(row["final_score"],   "final_score が保存されるはず")
-        self.assertEqual(row["market_mode"], "normal", "market_mode が保存されるはず")
+        self.assertEqual(row["cond_c_weekly_uptrend"], 1)
+        self.assertEqual(row["market_mode"], "normal")
 
     def test_caution_mode_saves_watch_not_candidate(self):
         """caution モードでは candidate が watch に降格されて保存されること。"""
         screened = [self._make_screened_ticker()]
 
         with patch("src.signal_detector.get_connection", self._fake_conn), \
-             patch("src.scoring.get_connection", self._fake_conn), \
              patch("src.data_store.get_connection", self._fake_conn):
             result = detect_and_save_signals(screened, _TARGET_DATE, "caution")
 
@@ -569,7 +583,6 @@ class TestFullPipelineIntegration(unittest.TestCase):
 
         # STEP 3: シグナル検出
         with patch("src.signal_detector.get_connection", self._fake_conn), \
-             patch("src.scoring.get_connection", self._fake_conn), \
              patch("src.data_store.get_connection", self._fake_conn):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 

@@ -430,26 +430,17 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("月15%", html)
         self.assertIn("1トレード損失上限", html)
 
-    # ---- /scoring ----
+    # ---- /scoring → /rules リダイレクト ----
 
-    def test_scoring_returns_200(self):
+    def test_scoring_redirects_to_rules(self):
         resp = self.client.get("/scoring")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/rules", resp.headers["Location"])
 
-    def test_soring_redirects_to_scoring(self):
+    def test_soring_redirects_to_rules(self):
         resp = self.client.get("/soring")
         self.assertEqual(resp.status_code, 302)
-        self.assertEqual(resp.headers["Location"], "/scoring")
-
-    def test_scoring_contains_definition(self):
-        resp = self.client.get("/scoring")
-        html = resp.data.decode()
-        self.assertIn("スコアリング定義", html)
-        self.assertIn("総合スコアの重み", html)
-        self.assertIn("共通指標", html)
-        self.assertIn("パターン適合度", html)
-        self.assertIn("Pattern C", html)
-        self.assertIn("候補化ルール", html)
+        self.assertIn("/rules", resp.headers["Location"])
 
     # ---- /screening ----
 

@@ -15,23 +15,50 @@ _CONFIG_PATH = _PROJECT_ROOT / "config.json"
 CONFIG = init_config(_CONFIG_PATH)
 
 
+def get_swing_config() -> dict:
+    """swing セクションの設定辞書を返す。"""
+    return CONFIG.get("swing", {}) or {}
+
+
+def get_exit_simple_config() -> dict:
+    """exit_simple セクションの設定辞書を返す。"""
+    return CONFIG.get("exit_simple", {}) or {}
+
+
+def get_market_config(market: str) -> dict:
+    """markets.JP / markets.US の設定辞書を返す。"""
+    markets = CONFIG.get("markets", {}) or {}
+    key = market.lower()
+    return markets.get(key, markets.get(market, {})) or {}
+
+
+def is_market_enabled(market: str) -> bool:
+    """市場のスクリーニングが有効かどうか。"""
+    cfg = get_market_config(market)
+    if "enabled" in cfg:
+        return bool(cfg.get("enabled"))
+    # 後方互換: markets 未設定時は JP/US とも有効
+    return True
+
+
+def get_market_strategy(market: str) -> str:
+    """市場に割り当てられた戦略名（moomoo_swing / swing_jp）。"""
+    cfg = get_market_config(market)
+    if cfg.get("strategy"):
+        return str(cfg["strategy"])
+    return "moomoo_swing" if market.upper() == "US" else "swing_jp"
+
+
 def get_strategy_mode() -> str:
-    """
-    現在の戦略モードを返す（"defensive" / "offensive"）。
-    未設定または不正値の場合は "defensive" を返す。
-    """
-    mode = str(CONFIG.get("strategy_mode", "defensive")).lower()
-    return mode if mode in ("defensive", "offensive") else "defensive"
+    """後方互換: 常にスイング戦略。"""
+    return "swing"
 
 
 def is_offensive() -> bool:
-    """攻めモードかどうかを返す。"""
-    return get_strategy_mode() == "offensive"
+    """後方互換: 攻めモードは廃止。"""
+    return False
 
 
 def get_offensive_config() -> dict:
-    """
-    strategy.offensive の設定辞書を返す（未設定なら空辞書）。
-    呼び出し側は .get() でデフォルト値を補完して使う。
-    """
-    return CONFIG.get("strategy", {}).get("offensive", {}) or {}
+    """後方互換: 空辞書を返す。"""
+    return {}

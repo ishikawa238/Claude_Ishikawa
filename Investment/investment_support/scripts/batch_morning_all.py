@@ -335,24 +335,7 @@ def _run_batch(
         except Exception as e:
             logger.warning(f"ポートフォリオスナップショット保存スキップ: {e}")
 
-        # STEP 5.2: PayPay ポイント運用
-        paypay_points_eval = []
-        paypay_signals = []
-        if CONFIG.get("paypay_points", {}).get("enabled", False):
-            try:
-                from src.paypay_points import (
-                    evaluate_paypay_points,
-                    generate_points_signals,
-                    sync_paypay_points_from_csv,
-                )
-                sync_paypay_points_from_csv()
-                paypay_points_eval = evaluate_paypay_points()
-                paypay_signals = generate_points_signals(_TODAY)
-            except Exception as e:
-                logger.warning(f"PayPayポイント運用処理スキップ: {e}")
-
-        # ────────────────────────────────────────
-        # STEP 5.5: ニュース取得 + LLM アドバイザー（有効時のみ）
+        # STEP 5.1: ポートフォリオスナップショット保存
         # ────────────────────────────────────────
         _progress(6, "ニュース取得")
         news = []
@@ -381,7 +364,7 @@ def _run_batch(
         # ────────────────────────────────────────
         _progress(_TOTAL, "Slack通知送信")
         logger.info("STEP 6: 朝通知送信")
-        data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ma200", "ma25", "rsi14")))
+        data_insufficient = sum(1 for tk in screened if any(tk.get(f) is None for f in ("ema25", "ema75", "rsi14")))
         screening_stats = {
             "screened": len(screened),
             "candidates": signals_count,
@@ -392,9 +375,7 @@ def _run_batch(
         try:
             send_morning_report(_TODAY, market_env, all_entry_sets, holdings,
                                 llm_feedback=llm_feedback, near_misses=near_misses,
-                                screening_stats=screening_stats,
-                                paypay_points=paypay_points_eval,
-                                paypay_signals=paypay_signals)
+                                screening_stats=screening_stats)
         except Exception as e:
             logger.error(f"Slack通知送信失敗: {e}", exc_info=True)
             log_error(_BATCH_TYPE, "send_morning_report", type(e).__name__, str(e))

@@ -50,17 +50,17 @@ def _mock_conn():
 
 
 def _make_ticker(**overrides) -> dict:
-    """シグナル検出テスト用の銘柄辞書を生成する。"""
+    """スイング検出テスト用の銘柄辞書を生成する。"""
     base = {
-        "ticker": "7203.T", "market": "JP",
-        "close": 3000.0, "adj_close": 3000.0,
-        "ma5": 2900.0, "ma25": 2800.0, "ma75": 2600.0, "ma200": 2400.0,
-        "ma5_5d_ago": 2850.0, "ma25_5d_ago": 2750.0, "ma200_5d_ago": 2380.0,
+        "ticker": "7203", "market": "JP", "name": "トヨタ",
+        "close": 3000.0,
+        "ema25": 3100.0, "ema75": 2900.0,
+        "rsi14": 32.0, "atr14": 80.0,
         "volume": 1200000, "vol_20d_avg": 800000,
-        "high_52w": 3100.0, "low_52w": 2000.0,
-        "rsi14": 62.0, "atr14": 80.0,
+        "support_level": 2850.0,
+        "macd_diff": 10.0, "macd_dea": 5.0, "macd_hist": 5.0,
+        "macd_diff_prev": -2.0, "macd_dea_prev": 4.0, "macd_hist_prev": -1.0,
         "est_turnover": 3_600_000_000, "est_market_cap": 50_000_000_000,
-        "return_5d": 0.05, "return_20d": 0.10, "volatility_20d": 0.02,
     }
     base.update(overrides)
     return base
@@ -249,24 +249,18 @@ class MarketModeSignalDemotionTests(unittest.TestCase):
     watch に降格されることを確認する。
     """
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all", return_value=[])
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
     def test_caution_mode_demotes_candidate_to_watch(
-        self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows
+        self, mock_conn, mock_upsert, mock_fetch_all
     ):
         """
         caution モードでは candidate ラベルが watch に降格し、
         返り値の candidates リストが空になる。
         """
         mock_conn.return_value = _mock_conn()
-        # 全条件を充足するブレイクアウト銘柄
-        ticker = _make_ticker(
-            close=3100.0, high_52w=3100.0,   # 52週高値到達
-            volume=2000000, vol_20d_avg=800000,  # 出来高急増
-            rsi14=60.0,
-        )
+        ticker = _make_ticker()
         result = detect_and_save_signals([ticker], date(2026, 5, 1), "caution")
         # caution モードではいかなる候補も返さない
         self.assertEqual(result, [])
@@ -276,65 +270,41 @@ class MarketModeSignalDemotionTests(unittest.TestCase):
         self.assertNotEqual(saved_rows[0]["label"], "candidate",
                             "caution モードでは candidate ラベルが保存されてはならない")
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all", return_value=[])
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
     def test_full_caution_mode_demotes_candidate_to_watch(
-        self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows
+        self, mock_conn, mock_upsert, mock_fetch_all
     ):
         """full_caution モードでも同様に candidate が watch に降格する。"""
         mock_conn.return_value = _mock_conn()
-        ticker = _make_ticker(
-            close=3100.0, high_52w=3100.0,
-            volume=2000000, vol_20d_avg=800000,
-            rsi14=60.0,
-        )
+        ticker = _make_ticker()
         result = detect_and_save_signals([ticker], date(2026, 5, 1), "full_caution")
         self.assertEqual(result, [])
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all", return_value=[])
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
     def test_normal_mode_keeps_candidate(
-        self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows
+        self, mock_conn, mock_upsert, mock_fetch_all
     ):
-        """
-        normal モードでは candidate が降格しない（回帰確認）。
-        スコア >= 50 の銘柄は candidates に残る。
-        """
+        """normal モードでは candidate が返る。"""
         mock_conn.return_value = _mock_conn()
-        ticker = _make_ticker(
-            close=3100.0, high_52w=3100.0,
-            volume=2000000, vol_20d_avg=800000,
-            rsi14=60.0,
-        )
+        ticker = _make_ticker()
         result = detect_and_save_signals([ticker], date(2026, 5, 1), "normal")
-        # normal モードでは DB 行が保存される（ラベルは score 次第）
         self.assertTrue(mock_upsert.called)
-        saved_rows = mock_upsert.call_args[0][2]
-        # DB 行の market_mode が "normal" になっていること
-        self.assertEqual(saved_rows[0]["market_mode"], "normal")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["label"], "candidate")
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all", return_value=[])
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
     def test_watch_label_preserved_in_caution(
-        self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows
+        self, mock_conn, mock_upsert, mock_fetch_all
     ):
-        """
-        caution モードで元々 watch の銘柄は watch のまま DB に保存される。
-        （降格の二重処理が起きないことの確認）
-        """
+        """caution モードで元々 watch の銘柄は watch のまま DB に保存される。"""
         mock_conn.return_value = _mock_conn()
-        # スコアが低く watch 相当の銘柄（RSI 範囲外・出来高弱い）
-        ticker = _make_ticker(
-            close=2600.0, high_52w=3100.0,  # 52週高値から遠い
-            volume=500000, vol_20d_avg=800000,  # 出来高少ない
-            rsi14=35.0,  # RSI 範囲外
-        )
+        ticker = _make_ticker(rsi14=45.0)
         detect_and_save_signals([ticker], date(2026, 5, 1), "caution")
         self.assertTrue(mock_upsert.called)
         saved_rows = mock_upsert.call_args[0][2]

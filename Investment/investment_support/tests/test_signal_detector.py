@@ -13,16 +13,20 @@ from unittest.mock import MagicMock, patch
 
 _CONFIG_MOCK = {
     "signal": {
-        "pattern_a_rsi_min": "50",
-        "pattern_a_rsi_max": "70",
-        "pattern_a_volume_ratio_min": "1.2",
-        "pattern_a_52w_high_pct": "0.92",
-        "pattern_b_rsi_min": "40",
-        "pattern_b_rsi_max": "60",
-        "pattern_b_ma25_touch_pct": "0.98",
-        "pattern_b_lookback_days": "5",
-        "pattern_b_bounce_confirm_days": "1",
-        "max_candidates_per_pattern": "3",
+        "max_entry_sets_per_batch": "3",
+    },
+    "swing": {
+        "us_min_price": 10,
+        "us_max_price": 50,
+        "jp_min_price": 300,
+        "jp_max_price": 3000,
+        "ema_short": 25,
+        "ema_long": 75,
+        "rsi_max": 35,
+        "rsi_lookback_days": 5,
+        "risk_reward_ratio": 2.0,
+        "max_risk_per_trade_pct": 2.0,
+        "support_stop_buffer_pct": 1.0,
     },
     "database": {"db_path": ":memory:", "backup_dir": "/tmp", "backup_retention_days": "7"},
     "logging": {"log_dir": "/tmp", "log_level": "INFO"},
@@ -66,57 +70,55 @@ class DetectAndSaveSignalsMarketModeTests(unittest.TestCase):
         result = detect_and_save_signals([], date(2026, 4, 22), "full_caution")
         self.assertEqual(result, [])
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all")
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
-    def test_caution_mode_evaluates_ticker(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
+    def test_caution_mode_evaluates_ticker(self, mock_conn, mock_upsert, mock_fetch_all):
         """caution モードでも銘柄の評価ループが実行され、DB保存が呼ばれること。"""
-        mock_conn.return_value = self._mock_conn()
-        mock_fetch_all.return_value = []  # _check_pullback の price_history 問い合わせ結果
-
-        ticker = {
-            "ticker": "7203.T", "market": "JP",
-            "close": 3000.0, "adj_close": 3000.0,
-            "ma5": 2900.0, "ma25": 2800.0, "ma75": 2600.0, "ma200": 2400.0,
-            "ma5_5d_ago": 2850.0, "ma25_5d_ago": 2750.0, "ma200_5d_ago": 2380.0,
-            "volume": 1000000, "vol_20d_avg": 700000,
-            "high_52w": 3100.0, "low_52w": 2000.0,
-            "rsi14": 58.0, "atr14": 80.0,
-            "est_turnover": 3000000000, "est_market_cap": 50000000000,
-            "return_5d": 0.05, "return_20d": 0.10, "volatility_20d": 0.02,
-        }
-        result = detect_and_save_signals([ticker], date(2026, 4, 22), "caution")
-        # upsert が1回以上呼ばれること（評価ループが動いた証拠）
-        self.assertTrue(mock_upsert.called, "caution モードでも upsert が呼ばれるべき")
-
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
-    @patch("src.signal_detector.fetch_all")
-    @patch("src.signal_detector.upsert")
-    @patch("src.signal_detector.get_connection")
-    def test_normal_mode_evaluates_ticker(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """normal モードでの挙動が caution モードと同じであること（回帰確認）。"""
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
 
         ticker = {
-            "ticker": "AAPL", "market": "US",
-            "close": 200.0, "adj_close": 200.0,
-            "ma5": 195.0, "ma25": 190.0, "ma75": 180.0, "ma200": 170.0,
-            "ma5_5d_ago": 192.0, "ma25_5d_ago": 188.0, "ma200_5d_ago": 168.0,
-            "volume": 50000000, "vol_20d_avg": 30000000,
-            "high_52w": 210.0, "low_52w": 140.0,
-            "rsi14": 60.0, "atr14": 5.0,
-            "est_turnover": 10000000000, "est_market_cap": 3000000000000,
-            "return_5d": 0.03, "return_20d": 0.08, "volatility_20d": 0.015,
+            "ticker": "7203", "market": "JP", "name": "トヨタ",
+            "close": 3000.0,
+            "ema25": 3100.0, "ema75": 2900.0,
+            "rsi14": 32.0, "atr14": 80.0,
+            "volume": 1000000, "vol_20d_avg": 700000,
+            "support_level": 2850.0,
+            "macd_diff": 10.0, "macd_dea": 5.0, "macd_hist": 5.0,
+            "macd_diff_prev": -2.0, "macd_dea_prev": 4.0, "macd_hist_prev": -1.0,
+            "est_turnover": 3000000000, "est_market_cap": 50000000000,
         }
-        with patch("src.signal_detector.is_offensive", return_value=False):
-            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
+        detect_and_save_signals([ticker], date(2026, 4, 22), "caution")
+        self.assertTrue(mock_upsert.called, "caution モードでも upsert が呼ばれるべき")
+
+    @patch("src.signal_detector.fetch_all")
+    @patch("src.signal_detector.upsert")
+    @patch("src.signal_detector.get_connection")
+    def test_normal_mode_evaluates_ticker(self, mock_conn, mock_upsert, mock_fetch_all):
+        """normal モードで candidate が返ること。"""
+        mock_conn.return_value = self._mock_conn()
+        mock_fetch_all.return_value = []
+
+        ticker = {
+            "ticker": "PLTR", "market": "US", "name": "Palantir",
+            "close": 25.0,
+            "ema25": 30.0, "ema75": 28.0,
+            "rsi14": 32.0, "atr14": 1.5,
+            "volume": 50000000, "vol_20d_avg": 30000000,
+            "support_level": 23.0,
+            "macd_diff": 0.2, "macd_dea": 0.1, "macd_hist": 0.1,
+            "macd_diff_prev": -0.1, "macd_dea_prev": 0.0, "macd_hist_prev": -0.1,
+            "est_turnover": 10000000000, "est_market_cap": 3000000000000,
+        }
+        result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
         self.assertTrue(mock_upsert.called)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["label"], "candidate")
 
 
-class ScoringIntegrationTests(unittest.TestCase):
-    """upsert に渡される行にスコアフィールドが含まれることを確認する。"""
+class SwingIntegrationTests(unittest.TestCase):
+    """スイング条件が daily_signals 行に反映されることを確認する。"""
 
     def _mock_conn(self):
         cm = MagicMock()
@@ -124,144 +126,46 @@ class ScoringIntegrationTests(unittest.TestCase):
         cm.__exit__ = MagicMock(return_value=False)
         return cm
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all")
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
-    def test_upsert_rows_contain_score_fields(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """upsert に渡される行辞書に final_score / recommend_rank 等が存在する。"""
+    def test_upsert_rows_contain_swing_fields(self, mock_conn, mock_upsert, mock_fetch_all):
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
-
         ticker = {
-            "ticker": "9984", "market": "JP",
-            "close": 8000.0, "adj_close": 8000.0,
-            "ma5": 7900.0, "ma25": 7700.0, "ma75": 7500.0, "ma200": 7000.0,
-            "ma5_5d_ago": 7800.0, "ma25_5d_ago": 7600.0, "ma200_5d_ago": 6900.0,
-            "volume": 20000000, "vol_20d_avg": 12000000,
-            "high_52w": 8200.0, "low_52w": 5000.0,
-            "rsi14": 62.0, "atr14": 200.0,
-            "est_turnover": 160_000_000_000, "est_market_cap": 12_000_000_000_000,
+            "ticker": "PLTR", "market": "US", "name": "Palantir",
+            "close": 25.0, "ema25": 30.0, "ema75": 28.0, "rsi14": 32.0, "atr14": 1.5,
+            "volume": 1e6, "vol_20d_avg": 8e5, "support_level": 23.0,
+            "macd_diff": 0.2, "macd_dea": 0.1, "macd_hist": 0.1,
+            "macd_diff_prev": -0.1, "macd_dea_prev": 0.0, "macd_hist_prev": -0.1,
+            "est_turnover": 2e7, "est_market_cap": 5e9,
         }
-        with patch("src.signal_detector.is_offensive", return_value=False):
-            detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
-
-        # upsert の引数からDB保存行を取り出す
-        self.assertTrue(mock_upsert.called)
-        call_args = mock_upsert.call_args_list[0]
-        rows = call_args[0][2]  # upsert(conn, table, rows) の 3 番目
-        self.assertEqual(len(rows), 1)
-
-        row = rows[0]
-        for key in ("final_score", "recommend_rank", "recommend_reason",
-                     "trend_score", "pattern_a_score", "pattern_b_score",
-                     "liquidity_score", "base_score", "market_multiplier",
-                     "market_mode"):
-            self.assertIn(key, row, f"'{key}' が行に含まれていない")
-
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
-    @patch("src.signal_detector.fetch_all")
-    @patch("src.signal_detector.upsert")
-    @patch("src.signal_detector.get_connection")
-    def test_high_score_watch_promoted_to_candidate(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """既存条件では watch だがスコア条件を満たせば candidate に昇格する。"""
-        mock_conn.return_value = self._mock_conn()
-        mock_fetch_all.return_value = []
-
-        # MA整列・52w近傍・出来高で高スコアだが、RSI条件不足で既存ラベルは watch
-        ticker = {
-            "ticker": "6758", "market": "JP",
-            "close": 3000.0, "adj_close": 3000.0,
-            "ma5": 2980.0, "ma25": 2900.0, "ma75": 2800.0, "ma200": 2600.0,
-            "ma5_5d_ago": 2950.0, "ma25_5d_ago": 2870.0, "ma200_5d_ago": 2560.0,
-            "volume": 2000000, "vol_20d_avg": 1000000,
-            "high_52w": 3100.0, "low_52w": 2000.0,
-            "rsi14": 78.0, "atr14": 80.0,
-            "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
-        }
-        with patch("src.signal_detector.is_offensive", return_value=False):
-            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
-
-        # upsert 行を確認
-        call_args = mock_upsert.call_args_list[0]
-        rows = call_args[0][2]
-        row = rows[0]
-
-        # final_score が計算されていること
-        self.assertIsNotNone(row.get("final_score"))
-        # 総合スコアと主要パターンスコアを満たせば candidate に昇格し、
-        # score 候補として区別される
-        if row["final_score"] >= 50:
-            self.assertEqual(row["label"], "candidate")
-            self.assertEqual(row["pattern"], "A")
-            self.assertEqual(len(result), 1)
-            self.assertEqual(result[0].get("_candidate_source"), "score")
-
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
-    @patch("src.signal_detector.fetch_all")
-    @patch("src.signal_detector.upsert")
-    @patch("src.signal_detector.get_connection")
-    def test_score_candidate_requires_pattern_subscore(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """総合50点以上でも主要パターンスコアが弱ければ candidate にしない。"""
-        mock_conn.return_value = self._mock_conn()
-        mock_fetch_all.return_value = []
-
-        ticker = {
-            "ticker": "WEAK", "market": "JP",
-            "close": 3300.0, "adj_close": 3300.0,
-            "ma5": 3300.0, "ma25": 3000.0, "ma75": 2800.0, "ma200": 2600.0,
-            "ma5_5d_ago": 3200.0, "ma25_5d_ago": 2900.0, "ma200_5d_ago": 2560.0,
-            "volume": 800000, "vol_20d_avg": 1000000,
-            "high_52w": 5000.0, "low_52w": 2000.0,
-            "rsi14": 80.0, "atr14": 80.0,
-            "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
-        }
-        with patch("src.signal_detector.is_offensive", return_value=False):
-            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
-
+        detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
         rows = mock_upsert.call_args_list[0][0][2]
         row = rows[0]
-        self.assertGreaterEqual(row["final_score"], 50)
-        self.assertLess(row["pattern_a_score"], 60)
-        self.assertLess(row["pattern_b_score"], 60)
-        self.assertLess(row["pattern_c_score"], 60)
-        self.assertEqual(row["label"], "watch")
-        self.assertEqual(result, [])
+        self.assertEqual(row["cond_c_weekly_uptrend"], 1)
+        self.assertEqual(row["cond_c_rsi_oversold"], 1)
+        self.assertEqual(row["cond_c_sar_reversal"], 1)
+        self.assertEqual(row["label"], "candidate")
 
-    @patch("src.signal_detector.fetch_recent_lows", return_value={})
     @patch("src.signal_detector.fetch_all")
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
-    def test_offensive_filter_demotes_score_candidate(self, mock_conn, mock_upsert, mock_fetch_all, _mock_lows):
-        """攻めモードではスコア候補でも offensive 閾値未満なら watch に戻す。"""
+    def test_caution_demotes_candidate_to_watch(self, mock_conn, mock_upsert, mock_fetch_all):
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
-
         ticker = {
-            "ticker": "6758", "market": "JP",
-            "close": 3000.0, "adj_close": 3000.0,
-            "ma5": 2980.0, "ma25": 2900.0, "ma75": 2800.0, "ma200": 2600.0,
-            "ma5_5d_ago": 2950.0, "ma25_5d_ago": 2870.0, "ma200_5d_ago": 2560.0,
-            "volume": 2000000, "vol_20d_avg": 1000000,
-            "high_52w": 3100.0, "low_52w": 2000.0,
-            "rsi14": 78.0, "atr14": 80.0,
-            "est_turnover": 6_000_000_000, "est_market_cap": 50_000_000_000,
+            "ticker": "PLTR", "market": "US", "name": "Palantir",
+            "close": 25.0, "ema25": 30.0, "ema75": 28.0, "rsi14": 32.0, "atr14": 1.5,
+            "volume": 1e6, "vol_20d_avg": 8e5, "support_level": 23.0,
+            "macd_diff": 0.2, "macd_dea": 0.1, "macd_hist": 0.1,
+            "macd_diff_prev": -0.1, "macd_dea_prev": 0.0, "macd_hist_prev": -0.1,
+            "est_turnover": 2e7, "est_market_cap": 5e9,
         }
-        off_cfg = {
-            "min_rank": "A",
-            "min_final_score": 80,
-            "filters": {},
-        }
-        with patch("src.signal_detector.is_offensive", return_value=True), \
-             patch("src.signal_detector.get_offensive_config", return_value=off_cfg):
-            result = detect_and_save_signals([ticker], date(2026, 4, 22), "normal")
-
-        rows = mock_upsert.call_args_list[0][0][2]
-        row = rows[0]
-        self.assertGreaterEqual(row["final_score"], 50)
-        self.assertLess(row["final_score"], 80)
-        self.assertEqual(row["label"], "watch")
+        result = detect_and_save_signals([ticker], date(2026, 4, 22), "caution")
         self.assertEqual(result, [])
+        row = mock_upsert.call_args_list[0][0][2][0]
+        self.assertEqual(row["label"], "watch")
 
 
 class SignalDetectorConfigCompatibilityTests(unittest.TestCase):

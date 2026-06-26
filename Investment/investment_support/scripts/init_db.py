@@ -526,6 +526,25 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE technical_snapshot ADD COLUMN sar_direction       TEXT",
     "ALTER TABLE technical_snapshot ADD COLUMN support_level       REAL",
     "ALTER TABLE technical_snapshot ADD COLUMN resistance_level    REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN ema25               REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN ema75               REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_diff           REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_dea            REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_hist           REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_diff_prev    REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_dea_prev     REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN macd_hist_prev    REAL",
+    # シンプル出口ルールの延長保有状態
+    """
+    CREATE TABLE IF NOT EXISTS exit_simple_state (
+        ticker            TEXT PRIMARY KEY,
+        extend_active     INTEGER NOT NULL DEFAULT 0,
+        partial_taken     INTEGER NOT NULL DEFAULT 0,
+        last_target_pct   REAL,
+        updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ticker) REFERENCES universe_master(ticker)
+    )
+    """,
     # Pattern C: daily_signals に条件フラグ・スコア追加
     "ALTER TABLE daily_signals ADD COLUMN cond_c_weekly_uptrend INTEGER",
     "ALTER TABLE daily_signals ADD COLUMN cond_c_at_support      INTEGER",

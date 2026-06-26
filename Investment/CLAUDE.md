@@ -71,9 +71,10 @@ External APIs → price_history / index_snapshot (SQLite)
 | `data_fetcher.py` | EODHD API — bulk EOD (1 request/exchange/day), index history, symbol master |
 | `yfinance_fetcher.py` | yfinance — JP daily prices + initial 3-year history load (free, unofficial API) |
 | `jquants_fetcher.py` | J-Quants API — JP fundamentals and earnings schedule |
-| `technical_calculator.py` | Computes MA5/25/75/200, RSI14, ATR14, volatility, turnover, weekly MA25, Parabolic SAR, support/resistance → `technical_snapshot` |
+| `technical_calculator.py` | Computes MA5/25/75/200, EMA25/75, RSI14, ATR14, MACD, volatility, turnover, support/resistance → `technical_snapshot` |
 | `market_filter.py` | Market environment judge (normal/caution/full_caution) + liquidity screening |
-| `signal_detector.py` | Pattern A (breakout), Pattern B (MA25 pullback), Pattern C (support bounce) detection |
+| `swing_detector.py` | EMA pullback swing condition evaluation (watch/candidate) |
+| `signal_detector.py` | Swing signal detection → `daily_signals` |
 | `entry_calculator.py` | Computes entry price, stop-loss, target, recommended amount → `trade_signal_log` |
 | `holdings_monitor.py` | Evaluates stop-loss hits, take-profit target reaches, and earnings alerts for open positions |
 | `take_profit.py` | Take-profit target management — type determination (I/II/III), T1/T2/T3 price calculation, reach detection, DB ops → `take_profit_targets` |
@@ -81,7 +82,6 @@ External APIs → price_history / index_snapshot (SQLite)
 | `llm_advisor.py` | Sends stock data + news to OpenAI/Anthropic/Gemini APIs and returns feedback for Slack notifications (config: `llm` section) |
 | `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
 | `portfolio_snapshot.py` | Computes and persists total assets (holdings value + moomoo cash) per batch run → `portfolio_snapshot` |
-| `paypay_points.py` | PayPay point investment tracking — CSV sync, return calculation, timing signals based on MA25 (config: `paypay_points`) |
 | `report_generator.py` | Monthly Slack report |
 | `logger.py` | Logging setup — use `get_logger(__name__)` in every module; outputs to console + `logs/batch_YYYYMMDD.log` |
 
@@ -90,7 +90,7 @@ External APIs → price_history / index_snapshot (SQLite)
 - `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → portfolio snapshot → LLM advisor → Slack → DB backup
 - `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → portfolio snapshot → LLM advisor → Slack
 - `batch_monthly.py` — Universe master refresh + J-Quants fundamentals + monthly Slack report
-- `order_server.py` — Flask server that serves the daily report page (`/report`), settings page (`/settings`), PayPay points page (`/paypay`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. PayPay page allows viewing/editing point balances via `GET/POST /api/paypay-points`. Additional API endpoints: `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
+- `order_server.py` — Flask server that serves the daily report page (`/report`), rules page (`/rules`), settings page (`/settings`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. Additional API endpoints: `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
 
 ### Database (`data/investment.db`)
 
@@ -105,8 +105,7 @@ SQLite with WAL mode. Tables:
 - `trade_signal_log` — notified entry sets (entry/stop/target/amount)
 - `take_profit_targets` — staged take-profit targets per holding (T1/T2/T3 prices, reach status, adjusted stop-loss)
 - `trade_result_log` — trade outcomes (moomoo auto-sync or dashboard form or CLI)
-- `portfolio_snapshot` — total assets snapshot per batch run (holdings value, moomoo cash, PayPay points, unrealized P&L, USD/JPY rate)
-- `paypay_points` — PayPay point investment balances per course (synced from `paypay_points.csv`)
+- `portfolio_snapshot` — total assets snapshot per batch run (holdings value, moomoo cash, unrealized P&L, USD/JPY rate)
 - `earnings_schedule` — JP earnings announcement dates from J-Quants
 - `fundamentals_snapshot` — JP financial data from J-Quants
 - `llm_feedback_log` — LLM advisor responses (date, provider, model, tokens, response text)

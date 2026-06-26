@@ -16,6 +16,13 @@ from typing import Optional
 
 from src.config import CONFIG, get_offensive_config, is_offensive
 from src.data_store import fetch_all, fetch_one, get_connection, upsert
+from src.exit_simple import (
+    cleanup_closed_holdings,
+    effective_target_pct,
+    evaluate_exit,
+    is_exit_simple_enabled,
+    target_price as exit_target_price,
+)
 from src.logger import get_logger
 from src.take_profit import (
     check_target_reached,
@@ -286,6 +293,11 @@ def evaluate_holdings(target_date: date) -> list[dict]:
     """
     target_str = target_date.strftime("%Y-%m-%d")
 
+    if is_exit_simple_enabled():
+        cleanup_closed_holdings()
+    else:
+        cleanup_stale_targets()
+
     with get_connection() as conn:
         holdings = fetch_all(
             conn,
@@ -335,26 +347,52 @@ def evaluate_holdings(target_date: date) -> list[dict]:
         ma25 = snap.get("ma25") if snap else None
         ma50 = _estimate_ma50(snap)
 
-        # --- 利確ターゲット ---
-        tp_targets = ensure_targets(
-            ticker, entry_price, stop_loss_price,
-            quantity or 1, target_str,
-        )
+        # --- 利確 / 出口ルール ---
+        tp_targets = None
         tp_result = {
             "newly_reached": [], "adjusted_stop": None,
             "sell_qty": 0, "trailing_triggered": False,
             "trailing_level": None, "double_milestone": False,
         }
-        if tp_targets and label not in ("forced_stop", "sl_near"):
-            tp_result = check_target_reached(
-                ticker, current_price, entry_price, target_str,
-                ma25=ma25, ma50=ma50,
+        exit_ex = None
+        eff_target_pct = None
+        eff_target_price = None
+
+        if is_exit_simple_enabled() and label not in ("forced_stop", "sl_near"):
+            exit_ex = evaluate_exit(
+                ticker, entry_price, current_price, pnl_pct,
+                quantity, holding_days, snap,
             )
-            # 利確到達時はラベルを上書き（sell_watch / hold より優先）
-            label, reasons = _build_tp_label(
-                tp_result, tp_targets, ma25, ma50,
-                stop_loss_price, label, reasons,
+            if holding_days is not None:
+                eff_target_pct = effective_target_pct(holding_days)
+                eff_target_price = exit_target_price(entry_price, eff_target_pct)
+            elif is_exit_simple_enabled():
+                eff_target_pct = effective_target_pct(0)
+                eff_target_price = exit_target_price(entry_price, eff_target_pct)
+            if exit_ex:
+                if exit_ex["label"] in (
+                    "tp_full", "tp_partial", "tp_extend_hold",
+                    "tp_extend_exit", "stale_watch", "stale_exit",
+                ):
+                    label = exit_ex["label"]
+                    reasons = exit_ex["reasons"]
+                elif exit_ex.get("extend_active") and label == "hold":
+                    reasons = exit_ex["reasons"]
+                tp_result["sell_qty"] = exit_ex.get("sell_qty", 0)
+        elif label not in ("forced_stop", "sl_near"):
+            tp_targets = ensure_targets(
+                ticker, entry_price, stop_loss_price,
+                quantity or 1, target_str,
             )
+            if tp_targets:
+                tp_result = check_target_reached(
+                    ticker, current_price, entry_price, target_str,
+                    ma25=ma25, ma50=ma50,
+                )
+                label, reasons = _build_tp_label(
+                    tp_result, tp_targets, ma25, ma50,
+                    stop_loss_price, label, reasons,
+                )
 
         # --- 買い増し候補判定（攻めモードのみ） ---
         add_buy = None
@@ -380,14 +418,22 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "earnings_date":   next_earnings["date"] if next_earnings else None,
             "earnings_days":   next_earnings["days"] if next_earnings else None,
             "holding_days":    holding_days,
-            "target_price":    _get_target_price(ticker),
+            "target_price":    eff_target_price or _get_target_price(ticker),
             # テクニカル指標（notifier で使用）
             "tech_ma5":   snap.get("ma5")   if snap else None,
             "tech_ma25":  ma25,
             "tech_ma50":  ma50,
             "tech_ma200": snap.get("ma200") if snap else None,
             "tech_rsi14": snap.get("rsi14") if snap else None,
-            # 利確ターゲット情報
+            "tech_ema25": snap.get("ema25") if snap else None,
+            "tech_ema75": snap.get("ema75") if snap else None,
+            # シンプル出口
+            "exit_effective_target_pct": eff_target_pct,
+            "exit_effective_target_price": eff_target_price,
+            "exit_extend_active": bool(exit_ex.get("extend_active")) if exit_ex else False,
+            "exit_hold_ok": exit_ex.get("hold_ok") if exit_ex else None,
+            "exit_sell_qty": tp_result.get("sell_qty", 0),
+            # 旧分割利確（exit_simple 無効時）
             "profit_type":     tp_targets["profit_type"] if tp_targets else None,
             "tp_t1_price":     tp_targets["t1_price"] if tp_targets else None,
             "tp_t2_price":     tp_targets["t2_price"] if tp_targets else None,
@@ -409,7 +455,10 @@ def evaluate_holdings(target_date: date) -> list[dict]:
     sl_near = sum(1 for r in results if r["label"] == "sl_near")
     sell    = sum(1 for r in results if r["label"] == "sell_watch")
     hold    = sum(1 for r in results if r["label"] == "hold")
-    tp      = sum(1 for r in results if r["label"].startswith("tp_"))
+    tp      = sum(
+        1 for r in results
+        if r["label"].startswith("tp_") or r["label"].startswith("stale_")
+    )
     add_buy = sum(
         1 for r in results
         if r.get("add_buy_signal") and r["add_buy_signal"].get("eligible")
@@ -795,7 +844,7 @@ def _get_technical(ticker: str, target_str: str) -> Optional[dict]:
         row = fetch_one(
             conn,
             """
-            SELECT t.ma5, t.ma25, t.ma75, t.ma200, t.rsi14,
+            SELECT t.ma5, t.ma25, t.ma75, t.ma200, t.ema25, t.ema75, t.rsi14,
                    t.vol_20d_avg, t.high_20d,
                    p.volume
             FROM technical_snapshot t

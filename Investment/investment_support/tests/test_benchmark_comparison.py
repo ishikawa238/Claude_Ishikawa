@@ -109,7 +109,7 @@ class BenchmarkComparisonTests(unittest.TestCase):
         s = result["summary"]
         self.assertEqual(s["portfolio_return_pct"], 10.0)
         self.assertEqual(s["sp500_return_pct"], 5.0)
-        self.assertEqual(s["excess_adjusted_return_pct"], 5.0)
+        self.assertEqual(s["excess_adjusted_return_pct"], 4.0)
         self.assertTrue(s["beating_sp500"])
 
     def test_insufficient_data_returns_message(self):

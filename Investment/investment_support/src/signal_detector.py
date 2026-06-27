@@ -75,18 +75,34 @@ def detect_and_save_signals(
     for row in all_rows:
         row["rs_rank"] = rank_map.get(row["ticker"])
 
+    market = screened_tickers[0]["market"] if screened_tickers else None
     chunk = 500
-    for i in range(0, len(all_rows), chunk):
-        save_rows = [
-            {
-                k: v
-                for k, v in r.items()
-                if not k.startswith("_") and k in _DAILY_SIGNALS_COLUMNS
-            }
-            for r in all_rows[i:i + chunk]
-        ]
-        with get_connection() as conn:
-            upsert(conn, "daily_signals", save_rows)
+    with get_connection() as conn:
+        if market:
+            cur = conn.execute(
+                "DELETE FROM daily_signals WHERE date = ? AND market = ?",
+                (target_str, market),
+            )
+            try:
+                deleted = int(cur.rowcount)
+            except (TypeError, ValueError):
+                deleted = 0
+            if deleted > 0:
+                logger.info(
+                    f"daily_signals 旧行を削除: {market} {target_str} "
+                    f"({deleted:,} 件 → {len(all_rows):,} 件に置換)"
+                )
+        for i in range(0, len(all_rows), chunk):
+            save_rows = [
+                {
+                    k: v
+                    for k, v in r.items()
+                    if not k.startswith("_") and k in _DAILY_SIGNALS_COLUMNS
+                }
+                for r in all_rows[i:i + chunk]
+            ]
+            if save_rows:
+                upsert(conn, "daily_signals", save_rows)
 
     for c in candidates:
         extras = c.pop("_notify_extras", {})

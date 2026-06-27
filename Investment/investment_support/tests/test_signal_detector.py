@@ -220,5 +220,90 @@ class SignalSaveHealthTests(unittest.TestCase):
         self.assertIsNone(alert)
 
 
+class DailySignalsPruneTests(unittest.TestCase):
+    """スクリーニング対象外の旧 daily_signals 行が削除されること。"""
+
+    def setUp(self):
+        import sqlite3
+        from contextlib import contextmanager
+
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            """
+            CREATE TABLE daily_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                date TEXT NOT NULL,
+                market TEXT NOT NULL,
+                pattern TEXT,
+                label TEXT NOT NULL,
+                cond_c_weekly_uptrend INTEGER,
+                cond_c_at_support INTEGER,
+                cond_c_rsi_oversold INTEGER,
+                cond_c_sar_reversal INTEGER,
+                close REAL,
+                rsi14 REAL,
+                atr14 REAL,
+                vol_ratio REAL,
+                rs_rank INTEGER,
+                market_mode TEXT,
+                UNIQUE(ticker, date)
+            )
+            """
+        )
+        self.conn.executemany(
+            "INSERT INTO daily_signals (ticker, date, market, label) VALUES (?, ?, ?, ?)",
+            [
+                ("OLD1", "2026-06-22", "JP", "skip"),
+                ("OLD2", "2026-06-22", "JP", "skip"),
+                ("US1", "2026-06-22", "US", "skip"),
+            ],
+        )
+        self.conn.commit()
+
+        @contextmanager
+        def _cm():
+            yield self.conn
+            self.conn.commit()
+
+        self._fake_conn = _cm
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _ticker(self):
+        return {
+            "ticker": "7203", "market": "JP", "name": "トヨタ",
+            "close": 3000.0,
+            "ema25": 3100.0, "ema75": 2900.0,
+            "rsi14": 32.0, "atr14": 80.0,
+            "volume": 1000000, "vol_20d_avg": 700000,
+            "support_level": 2850.0,
+            "macd_diff": 10.0, "macd_dea": 5.0, "macd_hist": 5.0,
+            "macd_diff_prev": -2.0, "macd_dea_prev": 4.0, "macd_hist_prev": -1.0,
+            "est_turnover": 3000000000, "est_market_cap": 50000000000,
+        }
+
+    @patch("src.signal_detector.fetch_all", return_value=[])
+    @patch("src.signal_detector.get_connection")
+    def test_stale_rows_removed_on_save(self, mock_conn, _mock_fetch):
+        mock_conn.side_effect = self._fake_conn
+        detect_and_save_signals([self._ticker()], date(2026, 6, 22), "normal")
+
+        jp_count = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM daily_signals WHERE date='2026-06-22' AND market='JP'"
+        ).fetchone()["c"]
+        us_count = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM daily_signals WHERE date='2026-06-22' AND market='US'"
+        ).fetchone()["c"]
+        self.assertEqual(jp_count, 1)
+        self.assertEqual(us_count, 1)
+        with patch("src.signal_detector.get_connection", self._fake_conn):
+            self.assertIsNone(
+                diagnose_signal_save_count(date(2026, 6, 22), "JP", 1),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

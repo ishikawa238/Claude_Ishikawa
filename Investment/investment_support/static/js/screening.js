@@ -1,23 +1,21 @@
-// screening.js — Screening ページのフィルタ・ソート・ブックマーク
+// screening.js — スイングスクリーニングのフィルタ・ソート・ブックマーク
 
 var _urlFilter = new URLSearchParams(window.location.search).get('filter');
 var _validLabels = ['candidate', 'watch', 'skip', 'all'];
 var filterLabel = (_urlFilter && _validLabels.indexOf(_urlFilter) >= 0) ? _urlFilter : 'candidate';
 var filterMarket = 'all';
-var filterPattern = 'all';
+var filterNearMiss = 'all';
 var filterBookmarkOnly = false;
-var sortAsc = false;
+var sortRsiAsc = true;
+var sortCondAsc = false;
 var sortPriceAsc = false;
 var bookmarkTickers = new Set();
 
 // URL パラメータで初期フィルタが指定された場合、ボタンのアクティブ状態を同期
 if (_urlFilter && _validLabels.indexOf(_urlFilter) >= 0) {
-  document.querySelectorAll('.filter-group')[1].querySelectorAll('.filter-btn').forEach(function(b) {
+  document.querySelectorAll('#labelFilterGroup .filter-btn').forEach(function(b) {
     b.classList.remove('active');
-    if ((_urlFilter === 'candidate' && b.textContent === '候補') ||
-        (_urlFilter === 'watch' && b.textContent === '監視') ||
-        (_urlFilter === 'skip' && b.textContent === 'スキップ') ||
-        (_urlFilter === 'all' && b.textContent === 'すべて')) {
+    if (b.dataset.filterLabel === _urlFilter) {
       b.classList.add('active');
     }
   });
@@ -58,10 +56,22 @@ function toggleBookmarkFilter(btn) {
 function setFilter(type, value, btn) {
   if (type === 'label') filterLabel = value;
   else if (type === 'market') filterMarket = value;
-  else if (type === 'pattern') filterPattern = value;
+  else if (type === 'nearmiss') filterNearMiss = value;
   btn.parentElement.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   applyFilters();
+}
+
+function matchesNearMiss(tr) {
+  if (filterNearMiss === 'all') return true;
+  var uptrend = tr.dataset.uptrend === '1';
+  var rsiOk = tr.dataset.rsiOk === '1';
+  var macdOk = tr.dataset.macdOk === '1';
+  var met = parseInt(tr.dataset.condMet || '0', 10);
+  if (filterNearMiss === 'full') return met === 3;
+  if (filterNearMiss === 'macd-wait') return uptrend && rsiOk && !macdOk;
+  if (filterNearMiss === 'rsi-wait') return uptrend && !rsiOk;
+  return true;
 }
 
 function getPriceFilterBounds() {
@@ -89,7 +99,7 @@ function applyFilters() {
   rows.forEach(function(tr) {
     var matchLabel = (filterLabel === 'all' || tr.dataset.label === filterLabel);
     var matchMarket = (filterMarket === 'all' || tr.dataset.market === filterMarket);
-    var matchPattern = (filterPattern === 'all' || tr.dataset.pattern === filterPattern);
+    var matchNearMiss = matchesNearMiss(tr);
     var matchBookmark = !filterBookmarkOnly || tr.dataset.bookmarked === '1';
     var matchPrice = true;
     if (priceBounds.min !== null || priceBounds.max !== null) {
@@ -102,7 +112,7 @@ function applyFilters() {
         if (priceBounds.max !== null && priceJpy > priceBounds.max) matchPrice = false;
       }
     }
-    if (matchLabel && matchMarket && matchPattern && matchBookmark && matchPrice) {
+    if (matchLabel && matchMarket && matchNearMiss && matchBookmark && matchPrice) {
       tr.style.display = '';
       shown++;
     } else {
@@ -167,17 +177,31 @@ function parsePriceJpyForSort(tr, asc) {
   return isNaN(v) ? (asc ? Infinity : -Infinity) : v;
 }
 
-// Score ソート
-document.getElementById('sortScore').addEventListener('click', function() {
-  sortAsc = !sortAsc;
+function parseRsiForSort(tr, asc) {
+  var raw = tr.dataset.rsi;
+  if (raw === '' || raw === undefined) return asc ? Infinity : -Infinity;
+  var v = parseFloat(raw);
+  return isNaN(v) ? (asc ? Infinity : -Infinity) : v;
+}
+
+document.getElementById('sortRsi').addEventListener('click', function() {
+  sortRsiAsc = !sortRsiAsc;
   sortTableRows(function(a, b) {
-    var va = parseFloat(a.dataset.score) || 0;
-    var vb = parseFloat(b.dataset.score) || 0;
-    return sortAsc ? va - vb : vb - va;
+    var va = parseRsiForSort(a, sortRsiAsc);
+    var vb = parseRsiForSort(b, sortRsiAsc);
+    return sortRsiAsc ? va - vb : vb - va;
   });
 });
 
-// 株価（円）ソート
+document.getElementById('sortCondMet').addEventListener('click', function() {
+  sortCondAsc = !sortCondAsc;
+  sortTableRows(function(a, b) {
+    var va = parseInt(a.dataset.condMet || '0', 10);
+    var vb = parseInt(b.dataset.condMet || '0', 10);
+    return sortCondAsc ? va - vb : vb - va;
+  });
+});
+
 document.getElementById('sortPriceJpy').addEventListener('click', function() {
   sortPriceAsc = !sortPriceAsc;
   sortTableRows(function(a, b) {

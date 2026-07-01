@@ -194,6 +194,7 @@ _DDL = [
         cond_c_at_support       INTEGER,
         cond_c_rsi_oversold     INTEGER,
         cond_c_sar_reversal     INTEGER,
+        macd_confirm_type       TEXT,
         close                   REAL,
         rsi14                   REAL,
         atr14                   REAL,

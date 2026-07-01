@@ -23,480 +23,502 @@
 {% endblock %}
 
 {% block content %}
-<h1 class="h4 mb-4">Dashboard <span class="text-muted fs-6">{{ today_str }}</span></h1>
-
-<!-- サマリーカード -->
-<div class="row g-3 mb-4">
-  <div class="col-6 col-md animate-in stagger-1">
-    <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="保有銘柄の時価合計 + moomoo口座の現金残高（円換算）">資産総額（時価・円換算）</span></div>
-      <div class="value">¥{{ "{:,.0f}".format(total_assets) }}</div>
-      <div class="meta-medium">投入額: ¥{{ "{:,.0f}".format(total_cost) }}{% if total_cash_jpy_equiv > 0 %} / 現金: ¥{{ "{:,.0f}".format(total_cash_jpy_equiv) }}{% endif %}</div>
-      {% if us_count > 0 %}
-      <div class="meta-small" style="margin-top:2px">USD/JPY: {{ "{:.1f}".format(usdjpy_rate) }}</div>
-      {% endif %}
-    </div>
-  </div>
-  <div class="col-6 col-md animate-in stagger-2">
-    <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="（現在値 − 購入価格）× 数量 の合計（円換算）">損益合計（含み損益）</span></div>
-      <div class="value {{ pnl_color_cls }}">¥{{ "{:+,.0f}".format(total_pnl) }}</div>
-      <div class="{{ pnl_color_cls }}" style="font-size:0.85rem">{{ "{:+.1f}".format(total_pnl_pct) }}%</div>
-      {{ no_price_warn|safe }}
-    </div>
-  </div>
-  <div class="col-6 col-md animate-in stagger-3">
-    <div class="summary-card">
-      <div class="label">市場環境 ({{ env_date }})</div>
-      <div class="mb-1"><span class="mode-badge {{ mode_css }}">{{ mode_label }}</span></div>
-      <div class="meta-medium">{{ jp_str|safe }}<br>{{ us_str|safe }}</div>
-      {{ freshness_html|safe }}
-    </div>
-  </div>
-  <div class="col-6 col-md animate-in stagger-4">
-    <div class="summary-card">
-      <div class="label">保有銘柄数</div>
-      <div class="value">{{ holdings|length }}<span class="fs-6 ms-2">JP:{{ jp_count }} / US:{{ us_count }}</span></div>
-    </div>
-  </div>
-  <div class="col-6 col-md animate-in stagger-5">
-    <div class="summary-card">
-      <div class="label">直近7日シグナル</div>
-      <div class="value">{{ candidates|length }}<span class="fs-6 ms-2">A:{{ sig_a }} / B:{{ sig_b }}</span></div>
-    </div>
-  </div>
+<div class="dashboard-header d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+  <h1 class="h4 mb-0">Dashboard <span class="text-muted fs-6">{{ today_str }}</span></h1>
+  <nav class="dashboard-jump" aria-label="ページ内ナビゲーション">
+    <a href="#zone-action">行動</a>
+    <a href="#zone-portfolio">保有</a>
+    <a href="#zone-history">シグナル</a>
+    <a href="#zone-analysis">分析</a>
+  </nav>
 </div>
 
-<!-- ポートフォリオ リスクサマリー -->
-<div class="row g-3 mb-4 animate-in" id="riskWidget" style="display:none">
-  <div class="col-4">
-    <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="明日最悪ケースでポートフォリオ全体が1日にどれだけ下がりうるか（99%の確率でこの範囲）">VaR (99%, 1日)</span></div>
-      <div class="value" id="riskVar">—</div>
-      <div class="meta-small">最大想定下落率</div>
-    </div>
-  </div>
-  <div class="col-4">
-    <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="市場全体と比べた値動きの大きさ。1.0なら市場と同程度、1.5なら1.5倍動く">Beta（市場連動度）</span></div>
-      <div class="value" id="riskBeta">—</div>
-      <div class="meta-small" id="riskBetaHint">市場との比較</div>
-    </div>
-  </div>
-  <div class="col-4">
-    <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="リスクに見合ったリターンの効率。高いほど良い。0未満は損失、0〜1は低効率、1以上は良好">Sharpe Ratio</span></div>
-      <div class="value" id="riskSharpe">—</div>
-      <div class="meta-small" id="riskSharpeHint">リスク効率</div>
-    </div>
-  </div>
-</div>
-
-<!-- 今日の行動 -->
-<div class="summary-card mb-4 animate-in">
-  <h2>今日の行動</h2>
-  {% for item in action_items %}
-  {% set level = item[0] %}{% set msg = item[1] %}
-  {% if level == "danger" %}{% set cls = "action-danger" %}
-  {% elif level == "warn" %}{% set cls = "action-warn" %}
-  {% elif level == "info" %}{% set cls = "action-info" %}
-  {% else %}{% set cls = "action-success" %}{% endif %}
-  <div class="action-item {{ cls }}">{{ msg }}{% if item|length > 2 and item[2] and item[2].type == "sl_update" %} <button class="sl-apply-btn" data-ticker="{{ item[2].ticker }}" data-sl="{{ item[2].new_sl }}">SLを{{ item[2].new_sl }}に変更</button>{% endif %}</div>
-  {% endfor %}
-</div>
-
-<!-- 買い候補カード -->
-<div class="section animate-in">
-  <div class="d-flex align-items-center gap-3 mb-3">
-    <h2 class="mb-0">買い候補
-      {% if buy_candidate_date %}
-      <span class="text-muted fs-6">({{ buy_candidate_date }}{% if not buy_candidate_is_today %} 最終更新{% endif %})</span>
-      {% endif %}
-    </h2>
-    <span class="meta-small">{{ buy_candidate_cards|length }}件</span>
-  </div>
-
-  {% if is_market_caution %}
-  <div class="action-item action-warn mb-3">{{ mode_label }}中のため、新規買い候補の検出は停止されています。</div>
-  {% endif %}
-
-  {% if buy_candidate_cards %}
+<!-- ① サマリー -->
+<div class="dashboard-zone dashboard-zone--summary animate-in">
+  <div class="dashboard-zone__title">サマリー</div>
   <div class="row g-3">
-    {% for card in buy_candidate_cards %}
-    <div class="col-md-6 col-lg-4">
-      <div class="candidate-card" data-pattern="{{ card.pattern }}">
-        <div class="candidate-card-header">
-          <span class="pattern-badge pattern-{{ card.pattern }}">{{ card.pattern }}: {{ card.pattern_name }}</span>
-          {% if card.source_css %}<span class="{{ card.source_css }}">{{ card.source_label }}</span>{% endif %}
-        </div>
-        <div class="candidate-card-title">
-          <a class="ticker-link" href="/stock/{{ card.ticker }}" style="font-size:1.1rem;font-weight:700">{{ card.ticker }}</a>
-          <span class="meta-medium">{{ card.name }}</span>
-          <span class="meta-small text-muted">{{ card.market }}</span>
-        </div>
-
-        {% if card.score_str != '—' %}
-        <div class="candidate-score-row">
-          <div class="candidate-score-bar"><div class="candidate-score-fill" style="width:{{ card.score_pct }}%"></div></div>
-          <span class="candidate-score-value">{{ card.score_html|safe }}点</span>
-          <span class="rank-badge {{ card.rank_css }}">{{ card.rank }}</span>
-        </div>
+    <div class="col-6 col-lg animate-in stagger-1">
+      <div class="summary-card summary-card--primary">
+        <div class="label"><span class="tip" data-tip="保有銘柄の時価合計 + moomoo口座の現金残高（円換算）">資産総額（時価・円換算）</span></div>
+        <div class="value">¥{{ "{:,.0f}".format(total_assets) }}</div>
+        <div class="meta-medium">投入額: ¥{{ "{:,.0f}".format(total_cost) }}{% if total_cash_jpy_equiv > 0 %} / 現金: ¥{{ "{:,.0f}".format(total_cash_jpy_equiv) }}{% endif %}</div>
+        {% if us_count > 0 %}
+        <div class="meta-small" style="margin-top:2px">USD/JPY: {{ "{:.1f}".format(usdjpy_rate) }}</div>
         {% endif %}
+      </div>
+    </div>
+    <div class="col-6 col-lg animate-in stagger-2">
+      <div class="summary-card summary-card--primary">
+        <div class="label"><span class="tip" data-tip="（現在値 − 購入価格）× 数量 の合計（円換算）">損益合計（含み損益）</span></div>
+        <div class="value {{ pnl_color_cls }}">¥{{ "{:+,.0f}".format(total_pnl) }}</div>
+        <div class="{{ pnl_color_cls }}" style="font-size:0.85rem">{{ "{:+.1f}".format(total_pnl_pct) }}%</div>
+        {{ no_price_warn|safe }}
+      </div>
+    </div>
+    <div class="col-6 col-md animate-in stagger-3">
+      <div class="summary-card">
+        <div class="label">市場環境 ({{ env_date }})</div>
+        <div class="mb-1"><span class="mode-badge {{ mode_css }}">{{ mode_label }}</span></div>
+        <div class="meta-medium">{{ jp_str|safe }}<br>{{ us_str|safe }}</div>
+        {{ freshness_html|safe }}
+      </div>
+    </div>
+    <div class="col-6 col-md animate-in stagger-4">
+      <div class="summary-card">
+        <div class="label">保有銘柄数</div>
+        <div class="value">{{ holdings|length }}<span class="fs-6 ms-2">JP:{{ jp_count }} / US:{{ us_count }}</span></div>
+      </div>
+    </div>
+    <div class="col-6 col-md animate-in stagger-5">
+      <div class="summary-card">
+        <div class="label">直近7日シグナル</div>
+        <div class="value">{{ candidates|length }}<span class="fs-6 ms-2">A:{{ sig_a }} / B:{{ sig_b }}</span></div>
+      </div>
+    </div>
+  </div>
 
-        <div class="candidate-price-grid">
-          <div>
-            <span class="candidate-price-label"><span class="tip" data-tip="この価格で買い注文を出す目安（前日終値）">エントリー</span></span>
-            <span class="candidate-price-value">{{ card.entry_str }}</span>
+  <div class="row g-3 mt-1" id="riskWidget" style="display:none">
+    <div class="col-4">
+      <div class="summary-card">
+        <div class="label"><span class="tip" data-tip="明日最悪ケースでポートフォリオ全体が1日にどれだけ下がりうるか（99%の確率でこの範囲）">VaR (99%, 1日)</span></div>
+        <div class="value" id="riskVar">—</div>
+        <div class="meta-small">最大想定下落率</div>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="summary-card">
+        <div class="label"><span class="tip" data-tip="市場全体と比べた値動きの大きさ。1.0なら市場と同程度、1.5なら1.5倍動く">Beta（市場連動度）</span></div>
+        <div class="value" id="riskBeta">—</div>
+        <div class="meta-small" id="riskBetaHint">市場との比較</div>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="summary-card">
+        <div class="label"><span class="tip" data-tip="リスクに見合ったリターンの効率。高いほど良い。0未満は損失、0〜1は低効率、1以上は良好">Sharpe Ratio</span></div>
+        <div class="value" id="riskSharpe">—</div>
+        <div class="meta-small" id="riskSharpeHint">リスク効率</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ② アクション -->
+<div class="dashboard-zone" id="zone-action">
+  <div class="dashboard-zone__title">今日のアクション</div>
+
+  <div class="summary-card mb-3 animate-in">
+    <div class="section-header">
+      <h2 class="mb-0"><i data-lucide="clipboard-list" class="section-header__icon"></i>今日の行動</h2>
+    </div>
+    {% for item in action_items %}
+    {% set level = item[0] %}{% set msg = item[1] %}
+    {% if level == "danger" %}{% set cls = "action-danger" %}
+    {% elif level == "warn" %}{% set cls = "action-warn" %}
+    {% elif level == "info" %}{% set cls = "action-info" %}
+    {% else %}{% set cls = "action-success" %}{% endif %}
+    <div class="action-item {{ cls }}">{{ msg }}{% if item|length > 2 and item[2] and item[2].type == "sl_update" %} <button class="sl-apply-btn" data-ticker="{{ item[2].ticker }}" data-sl="{{ item[2].new_sl }}">SLを{{ item[2].new_sl }}に変更</button>{% endif %}</div>
+    {% endfor %}
+  </div>
+
+  <div class="animate-in">
+    <div class="section-header mb-3">
+      <h2 class="mb-0">
+        <i data-lucide="shopping-cart" class="section-header__icon"></i>買い候補
+        {% if buy_candidate_date %}
+        <span class="text-muted fs-6">({{ buy_candidate_date }}{% if not buy_candidate_is_today %} 最終更新{% endif %})</span>
+        {% endif %}
+      </h2>
+      <span class="count-badge">{{ buy_candidate_cards|length }}件</span>
+    </div>
+
+    {% if is_market_caution %}
+    <div class="action-item action-warn mb-3">{{ mode_label }}中のため、新規買い候補の検出は停止されています。</div>
+    {% endif %}
+
+    {% if buy_candidate_cards %}
+    <div class="row g-3">
+      {% for card in buy_candidate_cards %}
+      <div class="col-md-6 col-lg-4">
+        <div class="candidate-card" data-pattern="{{ card.pattern }}">
+          <div class="candidate-card-header">
+            <span class="pattern-badge pattern-{{ card.pattern }}">{{ card.pattern }}: {{ card.pattern_name }}</span>
+            {% if card.source_css %}<span class="{{ card.source_css }}">{{ card.source_label }}</span>{% endif %}
           </div>
-          <div>
-            <span class="candidate-price-label"><span class="tip" data-tip="この価格まで下がったら損切り（売る）価格">損切りSL</span></span>
-            <span class="candidate-price-value text-loss">{{ card.sl_str }}</span>
+          <div class="candidate-card-title">
+            <a class="ticker-link" href="/stock/{{ card.ticker }}" style="font-size:1.1rem;font-weight:700">{{ card.ticker }}</a>
+            <span class="meta-medium">{{ card.name }}</span>
+            <span class="meta-small text-muted">{{ card.market }}</span>
           </div>
-          <div>
-            <span class="candidate-price-label"><span class="tip" data-tip="リスクリワード2:1に基づく利益確定の目安価格">利確目安</span></span>
-            <span class="candidate-price-value text-profit">{{ card.target_str }}</span>
+
+          {% if card.score_str != '—' %}
+          <div class="candidate-score-row">
+            <div class="candidate-score-bar"><div class="candidate-score-fill" style="width:{{ card.score_pct }}%"></div></div>
+            <span class="candidate-score-value">{{ card.score_html|safe }}点</span>
+            <span class="rank-badge {{ card.rank_css }}">{{ card.rank }}</span>
           </div>
-          <div>
-            <span class="candidate-price-label"><span class="tip" data-tip="リスク管理に基づく推奨投入金額と推定株数">投入額</span></span>
-            <span class="candidate-price-value">{{ card.amt_str }}<br><span class="reason-text">{{ card.qty_str }}</span></span>
+          {% endif %}
+
+          <div class="candidate-price-grid">
+            <div>
+              <span class="candidate-price-label"><span class="tip" data-tip="この価格で買い注文を出す目安（前日終値）">エントリー</span></span>
+              <span class="candidate-price-value">{{ card.entry_str }}</span>
+            </div>
+            <div>
+              <span class="candidate-price-label"><span class="tip" data-tip="この価格まで下がったら損切り（売る）価格">損切りSL</span></span>
+              <span class="candidate-price-value text-loss">{{ card.sl_str }}</span>
+            </div>
+            <div>
+              <span class="candidate-price-label"><span class="tip" data-tip="リスクリワード2:1に基づく利益確定の目安価格">利確目安</span></span>
+              <span class="candidate-price-value text-profit">{{ card.target_str }}</span>
+            </div>
+            <div>
+              <span class="candidate-price-label"><span class="tip" data-tip="リスク管理に基づく推奨投入金額と推定株数">投入額</span></span>
+              <span class="candidate-price-value">{{ card.amt_str }}<br><span class="reason-text">{{ card.qty_str }}</span></span>
+            </div>
+          </div>
+
+          <div class="candidate-conditions">
+            <span class="cond-label">条件:</span>
+            {{ card.conditions_html|safe }}
           </div>
         </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="summary-card text-center" style="padding:24px">
+      <div class="meta-medium">直近の買い候補はありません</div>
+      <div class="meta-small" style="margin-top:4px">
+        <span class="tip" data-tip="バッチ処理でパターンA/B/Cの条件を満たす銘柄が検出されると、ここにカードとして表示されます">候補が検出されると、ここにカードで表示されます</span>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
 
-        <div class="candidate-conditions">
-          <span class="cond-label">条件:</span>
-          {{ card.conditions_html|safe }}
+<!-- ③ ポートフォリオ -->
+<div class="dashboard-zone" id="zone-portfolio">
+  <div class="dashboard-zone__title">ポートフォリオ</div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-5">
+      <div class="summary-card">
+        <div class="label">損益推移（直近30営業日）</div>
+        <div class="chart-container" style="height:220px">
+          <canvas id="pnlChart"></canvas>
         </div>
       </div>
     </div>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="summary-card text-center" style="padding:24px">
-    <div class="meta-medium">直近の買い候補はありません</div>
-    <div class="meta-small" style="margin-top:4px">
-      <span class="tip" data-tip="バッチ処理でパターンA/B/Cの条件を満たす銘柄が検出されると、ここにカードとして表示されます">候補が検出されると、ここにカードで表示されます</span>
+    <div class="col-md-3">
+      <div class="summary-card">
+        <div class="label">スコア・レーダー</div>
+        <div class="chart-container" style="height:220px">
+          <canvas id="radarChart"></canvas>
+        </div>
+        <div class="mt-1">
+          <select id="radarTicker" class="form-select form-select-sm" onchange="loadRadar()">
+            {% for h in holdings %}
+            <option value="{{ h.ticker }}">{{ h.ticker }} {{ h.name or "" }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="summary-card">
+        <div class="label">セクター配分</div>
+        <div class="chart-container" style="height:250px">
+          <canvas id="sectorChart"></canvas>
+        </div>
+      </div>
     </div>
   </div>
+
+  <div class="summary-card mb-3">
+    <div class="section-header mb-2">
+      <h2 class="mb-0"><i data-lucide="briefcase" class="section-header__icon"></i>保有銘柄</h2>
+      <div class="d-flex align-items-center gap-2">
+        <span class="count-badge">{{ holdings|length }}件</span>
+        <button class="toggle-btn" onclick="document.querySelector('#holdingsTable').classList.toggle('show-detail'); this.textContent = this.textContent === '詳細を表示' ? '詳細を隠す' : '詳細を表示'">詳細を表示</button>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table id="holdingsTable" class="table table-bordered table-sm table-hover bg-white mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Ticker</th><th>銘柄名</th><th>現在値</th>
+            <th>損益</th><th>状態</th>
+            <th><span class="tip" data-tip="損切りライン：ここまで下がったら売る価格">SL</span></th>
+            <th class="mobile-hide"><span class="tip" data-tip="利確ターゲット：段階的に利益を確保する価格。✓=到達済み、→=次の目標、灰色=未到達">利確ターゲット</span></th><th class="mobile-hide">保有日数</th>
+            {% if is_offensive_mode %}
+            <th><span class="tip" data-tip="攻めモードの追加シグナル：📈買い増し候補 / 📉トレーリング段階（MA25・MA50） / 💰株価2倍特例">攻めシグナル</span></th>
+            {% endif %}
+            <th class="detail-col">市場</th><th class="detail-col">数量</th>
+            <th class="detail-col"><span class="tip" data-tip="RSI：0〜100の数値。70以上は買われすぎ、30以下は売られすぎ">RSI</span></th>
+            <th class="detail-col"><span class="tip" data-tip="ATR：1日あたりの値動きの大きさ（値が大きいほど変動が激しい）">ATR</span></th>
+            <th class="detail-col"><span class="tip" data-tip="MA25乖離：25日平均線からどれだけ離れているか（%）">MA25乖離</span></th>
+            <th class="detail-col"><span class="tip" data-tip="総合スコアと直近の推移（↑上昇 ↓下降 →横ばい。最大5営業日前比）">Score</span></th><th class="detail-col">Rank</th><th class="detail-col"><span class="tip" data-tip="MAの並びによる価格トレンド">Trend</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in holding_rows %}
+          <tr>
+            <td><a class="ticker-link" href="/stock/{{ h.ticker }}">{{ h.ticker }}</a></td>
+            <td>{{ h.name or "" }}</td>
+            <td>{{ h.cp_str }}{% if h.entry_str %}<br><span class="meta-small" title="購入価格">{{ h.entry_str }}</span>{% endif %}</td>
+            <td class="{{ h.pnl_css }}">{{ h.pnl_str }}{% if h.pnl_jpy_str %}<br><span class="meta-small">{{ h.pnl_jpy_str }}</span>{% endif %}</td>
+            <td><span class="status-badge {{ h.status_cls }}">{{ h.status_label }}</span></td>
+            <td class="sl-cell" data-ticker="{{ h.ticker }}" data-sl="{{ h.sl_raw }}">
+              <span class="sl-display" title="クリックで編集">{{ h.sl_str }}{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} <span class="sl-hint">↑{{ h.adjusted_stop|int }}</span>{% endif %}</span>
+              <span class="sl-edit" style="display:none">
+                <input type="number" class="sl-input" step="0.01" min="0.01" value="{{ h.sl_raw }}"{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} placeholder="{{ h.adjusted_stop }}"{% endif %}>
+                <button class="sl-save-btn" title="保存">&#10004;</button>
+                <button class="sl-cancel-btn" title="キャンセル">&#10005;</button>
+              </span>
+            </td>
+            <td class="mobile-hide">{{ h.target_str|safe }}</td>
+            <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
+            {% if is_offensive_mode %}
+            <td class="off-signal-cell"{% if h.offensive_title %} title="{{ h.offensive_title }}"{% endif %}>{{ h.offensive_html|safe }}</td>
+            {% endif %}
+            <td class="detail-col">{{ h.market or "" }}</td>
+            <td class="detail-col">{{ h.qty_str }}</td>
+            <td class="detail-col {{ h.rsi_css }}">{{ h.rsi_str }}</td>
+            <td class="detail-col">{{ h.atr_str }}</td>
+            <td class="detail-col">{{ h.ma25_dev_str }}</td>
+            <td class="detail-col">{{ h.score_html|safe }}</td>
+            <td class="detail-col">{{ h.rank_html|safe }}</td>
+            <td class="detail-col">{{ h.trend_str|safe }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="{% if is_offensive_mode %}9{% else %}8{% endif %}" class="text-center text-muted-custom">保有銘柄なし</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="earningsCalendar" class="summary-card" style="display:none">
+    <div class="section-header mb-2">
+      <h2 class="mb-0"><i data-lucide="calendar" class="section-header__icon"></i>決算カレンダー</h2>
+    </div>
+    <div id="earningsContent"></div>
+  </div>
+</div>
+
+<!-- ④ 履歴 -->
+<div class="dashboard-zone" id="zone-history">
+  <div class="dashboard-zone__title">履歴</div>
+
+  <div class="summary-card mb-3">
+    <div class="section-header mb-2">
+      <h2 class="mb-0"><i data-lucide="history" class="section-header__icon"></i>直近7日間のシグナル履歴</h2>
+      <span class="count-badge">{{ candidates|length }}件</span>
+    </div>
+    <div class="table-responsive table-scroll-y">
+      <table class="table table-bordered table-sm table-hover bg-white mb-0">
+        <thead class="table-light sticky-thead">
+          <tr>
+            <th>日付</th><th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th><th class="mobile-hide">パターン</th>
+            <th>エントリー</th><th>損切りSL</th><th class="mobile-hide">利確目安</th><th>推奨投入額</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in signal_rows %}
+          <tr>
+            <td>{{ s.signal_date }}</td>
+            <td><a class="ticker-link" href="/stock/{{ s.ticker }}">{{ s.ticker }}</a></td>
+            <td class="mobile-hide">{{ s.name or "" }}</td>
+            <td class="mobile-hide">{{ s.market or "" }}</td>
+            <td class="mobile-hide">{{ s.pattern_name }}</td>
+            <td>{{ s.entry_str }}</td>
+            <td>{{ s.sl_str }}</td>
+            <td class="mobile-hide">{{ s.target_str }}</td>
+            <td>{{ s.amt_str }}<br><span class="reason-text">{{ s.qty_str }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="text-center text-muted-custom">直近7日間のシグナルなし</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if llm_cards %}
+  <details class="dashboard-panel" id="llmAdvisorPanel" data-panel="llmAdvisor">
+    <summary class="dashboard-panel__summary">
+      <span class="dashboard-panel__title">
+        <i data-lucide="bot" class="section-header__icon"></i>
+        AIアドバイザー意見
+        <span class="text-muted fs-6 fw-normal">({{ llm_cards[0].feedback_date }})</span>
+      </span>
+      <span class="count-badge">{{ llm_cards|length }}件</span>
+    </summary>
+    <div class="dashboard-panel__body">
+      <p class="meta-small mb-3">参考情報です。最終判断はご自身で行ってください。詳細な資金管理ルールは <a href="/rules">投資ルール</a> を参照。</p>
+      <div class="row g-3">
+        {% for fb in llm_cards %}
+        <div class="col-md-4">
+          <div class="llm-card" style="border-top-color:{{ fb.color }}">
+            <div class="llm-header">
+              <span style="font-size:1.2rem">{{ fb.icon }}</span>
+              <span class="llm-provider" style="color:{{ fb.color }}">{{ fb.display_name }}</span>
+              <span class="llm-model">{{ fb.model }}</span>
+            </div>
+            <div class="llm-body">{{ fb.response_text }}</div>
+            <div class="llm-meta">{{ fb.batch_label }} · {{ fb.created_at }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
   {% endif %}
 </div>
 
-<!-- バッチ手動実行 -->
-<div class="summary-card mb-4 animate-in">
-  <h2>バッチ手動実行</h2>
-  <p class="meta-medium mb-3">LLMアドバイザーを除外して手動でバッチを実行します。</p>
-  <div class="row g-3 mb-3">
-    <div class="col-md-6">
-      <div class="summary-card" style="border-left:3px solid var(--color-primary)">
-        <div class="d-flex justify-content-between align-items-start mb-2">
-          <strong><i data-lucide="moon" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>夜バッチ（JP）</strong>
-          <button id="btnBatchEvening" class="btn btn-primary btn-sm" onclick="triggerBatch('evening_jp')">実行</button>
-        </div>
-        <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
-          <li>JP価格データ取得（N225/TOPIX + 約3,600銘柄）</li>
-          <li>テクニカル指標計算（MA, RSI, ATR等）</li>
-          <li>市場環境判定（通常/警戒/全面警戒）</li>
-          <li>スクリーニング・シグナル検出（パターンA/B）</li>
-          <li>エントリーセット計算（価格・損切り・利確・投入額）</li>
-          <li>保有銘柄判定（損切り・利確チェック）</li>
-          <li>ニュース取得</li>
-          <li>Slack通知送信 + DBバックアップ</li>
-        </ol>
-      </div>
-    </div>
-    <div class="col-md-6">
-      <div class="summary-card" style="border-left:3px solid var(--color-warning)">
-        <div class="d-flex justify-content-between align-items-start mb-2">
-          <strong><i data-lucide="sun" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>朝バッチ（US+統合）</strong>
-          <button id="btnBatchMorning" class="btn btn-primary btn-sm" onclick="triggerBatch('morning_all')">実行</button>
-        </div>
-        <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
-          <li>US価格データ取得（SP500/NASDAQ + 約51,000銘柄）</li>
-          <li>テクニカル指標計算（MA, RSI, ATR等）</li>
-          <li>市場環境モード確定（JP+USを統合判定）</li>
-          <li>USシグナル検出・エントリーセット計算</li>
-          <li>保有銘柄判定（JP+US全体）</li>
-          <li>ニュース取得</li>
-          <li>Slack通知送信</li>
-        </ol>
-      </div>
-    </div>
-  </div>
-  <div id="batchProgress" style="display:none">
-    <div class="d-flex align-items-center gap-2 mb-1">
-      <span id="batchStatus" class="meta-medium fw-bold"></span>
-      <span id="batchElapsed" class="meta-small text-muted"></span>
-    </div>
-    <div class="progress" style="height:8px">
-      <div id="batchProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
-    </div>
-    <div id="batchStepLabel" class="meta-small text-muted mt-1"></div>
-  </div>
-  <div id="batchResult" class="mt-2" style="display:none"></div>
-</div>
+<!-- ⑤ 分析 -->
+<div class="dashboard-zone" id="zone-analysis">
+  <div class="dashboard-zone__title">分析</div>
 
-<!-- 決算カレンダー -->
-<div id="earningsCalendar" class="summary-card mb-4 animate-in" style="display:none">
-  <h2>決算カレンダー</h2>
-  <div id="earningsContent"></div>
-</div>
-
-<!-- LLM アドバイザー -->
-{% if llm_cards %}
-<div class="section animate-in">
-  <h2>AIアドバイザー意見 <span class="text-muted fs-6">({{ llm_cards[0].feedback_date }})</span></h2>
-  <div class="row g-3">
-    {% for fb in llm_cards %}
-    <div class="col-md-4">
-      <div class="llm-card" style="border-top-color:{{ fb.color }}">
-        <div class="llm-header">
-          <span style="font-size:1.2rem">{{ fb.icon }}</span>
-          <span class="llm-provider" style="color:{{ fb.color }}">{{ fb.display_name }}</span>
-          <span class="llm-model">{{ fb.model }}</span>
-        </div>
-        <div class="llm-body">{{ fb.response_text }}</div>
-        <div class="llm-meta">{{ fb.batch_label }} · {{ fb.created_at }}</div>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-{% endif %}
-
-<!-- チャート行 -->
-<div class="row g-3 mb-4">
-  <div class="col-md-5">
-    <div class="summary-card">
-      <div class="label">損益推移（直近30営業日）</div>
-      <div class="chart-container" style="height:220px">
-        <canvas id="pnlChart"></canvas>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-3">
-    <div class="summary-card">
-      <div class="label">スコア・レーダー</div>
-      <div class="chart-container" style="height:220px">
-        <canvas id="radarChart"></canvas>
-      </div>
-      <div class="mt-1">
-        <select id="radarTicker" class="form-select form-select-sm" onchange="loadRadar()">
-          {% for h in holdings %}
-          <option value="{{ h.ticker }}">{{ h.ticker }} {{ h.name or "" }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-  </div>
-  <div class="col-md-4">
-    <div class="summary-card">
-      <div class="label">セクター配分</div>
-      <div class="chart-container" style="height:250px">
-        <canvas id="sectorChart"></canvas>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- 保有銘柄テーブル -->
-<div class="section">
-  <div class="d-flex align-items-center gap-3 mb-2">
-    <h2 class="mb-0">保有銘柄（{{ holdings|length }}件）</h2>
-    <button class="toggle-btn" onclick="document.querySelector('#holdingsTable').classList.toggle('show-detail'); this.textContent = this.textContent === '詳細を表示' ? '詳細を隠す' : '詳細を表示'">詳細を表示</button>
-  </div>
-  <div class="table-responsive">
-    <table id="holdingsTable" class="table table-bordered table-sm table-hover bg-white">
-      <thead class="table-light">
-        <tr>
-          <th>Ticker</th><th>銘柄名</th><th>現在値</th>
-          <th>損益</th><th>状態</th>
-          <th><span class="tip" data-tip="損切りライン：ここまで下がったら売る価格">SL</span></th>
-          <th class="mobile-hide"><span class="tip" data-tip="利確ターゲット：段階的に利益を確保する価格。✓=到達済み、→=次の目標、灰色=未到達">利確ターゲット</span></th><th class="mobile-hide">保有日数</th>
-          {% if is_offensive_mode %}
-          <th><span class="tip" data-tip="攻めモードの追加シグナル：📈買い増し候補 / 📉トレーリング段階（MA25・MA50） / 💰株価2倍特例">攻めシグナル</span></th>
-          {% endif %}
-          <th class="detail-col">市場</th><th class="detail-col">数量</th>
-          <th class="detail-col"><span class="tip" data-tip="RSI：0〜100の数値。70以上は買われすぎ、30以下は売られすぎ">RSI</span></th>
-          <th class="detail-col"><span class="tip" data-tip="ATR：1日あたりの値動きの大きさ（値が大きいほど変動が激しい）">ATR</span></th>
-          <th class="detail-col"><span class="tip" data-tip="MA25乖離：25日平均線からどれだけ離れているか（%）">MA25乖離</span></th>
-          <th class="detail-col"><span class="tip" data-tip="総合スコアと直近の推移（↑上昇 ↓下降 →横ばい。最大5営業日前比）">Score</span></th><th class="detail-col">Rank</th><th class="detail-col"><span class="tip" data-tip="MAの並びによる価格トレンド">Trend</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for h in holding_rows %}
-        <tr>
-          <td><a class="ticker-link" href="/stock/{{ h.ticker }}">{{ h.ticker }}</a></td>
-          <td>{{ h.name or "" }}</td>
-          <td>{{ h.cp_str }}{% if h.entry_str %}<br><span class="meta-small" title="購入価格">{{ h.entry_str }}</span>{% endif %}</td>
-          <td class="{{ h.pnl_css }}">{{ h.pnl_str }}{% if h.pnl_jpy_str %}<br><span class="meta-small">{{ h.pnl_jpy_str }}</span>{% endif %}</td>
-          <td><span class="status-badge {{ h.status_cls }}">{{ h.status_label }}</span></td>
-          <td class="sl-cell" data-ticker="{{ h.ticker }}" data-sl="{{ h.sl_raw }}">
-            <span class="sl-display" title="クリックで編集">{{ h.sl_str }}{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} <span class="sl-hint">↑{{ h.adjusted_stop|int }}</span>{% endif %}</span>
-            <span class="sl-edit" style="display:none">
-              <input type="number" class="sl-input" step="0.01" min="0.01" value="{{ h.sl_raw }}"{% if h.adjusted_stop and h.adjusted_stop > h.sl_raw %} placeholder="{{ h.adjusted_stop }}"{% endif %}>
-              <button class="sl-save-btn" title="保存">&#10004;</button>
-              <button class="sl-cancel-btn" title="キャンセル">&#10005;</button>
-            </span>
-          </td>
-          <td class="mobile-hide">{{ h.target_str|safe }}</td>
-          <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
-          {% if is_offensive_mode %}
-          <td class="off-signal-cell"{% if h.offensive_title %} title="{{ h.offensive_title }}"{% endif %}>{{ h.offensive_html|safe }}</td>
-          {% endif %}
-          <td class="detail-col">{{ h.market or "" }}</td>
-          <td class="detail-col">{{ h.qty_str }}</td>
-          <td class="detail-col {{ h.rsi_css }}">{{ h.rsi_str }}</td>
-          <td class="detail-col">{{ h.atr_str }}</td>
-          <td class="detail-col">{{ h.ma25_dev_str }}</td>
-          <td class="detail-col">{{ h.score_html|safe }}</td>
-          <td class="detail-col">{{ h.rank_html|safe }}</td>
-          <td class="detail-col">{{ h.trend_str|safe }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="{% if is_offensive_mode %}9{% else %}8{% endif %}" class="text-center text-muted-custom">保有銘柄なし</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- シグナル履歴 -->
-<div class="section">
-  <h2>直近7日間のシグナル履歴（{{ candidates|length }}件）</h2>
-  <div class="table-responsive table-scroll-y">
-    <table class="table table-bordered table-sm table-hover bg-white">
-      <thead class="table-light sticky-thead">
-        <tr>
-          <th>日付</th><th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th><th class="mobile-hide">パターン</th>
-          <th>エントリー</th><th>損切りSL</th><th class="mobile-hide">利確目安</th><th>推奨投入額</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for s in signal_rows %}
-        <tr>
-          <td>{{ s.signal_date }}</td>
-          <td><a class="ticker-link" href="/stock/{{ s.ticker }}">{{ s.ticker }}</a></td>
-          <td class="mobile-hide">{{ s.name or "" }}</td>
-          <td class="mobile-hide">{{ s.market or "" }}</td>
-          <td class="mobile-hide">{{ s.pattern_name }}</td>
-          <td>{{ s.entry_str }}</td>
-          <td>{{ s.sl_str }}</td>
-          <td class="mobile-hide">{{ s.target_str }}</td>
-          <td>{{ s.amt_str }}<br><span class="reason-text">{{ s.qty_str }}</span></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="9" class="text-center text-muted-custom">直近7日間のシグナルなし</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-
-<!-- 見送り条件リファレンス（折りたたみ） -->
-<details class="section">
-  <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">見送り条件リファレンス</summary>
-  <p class="meta-medium" style="margin-bottom:12px">
-    パターン検出で候補（candidate）になっても、以下の条件に該当するとシグナル通知から除外されます。
-  </p>
-  <div class="row g-3">
-    <div class="col-md-6">
-      <div class="summary-card" style="border-left:4px solid var(--color-danger)">
-        <div style="font-weight:700;margin-bottom:8px">損切り幅が狭すぎる</div>
-        <table class="meta-medium" style="width:100%">
-          <tr><td class="text-secondary-custom" style="width:40%">判定</td>
-              <td>損切り幅(%) ＜ <strong>{{ skip_sl_min_pct }}%</strong></td></tr>
-          <tr><td class="text-secondary-custom">損切り幅の計算</td>
-              <td>(終値 − SL) ÷ 終値 × 100</td></tr>
-          <tr><td class="text-secondary-custom">SLの計算</td>
-              <td>終値 − ATR14 × <strong>{{ "{:.0f}".format(skip_atr_mult) }}</strong></td></tr>
-          <tr><td class="text-secondary-custom">該当しやすい銘柄</td>
-              <td>値動きが小さい（ATRが低い）銘柄</td></tr>
-        </table>
-      </div>
-    </div>
-    <div class="col-md-6">
-      <div class="summary-card" style="border-left:4px solid var(--color-primary)">
-        <div style="font-weight:700;margin-bottom:8px">推奨投入額の計算</div>
-        <table class="meta-medium" style="width:100%">
-          <tr><td class="text-secondary-custom" style="width:40%">計算式</td>
-              <td>総資金 × リスク{{ "{:.0f}".format(skip_risk_pct * 100) }}% ÷ 損切り幅(%)</td></tr>
-          <tr><td class="text-secondary-custom">投入額の上限</td>
-              <td>min(総資金, 総資金÷最大保有数)</td></tr>
-          <tr><td class="text-secondary-custom">現在の設定値</td>
-              <td>JP: <strong>{{ "{:,.0f}".format(skip_capital_jpy) }}円</strong> / US: <strong>${{ "{:,.0f}".format(skip_capital_usd) }}</strong> / 最大<strong>{{ skip_max_holdings }}</strong>銘柄<br>
-                  → JP 1銘柄上限 <strong>{{ "{:,.0f}".format(skip_capital_jpy / skip_max_holdings) }}円</strong> / US <strong>${{ "{:,.0f}".format(skip_capital_usd / skip_max_holdings) }}</strong></td></tr>
-          <tr><td class="text-secondary-custom">取引単位</td>
-              <td>端株対応（moomoo証券）— 1株未満でも購入可能</td></tr>
-        </table>
-      </div>
-    </div>
-  </div>
-</details>
-
-<!-- スクリーニングファネル（折りたたみ） -->
-<details class="section">
-  <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">スクリーニングファネル <span class="text-muted fs-6" id="funnelDate"></span></summary>
-  <p class="meta-medium" style="margin-bottom:12px">
-    全銘柄がどの段階で絞り込まれたかを示します。
-    <span class="tip" data-tip="ユニバース→流動性フィルタ→シグナル検出→最終候補の順に絞り込まれます">詳細</span>
-  </p>
-  <div class="row g-3">
-    <div class="col-md-6">
-      <div class="summary-card">
-        <div class="label">絞り込みファネル</div>
-        <div class="chart-container" style="height:260px">
-          <canvas id="funnelChart"></canvas>
-        </div>
-      </div>
-    </div>
-    <div class="col-md-6">
+  <details class="dashboard-panel" data-panel="funnel">
+    <summary class="dashboard-panel__summary">
+      <span class="dashboard-panel__title">
+        <i data-lucide="filter" class="section-header__icon"></i>
+        スクリーニングファネル
+        <span class="text-muted fs-6 fw-normal" id="funnelDate"></span>
+      </span>
+    </summary>
+    <div class="dashboard-panel__body">
+      <p class="meta-medium mb-3">
+        EMA押し目スイング戦略の絞り込み過程。
+        <span class="tip" data-tip="ユニバース→流動性→3条件→ラベル付けの順に絞り込まれます">詳細</span>
+      </p>
       <div class="row g-3">
-        <div class="col-6">
+        <div class="col-md-6">
           <div class="summary-card">
-            <div class="label">パターンA 条件充足率</div>
-            <div id="condATable" class="meta-medium">読み込み中...</div>
+            <div class="label">絞り込みファネル</div>
+            <div class="chart-container" style="height:260px">
+              <canvas id="funnelChart"></canvas>
+            </div>
           </div>
         </div>
-        <div class="col-6">
-          <div class="summary-card">
-            <div class="label">パターンB 条件充足率</div>
-            <div id="condBTable" class="meta-medium">読み込み中...</div>
-          </div>
-        </div>
-        <div class="col-12">
-          <div class="summary-card">
-            <div class="label">スコア分布</div>
-            <div class="chart-container" style="height:120px">
-              <canvas id="scoreDistChart"></canvas>
+        <div class="col-md-6">
+          <div class="row g-3">
+            <div class="col-12">
+              <div class="summary-card">
+                <div class="label">スイング3条件 充足率</div>
+                <div id="swingCondTable" class="meta-medium">読み込み中...</div>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="summary-card">
+                <div class="label">条件達成数の分布（0〜3/3）</div>
+                <div class="chart-container" style="height:120px">
+                  <canvas id="condMetChart"></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
-</details>
+  </details>
 
-<!-- 市場環境タイムライン（折りたたみ） -->
-<details class="section" open>
-  <summary style="cursor:pointer;font-size:1.1rem;font-weight:700;padding:8px 0">市場環境タイムライン</summary>
-  <div class="row g-3">
-    <div class="col-md-6">
-      <div class="summary-card">
-        <div class="label">日経平均 推移</div>
-        <div class="chart-container" style="height:220px">
-          <canvas id="n225Chart"></canvas>
+  <details class="dashboard-panel dashboard-panel--spaced" data-panel="marketTimeline" open>
+    <summary class="dashboard-panel__summary">
+      <span class="dashboard-panel__title">
+        <i data-lucide="trending-up" class="section-header__icon"></i>
+        市場環境タイムライン
+      </span>
+    </summary>
+    <div class="dashboard-panel__body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <div class="summary-card">
+            <div class="label">日経平均 推移</div>
+            <div class="chart-container" style="height:220px">
+              <canvas id="n225Chart"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="summary-card">
+            <div class="label">S&amp;P500 推移</div>
+            <div class="chart-container" style="height:220px">
+              <canvas id="sp500Chart"></canvas>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-    <div class="col-md-6">
-      <div class="summary-card">
-        <div class="label">S&amp;P500 推移</div>
-        <div class="chart-container" style="height:220px">
-          <canvas id="sp500Chart"></canvas>
+  </details>
+</div>
+
+<!-- ⑥ 運用ツール -->
+<div class="dashboard-zone dashboard-zone--ops" id="zone-ops">
+  <div class="dashboard-zone__title">運用ツール</div>
+
+  <details class="dashboard-panel" id="batchOpsPanel" data-panel="batchOps">
+    <summary class="dashboard-panel__summary">
+      <span class="dashboard-panel__title">
+        <i data-lucide="terminal" class="section-header__icon"></i>
+        バッチ手動実行
+      </span>
+      <span class="meta-small text-muted">LLM除外・上級者向け</span>
+    </summary>
+    <div class="dashboard-panel__body">
+      <p class="meta-medium mb-3">LLMアドバイザーを除外して手動でバッチを実行します。</p>
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <div class="summary-card" style="border-left:3px solid var(--color-primary)">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <strong><i data-lucide="moon" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>夜バッチ（JP）</strong>
+              <button id="btnBatchEvening" class="btn btn-primary btn-sm" onclick="triggerBatch('evening_jp')">実行</button>
+            </div>
+            <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
+              <li>JP価格データ取得（N225/TOPIX + 約3,600銘柄）</li>
+              <li>テクニカル指標計算（MA, RSI, ATR等）</li>
+              <li>市場環境判定（通常/警戒/全面警戒）</li>
+              <li>スクリーニング・シグナル検出（パターンA/B）</li>
+              <li>エントリーセット計算（価格・損切り・利確・投入額）</li>
+              <li>保有銘柄判定（損切り・利確チェック）</li>
+              <li>ニュース取得</li>
+              <li>Slack通知送信 + DBバックアップ</li>
+            </ol>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="summary-card" style="border-left:3px solid var(--color-warning)">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <strong><i data-lucide="sun" style="width:16px;height:16px;vertical-align:-2px;margin-right:4px"></i>朝バッチ（US+統合）</strong>
+              <button id="btnBatchMorning" class="btn btn-primary btn-sm" onclick="triggerBatch('morning_all')">実行</button>
+            </div>
+            <ol class="meta-small mb-0" style="padding-left:1.2em;line-height:1.8">
+              <li>US価格データ取得（SP500/NASDAQ + 約51,000銘柄）</li>
+              <li>テクニカル指標計算（MA, RSI, ATR等）</li>
+              <li>市場環境モード確定（JP+USを統合判定）</li>
+              <li>USシグナル検出・エントリーセット計算</li>
+              <li>保有銘柄判定（JP+US全体）</li>
+              <li>ニュース取得</li>
+              <li>Slack通知送信</li>
+            </ol>
+          </div>
         </div>
       </div>
+      <div id="batchProgress" style="display:none">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span id="batchStatus" class="meta-medium fw-bold"></span>
+          <span id="batchElapsed" class="meta-small text-muted"></span>
+        </div>
+        <div class="progress" style="height:8px">
+          <div id="batchProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+        </div>
+        <div id="batchStepLabel" class="meta-small text-muted mt-1"></div>
+      </div>
+      <div id="batchResult" class="mt-2" style="display:none"></div>
     </div>
-  </div>
-</details>
+  </details>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -518,6 +540,11 @@
 var _batchPollingInterval = null;
 var _batchStartTime = null;
 
+function _openBatchPanel() {
+  var panel = document.getElementById('batchOpsPanel');
+  if (panel) panel.open = true;
+}
+
 function _setBtnsDisabled(v) {
   document.getElementById('btnBatchEvening').disabled = v;
   document.getElementById('btnBatchMorning').disabled = v;
@@ -527,6 +554,7 @@ function triggerBatch(batchType) {
   var label = batchType === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
   if (!confirm(label + ' を実行しますか？\n（LLMアドバイザーは除外されます）')) return;
 
+  _openBatchPanel();
   var progressEl = document.getElementById('batchProgress');
   var resultEl = document.getElementById('batchResult');
   _setBtnsDisabled(true);
@@ -578,14 +606,12 @@ function pollBatchStatus(batchType) {
     var stepEl = document.getElementById('batchStepLabel');
     var label = batchType === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
 
-    // 経過時間
     if (_batchStartTime && elapsedEl) {
       var sec = Math.floor((Date.now() - _batchStartTime) / 1000);
       var min = Math.floor(sec / 60);
       elapsedEl.textContent = '（' + min + '分' + (sec % 60) + '秒経過）';
     }
 
-    // プログレスバー更新
     if (data.total_steps > 0) {
       var pct = Math.round((data.current_step / data.total_steps) * 100);
       barEl.style.width = pct + '%';
@@ -624,11 +650,11 @@ function pollBatchStatus(batchType) {
   }).catch(function() {});
 }
 
-// ページ読込時: 実行中バッチがあればポーリング再開
 (function() {
   fetch('/api/batch/status').then(function(r) { return r.json(); }).then(function(data) {
     for (var bt in data) {
       if (data[bt].status === 'running') {
+        _openBatchPanel();
         _setBtnsDisabled(true);
         var lbl = bt === 'evening_jp' ? '夜バッチ（JP）' : '朝バッチ（US+統合）';
         document.getElementById('batchStatus').textContent = lbl + ' 実行中...';

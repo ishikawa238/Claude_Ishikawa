@@ -19,7 +19,7 @@ from src.config import CONFIG
 from src.data_store import fetch_all, fetch_one, get_connection, insert_one
 from src.logger import get_logger
 
-from scripts.routes.settings_schema import EDITABLE_SETTINGS, GROUP_LABELS
+from scripts.routes.settings_schema import EDITABLE_SETTINGS, GROUP_LABELS, GROUP_ORDER
 
 logger = get_logger(__name__)
 
@@ -635,7 +635,12 @@ def api_system_health():
             "SELECT MAX(date) AS d FROM price_history",
         )
 
-    _BTYPES = {"evening_jp": "夜(JP)", "morning_all": "朝(全)", "monthly": "月次"}
+    _BTYPES = {
+        "evening_jp": "夜(JP)",
+        "morning_all": "朝(全)",
+        "monthly": "月次",
+        "watchlist_hourly": "毎時",
+    }
     result = {
         "last_batch": None,
         "errors_24h": 0,
@@ -816,6 +821,33 @@ def api_screening_funnel():
         )
         cond_b = dict(cond_b) if cond_b else {}
 
+        cond_swing = fetch_one(
+            conn,
+            f"""SELECT COUNT(*) AS total,
+                      SUM(cond_c_weekly_uptrend) AS uptrend,
+                      SUM(cond_c_rsi_oversold) AS rsi_oversold,
+                      SUM(cond_c_sar_reversal) AS macd_confirm
+               FROM daily_signals
+               WHERE {date_filter}""",
+            date_params,
+        )
+        cond_swing = dict(cond_swing) if cond_swing else {}
+
+        cond_met_rows = fetch_all(
+            conn,
+            f"""SELECT
+                 (COALESCE(cond_c_weekly_uptrend, 0)
+                  + COALESCE(cond_c_rsi_oversold, 0)
+                  + COALESCE(cond_c_sar_reversal, 0)) AS met,
+                 COUNT(*) AS cnt
+               FROM daily_signals
+               WHERE {date_filter}
+               GROUP BY met
+               ORDER BY met""",
+            date_params,
+        )
+        cond_met_dist = {str(dict(r)["met"]): dict(r)["cnt"] for r in cond_met_rows}
+
         score_dist = fetch_all(
             conn,
             f"""SELECT
@@ -833,8 +865,10 @@ def api_screening_funnel():
 
     a_total = cond_a.get("total") or 1
     b_total = cond_b.get("total") or 1
+    swing_total = cond_swing.get("total") or screened_cnt or 1
     return jsonify({
         "date": target,
+        "strategy": "swing",
         "funnel": {
             "universe": universe_cnt,
             "screened": screened_cnt,
@@ -844,6 +878,13 @@ def api_screening_funnel():
             "notified": notified_cnt,
         },
         "by_market": by_market,
+        "swing": {
+            "total": swing_total,
+            "uptrend": cond_swing.get("uptrend") or 0,
+            "rsi_oversold": cond_swing.get("rsi_oversold") or 0,
+            "macd_confirm": cond_swing.get("macd_confirm") or 0,
+            "cond_met": cond_met_dist,
+        },
         "pattern_a": {
             "total": a_total,
             "ma200_rising": cond_a.get("c1") or 0,
@@ -926,7 +967,11 @@ def api_settings_get():
         if item.get("choices"):
             entry["choices"] = item["choices"]
         result.append(entry)
-    return jsonify({"settings": result, "group_labels": GROUP_LABELS})
+    return jsonify({
+        "settings": result,
+        "group_labels": GROUP_LABELS,
+        "group_order": GROUP_ORDER,
+    })
 
 
 @api_bp.route("/api/settings", methods=["POST"])

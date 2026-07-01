@@ -126,10 +126,13 @@ class SwingIntegrationTests(unittest.TestCase):
         cm.__exit__ = MagicMock(return_value=False)
         return cm
 
+    @patch("src.signal_detector.is_breakout_enabled", return_value=False)
     @patch("src.signal_detector.fetch_all")
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
-    def test_upsert_rows_contain_swing_fields(self, mock_conn, mock_upsert, mock_fetch_all):
+    def test_upsert_rows_contain_swing_fields(
+        self, mock_conn, mock_upsert, mock_fetch_all, _mock_breakout,
+    ):
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
         ticker = {
@@ -146,12 +149,16 @@ class SwingIntegrationTests(unittest.TestCase):
         self.assertEqual(row["cond_c_weekly_uptrend"], 1)
         self.assertEqual(row["cond_c_rsi_oversold"], 1)
         self.assertEqual(row["cond_c_sar_reversal"], 1)
+        self.assertEqual(row["macd_confirm_type"], "both")
         self.assertEqual(row["label"], "candidate")
 
+    @patch("src.signal_detector.is_breakout_enabled", return_value=False)
     @patch("src.signal_detector.fetch_all")
     @patch("src.signal_detector.upsert")
     @patch("src.signal_detector.get_connection")
-    def test_caution_demotes_candidate_to_watch(self, mock_conn, mock_upsert, mock_fetch_all):
+    def test_caution_demotes_candidate_to_watch(
+        self, mock_conn, mock_upsert, mock_fetch_all, _mock_breakout,
+    ):
         mock_conn.return_value = self._mock_conn()
         mock_fetch_all.return_value = []
         ticker = {
@@ -200,19 +207,32 @@ class SignalSaveHealthTests(unittest.TestCase):
         cm.__exit__ = MagicMock(return_value=False)
         return cm
 
-    @patch("src.signal_detector.fetch_one", return_value={"c": 2})
+    @patch("src.signal_detector.is_breakout_enabled", return_value=True)
+    @patch("src.signal_detector.fetch_one", return_value={"c": 1})
     @patch("src.signal_detector.get_connection")
-    def test_mismatch_returns_alert(self, mock_conn, _mock_fetch):
+    def test_mismatch_returns_alert(self, mock_conn, _mock_fetch, _mock_breakout):
         mock_conn.return_value = self._mock_conn()
 
-        alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 3)
+        alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 1)
 
-        self.assertIn("期待=3", alert)
-        self.assertIn("実績=2", alert)
+        self.assertIsNotNone(alert)
+        self.assertIn("期待=2", alert)
+        self.assertIn("実績=1", alert)
 
+    @patch("src.signal_detector.is_breakout_enabled", return_value=True)
+    @patch("src.signal_detector.fetch_one", return_value={"c": 2})
+    @patch("src.signal_detector.get_connection")
+    def test_matching_count_dual_strategy(self, mock_conn, _mock_fetch, _mock_breakout):
+        mock_conn.return_value = self._mock_conn()
+
+        alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 1)
+
+        self.assertIsNone(alert)
+
+    @patch("src.signal_detector.is_breakout_enabled", return_value=False)
     @patch("src.signal_detector.fetch_one", return_value={"c": 3})
     @patch("src.signal_detector.get_connection")
-    def test_matching_count_returns_none(self, mock_conn, _mock_fetch):
+    def test_matching_count_returns_none(self, mock_conn, _mock_fetch, _mock_breakout):
         mock_conn.return_value = self._mock_conn()
 
         alert = diagnose_signal_save_count(date(2026, 6, 1), "JP", 3)
@@ -236,19 +256,22 @@ class DailySignalsPruneTests(unittest.TestCase):
                 ticker TEXT NOT NULL,
                 date TEXT NOT NULL,
                 market TEXT NOT NULL,
+                strategy TEXT,
                 pattern TEXT,
                 label TEXT NOT NULL,
                 cond_c_weekly_uptrend INTEGER,
                 cond_c_at_support INTEGER,
                 cond_c_rsi_oversold INTEGER,
                 cond_c_sar_reversal INTEGER,
+                macd_confirm_type TEXT,
                 close REAL,
                 rsi14 REAL,
                 atr14 REAL,
                 vol_ratio REAL,
                 rs_rank INTEGER,
+                rs_score REAL,
                 market_mode TEXT,
-                UNIQUE(ticker, date)
+                UNIQUE(ticker, date, strategy)
             )
             """
         )
@@ -285,9 +308,10 @@ class DailySignalsPruneTests(unittest.TestCase):
             "est_turnover": 3000000000, "est_market_cap": 50000000000,
         }
 
+    @patch("src.signal_detector.is_breakout_enabled", return_value=False)
     @patch("src.signal_detector.fetch_all", return_value=[])
     @patch("src.signal_detector.get_connection")
-    def test_stale_rows_removed_on_save(self, mock_conn, _mock_fetch):
+    def test_stale_rows_removed_on_save(self, mock_conn, _mock_fetch, _mock_breakout):
         mock_conn.side_effect = self._fake_conn
         detect_and_save_signals([self._ticker()], date(2026, 6, 22), "normal")
 

@@ -182,6 +182,7 @@ DDL_STATEMENTS = [
         date                    DATE    NOT NULL,
         market                  TEXT    NOT NULL CHECK(market IN ('JP', 'US')),
         pattern                 TEXT    CHECK(pattern IN ('A', 'B', 'C', NULL)),
+        strategy                TEXT,
         label                   TEXT    NOT NULL CHECK(label IN ('candidate', 'watch', 'skip')),
         cond_a_ma200_rising     INTEGER,
         cond_a_ma_aligned       INTEGER,
@@ -204,7 +205,7 @@ DDL_STATEMENTS = [
         FOREIGN KEY (ticker) REFERENCES universe_master(ticker)
     )
     """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_signals_ticker_date ON daily_signals(ticker, date)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_signals_ticker_date_strategy ON daily_signals(ticker, date, strategy)",
     "CREATE INDEX IF NOT EXISTS idx_daily_signals_date_label ON daily_signals(date, label)",
 
     # ----------------------------------------------------------
@@ -534,6 +535,13 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE technical_snapshot ADD COLUMN macd_diff_prev    REAL",
     "ALTER TABLE technical_snapshot ADD COLUMN macd_dea_prev     REAL",
     "ALTER TABLE technical_snapshot ADD COLUMN macd_hist_prev    REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN return_126d       REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN rs_score            REAL",
+    "ALTER TABLE daily_signals ADD COLUMN rs_score                 REAL",
+    "ALTER TABLE technical_snapshot ADD COLUMN high_60d_prior      REAL",
+    "ALTER TABLE daily_signals ADD COLUMN strategy                 TEXT",
+    "ALTER TABLE daily_signals ADD COLUMN strategy                 TEXT",
+    "ALTER TABLE technical_snapshot ADD COLUMN high_60d_prior      REAL",
     # シンプル出口ルールの延長保有状態
     """
     CREATE TABLE IF NOT EXISTS exit_simple_state (
@@ -550,7 +558,54 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE daily_signals ADD COLUMN cond_c_at_support      INTEGER",
     "ALTER TABLE daily_signals ADD COLUMN cond_c_rsi_oversold    INTEGER",
     "ALTER TABLE daily_signals ADD COLUMN cond_c_sar_reversal    INTEGER",
+    "ALTER TABLE daily_signals ADD COLUMN macd_confirm_type      TEXT",
     "ALTER TABLE daily_signals ADD COLUMN pattern_c_score         REAL",
+    # お気に入り毎時監視の通知ログ
+    """
+    CREATE TABLE IF NOT EXISTS intraday_swing_alert_log (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_date        DATE    NOT NULL,
+        ticker            TEXT    NOT NULL,
+        market            TEXT    NOT NULL,
+        label             TEXT    NOT NULL DEFAULT 'candidate',
+        close_price       REAL,
+        ema25             REAL,
+        ema75             REAL,
+        rsi14             REAL,
+        macd_diff         REAL,
+        macd_dea          REAL,
+        macd_hist         REAL,
+        vol_ratio         REAL,
+        atr14             REAL,
+        macd_confirm_type TEXT,
+        notified          INTEGER NOT NULL DEFAULT 0,
+        first_alert_at    DATETIME,
+        last_check_at     DATETIME,
+        memo              TEXT,
+        UNIQUE(alert_date, ticker, market)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_intraday_swing_alert_date ON intraday_swing_alert_log(alert_date)",
+    """
+    CREATE TABLE IF NOT EXISTS intraday_holding_alert_log (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        alert_date        DATE    NOT NULL,
+        ticker            TEXT    NOT NULL,
+        market            TEXT    NOT NULL,
+        alert_type        TEXT    NOT NULL CHECK(alert_type IN ('stop_loss', 'take_profit')),
+        label             TEXT,
+        current_price     REAL,
+        stop_loss_price   REAL,
+        target_price      REAL,
+        pnl_pct           REAL,
+        notified          INTEGER NOT NULL DEFAULT 0,
+        first_alert_at    DATETIME,
+        last_check_at     DATETIME,
+        memo              TEXT,
+        UNIQUE(alert_date, ticker, market, alert_type)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_intraday_holding_alert_date ON intraday_holding_alert_log(alert_date)",
 ]
 
 # 冪等なデータ修正マイグレーション（毎回実行しても安全）
@@ -734,6 +789,106 @@ def _migrate_report_log_check_for_skip(conn: sqlite3.Connection) -> None:
             pass
 
 
+def _extend_table_check_constraint(
+    conn: sqlite3.Connection,
+    table: str,
+    test_sql: str,
+    test_cleanup_sql: str,
+    old_check: str,
+    new_check: str,
+    label: str,
+) -> None:
+    """CHECK 制約をテーブル再作成で拡張する（冪等）。"""
+    try:
+        conn.execute(f"SAVEPOINT chk_{label}")
+        conn.execute(test_sql)
+        conn.execute(test_cleanup_sql)
+        conn.execute(f"RELEASE chk_{label}")
+        logger.info(f"  CHECK制約拡張済み（スキップ）: {label}")
+        return
+    except sqlite3.IntegrityError:
+        conn.execute(f"ROLLBACK TO chk_{label}")
+        conn.execute(f"RELEASE chk_{label}")
+    except sqlite3.OperationalError:
+        conn.execute(f"ROLLBACK TO chk_{label}")
+        conn.execute(f"RELEASE chk_{label}")
+
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if not row:
+        return
+    original_ddl = row[0]
+    if old_check not in original_ddl:
+        logger.info(f"  CHECK制約変更不要: {label}")
+        return
+    new_ddl = original_ddl.replace(old_check, new_check, 1)
+    temp_ddl = new_ddl.replace(f"CREATE TABLE {table}", f"CREATE TABLE {table}__new", 1)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(f"SAVEPOINT migrate_{label}")
+        conn.execute(temp_ddl)
+        cols = ", ".join(c[1] for c in conn.execute(f"PRAGMA table_info({table})").fetchall())
+        conn.execute(f"INSERT INTO {table}__new ({cols}) SELECT {cols} FROM {table}")
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {table}__new RENAME TO {table}")
+        conn.execute(f"RELEASE migrate_{label}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        logger.info(f"  CHECK制約拡張完了: {label}")
+    except Exception as e:
+        logger.warning(f"  CHECK制約拡張エラー ({label}): {e}")
+        try:
+            conn.execute(f"ROLLBACK TO migrate_{label}")
+            conn.execute(f"RELEASE migrate_{label}")
+        except Exception:
+            pass
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table}__new")
+        except Exception:
+            pass
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
+
+
+def _migrate_report_log_check_for_watchlist(conn: sqlite3.Connection) -> None:
+    _extend_table_check_constraint(
+        conn,
+        "report_log",
+        "INSERT INTO report_log (report_date, report_type, content, slack_status) "
+        "VALUES ('9999-12-31', 'watchlist_alert', '{}', 'skipped')",
+        "DELETE FROM report_log WHERE report_date = '9999-12-31' AND report_type = 'watchlist_alert'",
+        "CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip'))",
+        "CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip', 'watchlist_alert'))",
+        "report_log_watchlist_alert",
+    )
+    _extend_table_check_constraint(
+        conn,
+        "report_log",
+        "INSERT INTO report_log (report_date, report_type, content, slack_status) "
+        "VALUES ('9999-12-31', 'watchlist_holding_alert', '{}', 'skipped')",
+        "DELETE FROM report_log WHERE report_date = '9999-12-31' AND report_type = 'watchlist_holding_alert'",
+        "CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip', 'watchlist_alert'))",
+        "CHECK(report_type IN ('morning', 'evening', 'monthly', 'morning_skip', 'evening_skip', 'watchlist_alert', 'watchlist_holding_alert'))",
+        "report_log_watchlist_holding_alert",
+    )
+
+
+def _migrate_batch_run_log_check_for_watchlist(conn: sqlite3.Connection) -> None:
+    _extend_table_check_constraint(
+        conn,
+        "batch_run_log",
+        "INSERT INTO batch_run_log (run_date, batch_type, status) "
+        "VALUES ('9999-12-31', 'watchlist_hourly', 'success')",
+        "DELETE FROM batch_run_log WHERE run_date = '9999-12-31' AND batch_type = 'watchlist_hourly'",
+        "CHECK(batch_type IN ('evening_jp', 'morning_all', 'monthly'))",
+        "CHECK(batch_type IN ('evening_jp', 'morning_all', 'monthly', 'watchlist_hourly'))",
+        "batch_run_log_watchlist_hourly",
+    )
+
+
 def _migrate_check_constraints_for_pattern_c(conn: sqlite3.Connection) -> None:
     """
     既存DBの CHECK(pattern IN ('A','B')) 制約を ('A','B','C') に拡張する。
@@ -860,6 +1015,34 @@ def _migrate_check_constraints_for_pattern_c(conn: sqlite3.Connection) -> None:
                 pass
 
 
+def _migrate_daily_signals_strategy_index(conn: sqlite3.Connection) -> None:
+    """daily_signals を (ticker, date, strategy) の複合ユニークに移行する。"""
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND name='idx_daily_signals_ticker_date_strategy'"
+    ).fetchone()
+    if row:
+        return
+
+    try:
+        conn.execute(
+            """
+            UPDATE daily_signals
+            SET strategy = CASE market WHEN 'JP' THEN 'swing_jp' ELSE 'moomoo_swing' END
+            WHERE strategy IS NULL
+            """
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    conn.execute("DROP INDEX IF EXISTS idx_daily_signals_ticker_date")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_signals_ticker_date_strategy "
+        "ON daily_signals(ticker, date, strategy)"
+    )
+    logger.info("  daily_signals: UNIQUE(ticker, date, strategy) に移行")
+
+
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """
     既存DBに対してカラム追加などのマイグレーションを実行する。
@@ -870,6 +1053,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
 
     # report_log: skip通知用の report_type 拡張
     _migrate_report_log_check_for_skip(conn)
+    _migrate_report_log_check_for_watchlist(conn)
+    _migrate_batch_run_log_check_for_watchlist(conn)
 
     for stmt in MIGRATION_STATEMENTS:
         try:
@@ -880,6 +1065,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 pass  # 既に存在する場合はスキップ
             else:
                 raise
+
+    _migrate_daily_signals_strategy_index(conn)
 
     # データ修正マイグレーション（冪等・エラー無視しない）
     for stmt in DATA_MIGRATION_STATEMENTS:

@@ -55,7 +55,13 @@
     "stale_days_soft": 90,
     "stale_min_pnl_pct": 5.0,
     "stale_days_hard": 120,
-    "stale_hard_min_pnl_pct": 10.0
+    "stale_hard_min_pnl_pct": 10.0,
+    "resistance_cap": {
+      "enabled": true,
+      "buffer_pct": 1.5,
+      "min_reward_pct": 8.0,
+      "ignore_if_above_pct": 25.0
+    }
   },
 
   "investment_goal": {
@@ -66,6 +72,30 @@
   "risk_control": {
     "monthly_loss_stop_pct": 6.0,
     "max_consecutive_losses_before_pause": 3
+  },
+
+  "_rs_score_comment": "RSスコア（相対強度）: ベンチマーク対比の126日リターンを市場内百分位化。filter_enabled は既定OFF（記録・表示のみ）。",
+  "rs_score": {
+    "enabled": true,
+    "lookback_days": 126,
+    "jp_benchmark": "N225",
+    "us_benchmark": "SP500",
+    "min_rs_score": 70,
+    "filter_enabled": false,
+    "dynamic_rsi_enabled": true,
+    "dynamic_rsi_base": 35,
+    "dynamic_rsi_anchor_score": 70,
+    "dynamic_rsi_slope": 0.5,
+    "dynamic_rsi_max": 55
+  },
+
+  "_breakout_comment": "ブレイクアウト戦略: 60日高値更新 + 出来高急増。enabled:false で無効化。",
+  "breakout": {
+    "enabled": true,
+    "high_lookback_days": 60,
+    "volume_ratio_min": 1.5,
+    "max_candidates_per_batch": 1,
+    "min_rs_score": null
   },
 
   "signal": {
@@ -148,10 +178,26 @@
     "entry_slippage_pct": 0.0
   },
 
-  "_moomoo_comment": "moomoo セクションは任意。moomoo OpenD から保有銘柄を同期する場合のみ設定する。未設定でも holdings.csv による管理で動作する。",
+  "_moomoo_comment": "moomoo セクションは任意。moomoo OpenD から保有銘柄を同期する場合のみ設定する。watchlist.enabled を true にする場合は、moomoo アプリでカスタムグループ「システム候補」を事前作成すること。注意: OpenAPI のお気に入り追加は US 株のみ対応（Moomoo JP 口座では日本株は API 非対応）。",
   "moomoo": {
     "host": "127.0.0.1",
-    "port": 11111
+    "port": 11111,
+    "watchlist": {
+      "enabled": false,
+      "group_name": "システム候補",
+      "min_days_before_remove": 7,
+      "exclude_holdings": true,
+      "exclude_bookmarked": true
+    },
+    "watchlist_monitor": {
+      "enabled": false,
+      "group_name": "All",
+      "group_name_fallbacks": ["All", "Favorites", "US"],
+      "markets": ["US"],
+      "macd_require_both": true,
+      "respect_market_mode": true,
+      "max_alerts_per_run": 10
+    }
   },
 
   "_llm_comment": "llm セクションは任意。有効にすると、バッチ実行時に買い候補・保有銘柄のデータを LLM に送り、フィードバックを Slack 通知に含める。enabled を true にし、使用するプロバイダーの api_key を設定する。",

@@ -517,6 +517,36 @@ def _get_holding_quantity(ticker: str) -> float:
 # 整合性チェック
 # ============================================================
 
+def deactivate_legacy_take_profit_targets() -> int:
+    """
+    exit_simple 有効時に、保有中銘柄の旧式 T1/T2/T3 ターゲットを無効化する。
+
+    返り値: 無効化した件数
+    """
+    from src.exit_simple import is_exit_simple_enabled
+
+    if not is_exit_simple_enabled():
+        return 0
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE take_profit_targets
+            SET is_active = 0, updated_at = ?
+            WHERE is_active = 1
+              AND ticker IN (
+                  SELECT ticker FROM holdings WHERE is_closed = 0
+              )
+            """,
+            (now,),
+        )
+        count = cursor.rowcount
+    if count > 0:
+        logger.info(f"旧式利確ターゲットを無効化: {count}件（exit_simple へ移行）")
+    return count
+
+
 def cleanup_stale_targets() -> int:
     """
     holdings に存在しない銘柄の利確ターゲットを無効化する。

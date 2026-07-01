@@ -62,3 +62,45 @@ def is_offensive() -> bool:
 def get_offensive_config() -> dict:
     """後方互換: 空辞書を返す。"""
     return {}
+
+
+def get_rs_score_config() -> dict:
+    """rs_score セクションの設定辞書を返す。"""
+    defaults = {
+        "enabled": True,
+        "lookback_days": 126,
+        "jp_benchmark": "N225",
+        "us_benchmark": "SP500",
+        "min_rs_score": 70,
+        "filter_enabled": False,
+        "dynamic_rsi_enabled": True,
+        "dynamic_rsi_base": 35,
+        "dynamic_rsi_anchor_score": 70,
+        "dynamic_rsi_slope": 0.5,
+        "dynamic_rsi_max": 55,
+    }
+    user = CONFIG.get("rs_score", {}) or {}
+    merged = {**defaults, **user}
+    return merged
+
+
+def get_breakout_config() -> dict:
+    """breakout セクションの設定辞書を返す。"""
+    defaults = {
+        "enabled": True,
+        "high_lookback_days": 60,
+        "volume_ratio_min": 1.5,
+        "max_candidates_per_batch": 1,
+        "min_rs_score": None,
+    }
+    user = CONFIG.get("breakout", {}) or {}
+    return {**defaults, **user}
+
+
+def breakout_strategy_name(market: str) -> str:
+    """市場別のブレイクアウト戦略名。"""
+    return "breakout_jp" if market.upper() == "JP" else "breakout_us"
+
+
+def is_breakout_enabled() -> bool:
+    return bool(get_breakout_config().get("enabled", True))

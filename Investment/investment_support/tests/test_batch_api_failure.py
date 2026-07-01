@@ -148,6 +148,7 @@ def _evening_patches(**overrides) -> list:
         # 遅延 import されるモジュールをモック
         "src.moomoo_sync.sync_from_moomoo": MagicMock(),
         "src.moomoo_sync.sync_trade_results": MagicMock(),
+        "src.moomoo_watchlist.sync_watchlist": MagicMock(),
         "src.paper_trading.is_paper_mode_enabled": MagicMock(return_value=False),
         "src.signal_detector.fetch_near_misses": MagicMock(return_value=[]),
         "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),
@@ -188,6 +189,7 @@ def _morning_patches(**overrides) -> list:
         # 遅延 import されるモジュールをモック
         "src.moomoo_sync.sync_from_moomoo": MagicMock(),
         "src.moomoo_sync.sync_trade_results": MagicMock(),
+        "src.moomoo_watchlist.sync_watchlist": MagicMock(),
         "src.paper_trading.is_paper_mode_enabled": MagicMock(return_value=False),
         "src.signal_detector.fetch_near_misses": MagicMock(return_value=[]),
         "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),

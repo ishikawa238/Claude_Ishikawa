@@ -62,7 +62,7 @@ copy config_template.json config.json
 | US 株式数 (EODHD) | `screening.us_shares_refresh_enabled` | fundamentals API が使えるプランのみ `true`（多くの安価プランは `false`） |
 | moomoo 接続先 | `moomoo.host` / `moomoo.port` | moomoo OpenD の接続先。未設定でも `holdings.csv` で保有銘柄を管理できる |
 | LLM アドバイザー | `llm.enabled` | `true` に設定し、使用するプロバイダーの `api_key` を入力。未設定の場合、LLMフィードバックは表示されない |
-| 戦略モード | `strategy_mode` | `defensive`（既定）または `offensive`。攻めモードは 2倍・3倍株狙い向けに利確・選定・撤退ルールが厳格化される。詳細は `Investment/offensive_strategy.md` を参照 |
+| 戦略モード | `strategy_mode` | `defensive`（既定）または `offensive`。概要は [docs/system_overview_and_strategy.md](../docs/system_overview_and_strategy.md) を参照 |
 
 ---
 

@@ -5,7 +5,7 @@
 - MA5 / MA25 / MA75 / MA200（およびそれぞれ5日前の値）
 - 20日平均出来高
 - 20日高値・52週高値・52週安値
-- 5日騰落率・20日騰落率
+- 5日騰落率・20日騰落率・126日騰落率（RSスコア用）
 - RSI14（Wilder平滑化）
 - ATR14
 - 20日ボラティリティ（年率換算）
@@ -100,11 +100,13 @@ def calculate_snapshot(ticker: str, target_date: date, prices: list[dict]) -> di
         # 出来高・高値
         "vol_20d_avg":  _mean(vols[-20:])   if n >= 20 else None,
         "high_20d":     max(closes[-20:])   if n >= 20 else None,
+        "high_60d_prior": max(closes[-61:-1]) if n >= 61 else None,
         "high_52w":     max(closes[-252:])  if n >= 252 else max(closes),
         "low_52w":      min(closes[-252:])  if n >= 252 else min(closes),
         # 騰落率
         "return_5d":    _return_pct(closes, 5),
         "return_20d":   _return_pct(closes, 20),
+        "return_126d":  _return_pct(closes, 126),
         # オシレーター
         "rsi14":        _rsi(closes, 14),
         "atr14":        _atr(closes, highs, lows, 14),
@@ -656,8 +658,9 @@ def _empty_snapshot(ticker: str, target_date: date) -> dict:
         "date":   target_date.strftime("%Y-%m-%d"),
         "ma5": None, "ma25": None, "ma75": None, "ma200": None,
         "ma5_5d_ago": None, "ma25_5d_ago": None, "ma200_5d_ago": None,
-        "vol_20d_avg": None, "high_20d": None, "high_52w": None, "low_52w": None,
-        "return_5d": None, "return_20d": None,
+        "vol_20d_avg": None, "high_20d": None, "high_60d_prior": None, "high_52w": None, "low_52w": None,
+        "return_5d": None, "return_20d": None, "return_126d": None,
+        "rs_score": None,
         "rsi14": None, "atr14": None, "volatility_20d": None,
         "ema25": None, "ema75": None,
         "macd_diff": None, "macd_dea": None, "macd_hist": None,

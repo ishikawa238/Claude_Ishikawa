@@ -64,6 +64,24 @@ Register-InvestmentTask `
     -Trigger  (New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday -At "07:30") `
     -Desc     "Investment Support - Morning batch (all markets)"
 
+# Watchlist hourly monitor — every hour (batch skips when market closed)
+$hourlyTaskName = "Investment_WatchlistHourly"
+if (Get-ScheduledTask -TaskName $hourlyTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $hourlyTaskName -Confirm:$false
+    Write-Host "Removed existing task: $hourlyTaskName"
+}
+schtasks.exe /create `
+    /tn $hourlyTaskName `
+    /tr "$PythonExe -m scripts.batch_watchlist_hourly" `
+    /sc hourly /mo 1 /st 09:00 `
+    /rl HIGHEST `
+    /f | Out-Null
+$hourlyAction = New-ScheduledTaskAction `
+    -Execute $PythonExe `
+    -Argument "-m scripts.batch_watchlist_hourly" `
+    -WorkingDirectory $ProjectDir
+Set-ScheduledTask -TaskName $hourlyTaskName -Action $hourlyAction | Out-Null
+Write-Host "Registered: $hourlyTaskName" -ForegroundColor Green
 
 # Dashboard (order_server.py) - start at logon
 Register-InvestmentTask `
@@ -74,7 +92,6 @@ Register-InvestmentTask `
     -NoTimeLimit
 
 # Monthly batch - 1st of each month 08:00
-# New-ScheduledTaskTrigger has no -Monthly parameter.
 # Use schtasks.exe /create with monthly schedule instead of CIM trigger.
 $monthlyTaskName = "Investment_MonthlyBatch"
 if (Get-ScheduledTask -TaskName $monthlyTaskName -ErrorAction SilentlyContinue) {
@@ -104,6 +121,7 @@ Write-Host "Schedule summary:"
 Write-Host "  At logon     ->  Investment_Dashboard (127.0.0.1:5100)"
 Write-Host "  Daily 07:30  ->  Investment_MorningBatch_ALL"
 Write-Host "  Daily 20:30  ->  Investment_EveningBatch_JP"
+Write-Host "  Hourly       ->  Investment_WatchlistHourly (market-hours gate inside batch)"
 Write-Host "  1st of month ->  Investment_MonthlyBatch"
 Write-Host ""
 Write-Host "To verify: run 'taskschd.msc'"

@@ -4,6 +4,8 @@
 
 日本株・米国株を対象とした投資判断支援システム。日次の価格データからテクニカル指標を計算し、買いパターンの検出・保有銘柄の損切り判定・Slack通知を自動で行う。最終的な売買判断はユーザー自身が行う「実行規律補助システム」。
 
+> システム概要と投資戦略のまとめ: [docs/system_overview_and_strategy.md](docs/system_overview_and_strategy.md)
+
 ## できること
 
 - 日本株約3,600銘柄・米国株約51,000銘柄の日次価格データを自動取得
@@ -14,7 +16,10 @@
 - 保有銘柄の損切りライン到達を最優先で通知（JP保有の監視は夜バッチで継続）
 - 市場全体のトレンドを判定し、警戒時は新規買いを自動停止
 - 朝（07:30）と夜（20:30）の2回、Slackで通知
-- Webダッシュボード（`http://127.0.0.1:5100/report`）で保有状況・シグナル履歴・チャートを確認
+- moomoo「All」お気に入り銘柄を市場開場中に毎時スキャンし、スイング3条件（MACDはヒスト反転+GC両方）を満たした銘柄をSlack即時通知
+- 同じ毎時バッチで保有銘柄の損切りライン到達・利確ターゲット到達もSlack通知（市場環境に関わらず常時）
+- 毎時バッチ実行時にダッシュボードの総資産サマリー・保有銘柄の現値も更新（`price_history` + `portfolio_snapshot`）
+- Webダッシュボード（`http://127.0.0.1:5100/report`）で保有状況・シグナル履歴・チャートを確認（ゾーン構成: サマリー → 今日のアクション → ポートフォリオ → 履歴 → 分析 → 運用ツール）
 - 初心者向けルール確認ダッシュボード（`http://127.0.0.1:5100/rules`）で、買ってよい条件・資金管理・出口・検証・停止ルールを確認
 - 朝・夜バッチで資産総額（保有時価合計）を自動スナップショットし、ダッシュボードに表示
 - ポートフォリオ全体のリスク指標（VaR/Beta/Sharpe）をダッシュボードに表示
@@ -80,7 +85,7 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 
 ### 戦略モードの切替（守り/攻め）
 
-`config.json` の `strategy_mode` で 2 種類の戦略を切り替えられる。詳細は [offensive_strategy.md](offensive_strategy.md) を参照。
+`config.json` の `strategy_mode` で 2 種類の戦略を切り替えられる。概要は [docs/system_overview_and_strategy.md](docs/system_overview_and_strategy.md) を参照。攻めモードの詳細メモは [docs/archive/offensive_strategy.md](docs/archive/offensive_strategy.md)（アーカイブ）。
 
 | モード | 既定値 | 内容 |
 |--------|--------|------|
@@ -105,6 +110,7 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 | ログオン時 | `python -m scripts.order_server` | Webダッシュボード自動起動（`127.0.0.1:5100`） |
 | 毎日 20:30 | `python -m scripts.batch_evening_jp` | JP株価取得 → テクニカル計算 → シグナル検出 → Slack夜通知 |
 | 毎日 07:30 | `python -m scripts.batch_morning_all` | US株価取得 → テクニカル計算 → JP+USシグナル統合 → Slack朝通知 |
+| 毎時 | `python -m scripts.batch_watchlist_hourly` | お気に入りスイング監視 + 保有損切り/利確アラート + ダッシュボード現値更新（市場クローズ時はスキップ） |
 | 毎月1日 08:00 | `python -m scripts.batch_monthly` | 銘柄マスタ更新 → 月次レポート送信 |
 
 タスクスケジューラへの一括登録：
@@ -118,6 +124,7 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 ```cmd
 python -m scripts.batch_evening_jp      # 夜バッチを今すぐ実行
 python -m scripts.batch_morning_all     # 朝バッチを今すぐ実行
+python -m scripts.batch_watchlist_hourly  # お気に入り毎時監視（市場開場中のみ通知）
 python -m scripts.batch_monthly         # 銘柄マスタ更新 + 月次レポート
 python -m scripts.order_server          # Webダッシュボード起動（127.0.0.1:5100）
 python -m scripts.add_trade_result      # トレード結果の手動記録
@@ -244,6 +251,10 @@ investment_support/
 │   ├── entry_calculator.py   # エントリーセット算出
 │   ├── holdings_monitor.py   # 保有銘柄の損益計算・損切り判定
 │   ├── moomoo_sync.py        # moomoo OpenD からの保有銘柄同期
+│   ├── moomoo_watchlist.py   # moomooお気に入り同期・読み取り
+│   ├── moomoo_quote.py       # moomoo OpenD 日足・スナップショット取得
+│   ├── market_hours.py       # 市場開場時間判定
+│   ├── watchlist_swing_monitor.py  # お気に入り銘柄のスイングスキャン
 │   ├── risk.py               # リスク指標（VaR, Beta, Sharpe Ratio）
 │   ├── risk_control.py       # 月間損失・連続損失による新規買い停止ルール
 │   ├── portfolio_snapshot.py # バッチ実行時の総資産スナップショット
@@ -259,6 +270,7 @@ investment_support/
 │   ├── fetch_historical.py   # 初回3年分一括取得
 │   ├── batch_evening_jp.py   # 夜バッチ（20:30）
 │   ├── batch_morning_all.py  # 朝バッチ（07:30）
+│   ├── batch_watchlist_hourly.py  # お気に入り毎時監視
 │   ├── batch_monthly.py      # 月次バッチ
 │   ├── order_server.py       # Webダッシュボード（Flask, 127.0.0.1:5100）
 │   ├── backtest_signals.py   # バックテスト実行CLI
@@ -293,7 +305,7 @@ investment_support/
 | `portfolio_snapshot` | バッチ実行時の総資産スナップショット |
 | `llm_feedback_log` | LLMアドバイザーの応答ログ |
 
-`init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [detailed_design.md](detailed_design.md) セクション2を参照。
+`init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [docs/archive/detailed_design.md](docs/archive/detailed_design.md) セクション2を参照（アーカイブ。実装と一部乖離あり）。
 
 ## テスト
 
@@ -305,11 +317,15 @@ python -m unittest tests.test_notifier      # 個別テスト
 
 ## 関連ドキュメント
 
+ドキュメントは [docs/](docs/) フォルダに集約しています。
+
 | ファイル | 内容 |
 |---------|------|
-| [SETUP.md](investment_support/SETUP.md) | セットアップ手順（スクリーンショット付き） |
-| [detailed_design.md](detailed_design.md) | 詳細設計書（DB定義・バッチフロー・Slack通知テンプレート） |
-| [low_cost_investment_support_requirements.md](low_cost_investment_support_requirements.md) | 要件定義書 |
+| [docs/system_overview_and_strategy.md](docs/system_overview_and_strategy.md) | **システム概要と投資戦略のまとめ** |
+| [docs/README.md](docs/README.md) | ドキュメント一覧 |
+| [investment_support/SETUP.md](investment_support/SETUP.md) | セットアップ手順（スクリーンショット付き） |
+| [docs/jp_price_sources.md](docs/jp_price_sources.md) | 日本株価格データの取得元候補 |
+| [docs/archive/](docs/archive/) | 旧戦略・設計書・計画・分析（アーカイブ） |
 | [CLAUDE.md](CLAUDE.md) | Claude Code 向けガイド |
 
 ## 運用開始前チェックリスト
@@ -329,7 +345,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 
 ## 既知の制約
 
-- JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応（代替候補は [investment_support/docs/jp_price_sources.md](investment_support/docs/jp_price_sources.md) を参照）
+- JP銘柄の価格データは yfinance 経由で取得しており、EODHD Bulk EOD は JP 未対応（代替候補は [docs/jp_price_sources.md](docs/jp_price_sources.md) を参照）
 - JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
 - J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
 - Screening List の日付は `daily_signals` の最新日。流動性フィルタが 0 件だと更新されない（`allow_unknown_market_cap` が OFF かつ時価総額未登録のとき等）。Slack に警告が出る

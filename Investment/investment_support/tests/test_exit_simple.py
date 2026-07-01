@@ -13,6 +13,8 @@ from src.exit_simple import (
     effective_target_pct,
     evaluate_exit,
     hold_conditions_met,
+    resistance_reward_pct,
+    resolve_exit_targets,
     target_price,
 )
 
@@ -28,6 +30,33 @@ class TestEffectiveTargetPct(unittest.TestCase):
         self.assertEqual(effective_target_pct(60, cfg), 10.0)
         self.assertEqual(effective_target_pct(90, cfg), 5.0)
         self.assertEqual(effective_target_pct(200, cfg), 5.0)
+
+
+class TestResistanceCap(unittest.TestCase):
+    def test_cap_applies_when_below_time_decay(self):
+        # entry 100, resistance 112 → cap price 112*0.985=110.32 → +10.32%
+        pct = resistance_reward_pct(100.0, 112.0, _cfg())
+        self.assertIsNotNone(pct)
+        self.assertAlmostEqual(pct, 10.32, places=1)
+
+    def test_cap_ignored_when_too_far(self):
+        pct = resistance_reward_pct(100.0, 130.0, _cfg())
+        self.assertIsNone(pct)
+
+    def test_cap_ignored_when_too_close(self):
+        pct = resistance_reward_pct(100.0, 105.0, _cfg())
+        self.assertIsNone(pct)
+
+    def test_resolve_binding_resistance(self):
+        targets = resolve_exit_targets(100.0, 10, 112.0, _cfg())
+        self.assertEqual(targets["target_binding"], "resistance")
+        self.assertLess(targets["effective_target_pct"], targets["time_decay_target_pct"])
+        self.assertEqual(targets["resistance_cap_active"], True)
+
+    def test_resolve_binding_time_decay(self):
+        targets = resolve_exit_targets(100.0, 10, 130.0, _cfg())
+        self.assertEqual(targets["target_binding"], "time_decay")
+        self.assertFalse(targets["resistance_cap_active"])
 
 
 class TestHoldConditions(unittest.TestCase):
@@ -67,6 +96,18 @@ class TestEvaluateExit(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["label"], "tp_full")
         self.assertEqual(result["sell_qty"], 1)
+
+    def test_resistance_cap_triggers_before_twenty_pct(self):
+        snap = {"ema25": 90, "ema75": 100, "ma25": 95, "rsi14": 50}
+        # entry 100, resistance 112 → cap ~+10.32%
+        result = evaluate_exit(
+            "TEST", 100.0, 110.5, 10.5, 1, 10, snap,
+            resistance_level=112.0, persist_state=False,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["label"], "tp_full")
+        self.assertEqual(result["target_binding"], "resistance")
+        self.assertIn("レジスタンス", result["reasons"][0])
 
     def test_partial_take_profit_with_hold(self):
         snap = {"ema25": 110, "ema75": 100, "ma25": 105, "rsi14": 55}
@@ -171,6 +212,12 @@ def _cfg() -> dict:
         "stale_min_pnl_pct": 5.0,
         "stale_days_hard": 120,
         "stale_hard_min_pnl_pct": 10.0,
+        "resistance_cap": {
+            "enabled": True,
+            "buffer_pct": 1.5,
+            "min_reward_pct": 8.0,
+            "ignore_if_above_pct": 25.0,
+        },
     }
 
 

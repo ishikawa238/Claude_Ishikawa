@@ -114,6 +114,7 @@ _BATCH_TYPE_LABEL = {
     "evening_jp": "夜バッチ(JP)",
     "morning_all": "朝バッチ(全体)",
     "monthly": "月次バッチ",
+    "watchlist_hourly": "お気に入り監視",
 }
 
 
@@ -486,6 +487,19 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     p_name  = _PATTERN_DISPLAY_NAMES.get(pattern, pattern)
     rs_rank = es.get("_rs_rank")
     rank_str = f" ランク{rs_rank}位" if rs_rank else ""
+    rs_score = es.get("_rs_score")
+    rs_str = f" RS:{rs_score:.0f}" if rs_score is not None else ""
+    strategy = es.get("_strategy")
+    _STRATEGY_LABELS = {
+        "swing_jp": "押し目",
+        "moomoo_swing": "押し目",
+        "breakout_jp": "ブレイクアウト",
+        "breakout_us": "ブレイクアウト",
+    }
+    strat_str = ""
+    if strategy:
+        label = _STRATEGY_LABELS.get(strategy, strategy)
+        strat_str = f" [{label}]"
 
     entry  = es["entry_price"]
     stop   = es["stop_loss_price"]
@@ -523,7 +537,7 @@ def _entry_set_block(es: dict, show_conditions: bool = False) -> dict:
     total_count = es.get("_conditions_total")
 
     # --- 行1: ヘッダー + パターン名 ---
-    header = f"*[{pattern}] {ticker} {name} ({market}){rank_str}* — {p_name}"
+    header = f"*[{pattern}] {ticker} {name} ({market}){rank_str}{rs_str}{strat_str}* — {p_name}"
 
     # --- 行2: スコア + 判定種別 + サブスコア（1行統合）---
     score_parts: list[str] = []
@@ -641,7 +655,26 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     eff_price = h.get("exit_effective_target_price")
     if eff_pct is not None and eff_price and current > 0:
         dist = (eff_price - current) / current * 100
-        sub_parts.append(f"利確目標: +{eff_pct:g}%（{eff_price:,.2f} / あと{dist:+.1f}%）")
+        time_pct = h.get("exit_time_decay_target_pct")
+        time_price = h.get("exit_time_decay_target_price")
+        res_pct = h.get("exit_resistance_cap_pct")
+        res_price = h.get("exit_resistance_cap_price")
+        binding = h.get("exit_target_binding") or "time_decay"
+        tp_parts = []
+        if time_pct is not None and time_price:
+            dist_a = (time_price - current) / current * 100
+            mark = "→" if binding == "time_decay" else ""
+            tp_parts.append(f"{mark}A:+{time_pct:g}% {time_price:,.0f}({dist_a:+.1f}%)")
+        if h.get("exit_resistance_cap_active") and res_pct is not None and res_price:
+            dist_b = (res_price - current) / current * 100
+            mark = "→" if binding == "resistance" else ""
+            tp_parts.append(f"{mark}B:+{res_pct:g}% {res_price:,.0f}({dist_b:+.1f}%)")
+        if tp_parts:
+            sub_parts.append("利確: " + " / ".join(tp_parts))
+        else:
+            sub_parts.append(f"利確目標: +{eff_pct:g}%（{eff_price:,.2f} / あと{dist:+.1f}%）")
+        if binding == "resistance" and h.get("exit_resistance_cap_active"):
+            sub_parts.append("有効=Bレジキャップ")
         if h.get("exit_extend_active"):
             sub_parts.append("延長保有中")
         sell_q = h.get("exit_sell_qty") or 0
@@ -1064,8 +1097,119 @@ def send_skip_notification(
     date_str = target_date.strftime("%Y-%m-%d")
     text = f"🌙 {date_str}（{weekday_ja}）{reason}、{batch_label}をスキップしました"
     payload = {"blocks": [_section(text)]}
+    if batch_type == "watchlist_hourly":
+        return False  # 毎時監視は市場クローズ時に通知しない
     report_type = "evening_skip" if "evening" in batch_type else "morning_skip"
     return _send(payload, target_date, report_type)
+
+
+def send_watchlist_swing_alert(
+    target_date: date,
+    candidates: list[dict],
+    *,
+    market_label: str = "US",
+) -> bool:
+    """お気に入り監視: 厳格3条件を満たした銘柄の統計量を Slack 通知する。"""
+    if not candidates:
+        return False
+
+    now_str = datetime.now().strftime("%H:%M")
+    date_str = target_date.strftime("%Y-%m-%d")
+    blocks: list[dict] = [
+        _section(
+            f"⭐ *お気に入り監視 — {market_label} スイング候補*\n"
+            f"{date_str} {now_str} JST\n"
+            f"_※ 日足未確定・参考値。③はヒスト反転+GC 両方必須_"
+        ),
+        _divider(),
+    ]
+
+    for c in candidates:
+        name = c.get("name") or c.get("ticker")
+        ticker = c.get("ticker")
+        market = c.get("market", "")
+        close = c.get("close")
+        ema25 = c.get("ema25")
+        ema75 = c.get("ema75")
+        rsi = c.get("rsi14")
+        atr = c.get("atr14")
+        vol_ratio = c.get("vol_ratio")
+        diff = c.get("macd_diff")
+        dea = c.get("macd_dea")
+        hist = c.get("macd_hist")
+        hist_prev = c.get("macd_hist_prev")
+
+        price_s = f"${close:.2f}" if market == "US" and close else (
+            f"¥{close:,.0f}" if close else "—"
+        )
+        lines = [
+            f"*{ticker}* — {name}",
+            f"  現値: {price_s}",
+            f"  ① EMA25: {_fmt_num(ema25)} / EMA75: {_fmt_num(ema75)} ✓",
+            f"  ② RSI14: {_fmt_num(rsi)} ✓",
+            f"  ③ MACD: DIF {_fmt_num(diff)} / DEA {_fmt_num(dea)} / Hist {_fmt_num(hist)}"
+            + (f"（前日 {_fmt_num(hist_prev)}）" if hist_prev is not None else "")
+            + " ✓ ヒスト反転+GC",
+        ]
+        if vol_ratio is not None:
+            lines.append(f"  出来高比: {vol_ratio:.2f}x")
+        if atr is not None:
+            atr_s = f"${atr:.2f}" if market == "US" else f"¥{atr:,.0f}"
+            lines.append(f"  ATR14: {atr_s}")
+        blocks.append(_section("\n".join(lines)))
+
+    blocks.append(_divider())
+    blocks.append(_section(f"<{_REPORT_URL}|ダッシュボードを開く>"))
+    payload = {"blocks": blocks}
+    return _send(payload, target_date, "watchlist_alert")
+
+
+def send_holdings_intraday_alert(
+    target_date: date,
+    holdings: list[dict],
+) -> bool:
+    """保有銘柄の損切り・利確到達を Slack 通知する。"""
+    if not holdings:
+        return False
+
+    now_str = datetime.now().strftime("%H:%M")
+    date_str = target_date.strftime("%Y-%m-%d")
+    blocks: list[dict] = [
+        _section(
+            f"📌 *保有銘柄アラート*\n"
+            f"{date_str} {now_str} JST\n"
+            f"_※ 現値ベースの参考判定_"
+        ),
+        _divider(),
+    ]
+
+    for h in holdings:
+        alert_type = h.get("alert_type")
+        if alert_type == "stop_loss":
+            prefix = "🚨 *損切りライン到達*"
+        else:
+            prefix = "🎯 *利確ターゲット到達*"
+        block = _holding_block(h, detail=True)
+        text = block["text"]["text"]
+        block["text"]["text"] = f"{prefix}\n{text}"
+        blocks.append(block)
+
+    blocks.append(_divider())
+    blocks.append(_section(f"<{_REPORT_URL}|ダッシュボードを開く>"))
+    payload = {"blocks": blocks}
+    return _send(payload, target_date, "watchlist_holding_alert")
+
+
+def _fmt_num(value) -> str:
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+        if abs(v) >= 100:
+            return f"{v:,.2f}"
+        return f"{v:.4g}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 # ============================================================

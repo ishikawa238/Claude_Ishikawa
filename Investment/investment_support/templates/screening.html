@@ -1,38 +1,91 @@
 {% extends "base.html" %}
-{% block title %}Screening {{ target_date }}{% endblock %}
+{% block title %}スイングスクリーニング {{ target_date }}{% endblock %}
 
 {% block content %}
-<h1 class="h4 mb-4">Screening List <span class="text-muted fs-6">{{ target_date }}</span></h1>
+<!-- 戦略バナー -->
+<div class="swing-strategy-banner mb-4">
+  <div class="swing-banner-head">
+    <div>
+      <span class="swing-strategy-tag">EMA押し目スイング</span>
+      <h1 class="swing-banner-title">スイングスクリーニング</h1>
+      <p class="swing-banner-sub">
+        スコアリング・Pattern A/B は廃止済み。
+        <strong>3条件すべて</strong>を満たした銘柄だけが買い候補（candidate）になります。
+      </p>
+    </div>
+    <div class="swing-banner-date text-muted-custom">{{ target_date }}</div>
+  </div>
+  <ol class="swing-rule-list">
+    <li><span class="swing-rule-num">1</span> EMA25 &gt; EMA75（上昇トレンド）</li>
+    <li><span class="swing-rule-num">2</span> RSI ≤ {{ swing_rsi_max }}（売られ過ぎゾーン）</li>
+    <li><span class="swing-rule-num">3</span> MACD: <strong>ヒスト反転</strong> または <strong>GC</strong>（個別に表示）</li>
+  </ol>
+</div>
+
+<!-- 条件ファネル -->
+<div class="swing-funnel-row mb-4">
+  <div class="swing-funnel-step">
+    <div class="swing-funnel-label">流動性通過</div>
+    <div class="swing-funnel-value">{{ total }}</div>
+  </div>
+  <div class="swing-funnel-arrow">→</div>
+  <div class="swing-funnel-step">
+    <div class="swing-funnel-label">① トレンド</div>
+    <div class="swing-funnel-value">{{ funnel_uptrend }}</div>
+    <div class="swing-funnel-pct">{{ '%.0f'|format(funnel_uptrend / total * 100 if total else 0) }}%</div>
+  </div>
+  <div class="swing-funnel-arrow">→</div>
+  <div class="swing-funnel-step">
+    <div class="swing-funnel-label">② RSI≤{{ swing_rsi_max }}</div>
+    <div class="swing-funnel-value">{{ funnel_rsi }}</div>
+    <div class="swing-funnel-pct">{{ '%.0f'|format(funnel_rsi / total * 100 if total else 0) }}%</div>
+  </div>
+  <div class="swing-funnel-arrow">→</div>
+  <div class="swing-funnel-step">
+    <div class="swing-funnel-label">③ MACD</div>
+    <div class="swing-funnel-value">{{ funnel_macd }}</div>
+    <div class="swing-funnel-pct">{{ '%.0f'|format(funnel_macd / total * 100 if total else 0) }}%</div>
+  </div>
+  <div class="swing-funnel-arrow">→</div>
+  <div class="swing-funnel-step swing-funnel-candidate">
+    <div class="swing-funnel-label">候補</div>
+    <div class="swing-funnel-value text-profit">{{ cand_cnt }}</div>
+  </div>
+  <div class="swing-funnel-step swing-funnel-watch">
+    <div class="swing-funnel-label">あと1条件</div>
+    <div class="swing-funnel-value" style="color:var(--color-warning)">{{ watch_cnt }}</div>
+  </div>
+</div>
 
 <!-- サマリーカード -->
 <div class="row g-3 mb-4">
   <div class="col-6 col-md">
     <div class="summary-card">
-      <div class="label">スクリーニング通過</div>
+      <div class="label">流動性通過</div>
       <div class="value">{{ total }}</div>
     </div>
   </div>
   <div class="col-6 col-md">
     <div class="summary-card">
-      <div class="label">候補 (candidate)</div>
+      <div class="label">候補（3/3）</div>
       <div class="value text-profit">{{ cand_cnt }}</div>
     </div>
   </div>
   <div class="col-6 col-md">
     <div class="summary-card">
-      <div class="label">監視 (watch)</div>
+      <div class="label">あと1条件（2/3）</div>
       <div class="value" style="color:var(--color-warning)">{{ watch_cnt }}</div>
     </div>
   </div>
   <div class="col-6 col-md">
     <div class="summary-card">
-      <div class="label">スキップ (skip)</div>
+      <div class="label">対象外</div>
       <div class="value text-muted-custom">{{ skip_cnt }}</div>
     </div>
   </div>
   <div class="col-6 col-md">
     <div class="summary-card">
-      <div class="label"><span class="tip" data-tip="Screening から登録したブックマーク（screening_bookmarks.csv）">ブックマーク</span></div>
+      <div class="label"><span class="tip" data-tip="Screening から登録したブックマーク">★ ブックマーク</span></div>
       <div class="value" id="bookmarkCount">{{ bookmark_cnt }}</div>
     </div>
   </div>
@@ -46,24 +99,24 @@
       <button class="filter-btn" id="bookmarkFilterBtn" onclick="toggleBookmarkFilter(this)">★ ブックマークのみ</button>
     </div>
     <span class="meta-medium" style="font-weight:600">ラベル:</span>
-    <div class="filter-group">
-      <button class="filter-btn active" onclick="setFilter('label','candidate',this)">候補</button>
-      <button class="filter-btn" onclick="setFilter('label','watch',this)">監視</button>
-      <button class="filter-btn" onclick="setFilter('label','skip',this)">スキップ</button>
-      <button class="filter-btn" onclick="setFilter('label','all',this)">すべて</button>
+    <div class="filter-group" id="labelFilterGroup">
+      <button class="filter-btn active" data-filter-label="candidate" onclick="setFilter('label','candidate',this)">候補</button>
+      <button class="filter-btn" data-filter-label="watch" onclick="setFilter('label','watch',this)">あと1条件</button>
+      <button class="filter-btn" data-filter-label="skip" onclick="setFilter('label','skip',this)">対象外</button>
+      <button class="filter-btn" data-filter-label="all" onclick="setFilter('label','all',this)">すべて</button>
+    </div>
+    <span class="meta-medium" style="font-weight:600">注目:</span>
+    <div class="filter-group" id="nearMissFilterGroup">
+      <button class="filter-btn active" data-near-miss="all" onclick="setFilter('nearmiss','all',this)">すべて</button>
+      <button class="filter-btn" data-near-miss="macd-wait" onclick="setFilter('nearmiss','macd-wait',this)">MACD待ち</button>
+      <button class="filter-btn" data-near-miss="rsi-wait" onclick="setFilter('nearmiss','rsi-wait',this)">RSI待ち</button>
+      <button class="filter-btn" data-near-miss="full" onclick="setFilter('nearmiss','full',this)">3/3のみ</button>
     </div>
     <span class="meta-medium" style="font-weight:600">市場:</span>
-    <div class="filter-group">
+    <div class="filter-group" id="marketFilterGroup">
       <button class="filter-btn active" onclick="setFilter('market','all',this)">All</button>
       <button class="filter-btn" onclick="setFilter('market','JP',this)">JP</button>
       <button class="filter-btn" onclick="setFilter('market','US',this)">US</button>
-    </div>
-    <span class="meta-medium" style="font-weight:600">パターン:</span>
-    <div class="filter-group">
-      <button class="filter-btn active" onclick="setFilter('pattern','all',this)">All</button>
-      <button class="filter-btn" onclick="setFilter('pattern','A',this)">A</button>
-      <button class="filter-btn" onclick="setFilter('pattern','B',this)">B</button>
-      <button class="filter-btn" onclick="setFilter('pattern','C',this)">C</button>
     </div>
     <span class="meta-medium" style="font-weight:600">株価（円/株）:</span>
     <input type="number" id="filterPriceMin" class="form-control form-control-sm screening-price-input" min="0" step="100" placeholder="下限" aria-label="株価下限（円）" oninput="applyFilters()">
@@ -81,23 +134,22 @@
 <!-- テーブル -->
 <div class="section">
   <div class="table-responsive">
-    <table id="screeningTable" class="table table-bordered table-sm table-hover bg-white">
+    <table id="screeningTable" class="table table-bordered table-sm table-hover bg-white swing-screening-table">
       <thead class="table-light">
         <tr>
           <th class="bookmark-col"><span class="tip" data-tip="クリックでブックマークに追加/解除">★</span></th>
-          <th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th>
-          <th><span class="tip" data-tip="A=モメンタムブレイクアウト B=押し目買い">PT</span></th>
+          <th>Ticker</th>
+          <th class="mobile-hide">銘柄名</th>
+          <th class="mobile-hide">市場</th>
           <th>ラベル</th>
-          <th class="mobile-hide"><span class="tip" data-tip="緑=条件充足 灰=未充足。ホバーで条件名を表示">条件 (6項目)</span></th>
-          <th id="sortScore" style="cursor:pointer"><span class="tip" data-tip="総合スコアと直近推移（↑上昇 ↓下降 →横ばい）。クリックで並び替え">Score ⇅</span></th>
-          <th>Rank</th>
-          <th id="sortPriceJpy" class="price-jpy-col text-end" style="cursor:pointer"><span class="tip" data-tip="1株あたりの終値（円）。JP=終値そのまま、US=終値×USD/JPY（{{ '{:.1f}'.format(usdjpy_rate) }}）。クリックで並び替え">株価（円） ⇅</span></th>
-          <th class="mobile-hide"><span class="tip" data-tip="買い候補/監視/対象外の判定と未達条件">買い判定</span></th>
-          <th class="mobile-hide"><span class="tip" data-tip="スコアリングの理由（主要な加点・減点要因）">理由</span></th>
+          <th class="swing-cond-col"><span class="tip" data-tip="トレンド・RSI・MACD（ヒスト反転/GCは別バッジ）">スイング条件</span></th>
+          <th id="sortCondMet" style="cursor:pointer" class="text-center"><span class="tip" data-tip="充足した条件数。クリックで並び替え">達成 ⇅</span></th>
+          <th id="sortRsi" style="cursor:pointer" class="text-center"><span class="tip" data-tip="RSI14。低いほど売られ過ぎ。クリックで並び替え">RSI ⇅</span></th>
+          <th>判定</th>
+          <th id="sortPriceJpy" class="price-jpy-col text-end" style="cursor:pointer"><span class="tip" data-tip="1株あたりの終値（円）。JP=終値そのまま、US=終値×USD/JPY（{{ '{:.1f}'.format(usdjpy_rate) }}）">株価（円） ⇅</span></th>
           <th class="detail-col">終値</th>
-          <th class="detail-col"><span class="tip" data-tip="70以上=買われすぎ 30以下=売られすぎ">RSI</span></th>
           <th class="detail-col"><span class="tip" data-tip="出来高 ÷ 20日平均出来高">出来高比</span></th>
-          <th class="detail-col">セクター</th>
+          <th class="detail-col mobile-hide">セクター</th>
         </tr>
       </thead>
       <tbody>

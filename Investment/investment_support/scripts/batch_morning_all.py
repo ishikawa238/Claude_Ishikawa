@@ -273,6 +273,8 @@ def _run_batch(
             calculate_and_save_snapshots(
                 tickers_with_market, us_price_date, shares_map=shares_map,
             )
+            from src.rs_score import update_rs_scores
+            update_rs_scores("US", us_price_date)
 
             logger.info("STEP 4: 流動性フィルタ・シグナル検出（US）")
             screened = get_screened_tickers(us_price_date, "US")
@@ -307,6 +309,12 @@ def _run_batch(
                 logger.info("STEP 4.5: ペーパートレード更新")
                 record_paper_entries(us_entry_sets)
                 update_paper_trades(_TODAY)
+
+            try:
+                from src.moomoo_watchlist import sync_watchlist
+                sync_watchlist("US", us_price_date)
+            except Exception as e:
+                logger.warning(f"moomoo お気に入り同期スキップ: {e}")
 
         # 前夜バッチの JP entry_sets も取得（朝通知の上位2件に含める）
         jp_entry_sets = _load_last_evening_entry_sets()

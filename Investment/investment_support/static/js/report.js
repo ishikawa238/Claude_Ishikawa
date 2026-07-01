@@ -1,5 +1,24 @@
 // report.js — Dashboard ページのチャート描画
 
+// 折りたたみパネルの開閉状態を localStorage に保存
+function initDashboardPanels() {
+  var STORAGE_PREFIX = 'dashboard.panel.';
+  document.querySelectorAll('details.dashboard-panel[data-panel]').forEach(function(panel) {
+    var key = STORAGE_PREFIX + panel.getAttribute('data-panel');
+    var stored = localStorage.getItem(key);
+    if (stored === 'open') panel.open = true;
+    else if (stored === 'closed') panel.open = false;
+    panel.addEventListener('toggle', function() {
+      localStorage.setItem(key, panel.open ? 'open' : 'closed');
+    });
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initDashboardPanels);
+} else {
+  initDashboardPanels();
+}
+
 // フォールバック表示ヘルパー
 function showChartError(canvasId, msg) {
   var canvas = document.getElementById(canvasId);
@@ -314,18 +333,27 @@ function initReportCharts(sectorLabels, sectorValues, mhDates, mhN225, mhN225Ma,
   makeIndexChart('n225Chart', mhN225, mhN225Ma, '日経平均', ChartTheme.danger());
   makeIndexChart('sp500Chart', mhSp500, mhSp500Ma, 'S&P500', ChartTheme.primary());
 
-  // --- スクリーニングファネル ---
+  // --- スクリーニングファネル（スイング） ---
   fetch('/api/screening-funnel').then(function(r) { if (!r.ok) throw new Error(r.status); return r.json(); }).then(function(data) {
     if (data.error) return;
     var f = data.funnel;
+    var sw = data.swing || {};
     document.getElementById('funnelDate').textContent = '(' + data.date + ')';
 
     new Chart(document.getElementById('funnelChart'), {
       type: 'bar',
       data: {
-        labels: ['ユニバース', '流動性フィルタ通過', 'candidate', 'watch', '最終通知'],
+        labels: ['ユニバース', '流動性通過', '①トレンド', '②RSI', '③MACD', '候補', 'あと1条件'],
         datasets: [{
-          data: [f.universe, f.screened, f.candidate, f.watch, f.notified],
+          data: [
+            f.universe,
+            f.screened,
+            sw.uptrend || 0,
+            sw.rsi_oversold || 0,
+            sw.macd_confirm || 0,
+            f.candidate,
+            f.watch
+          ],
           backgroundColor: ChartTheme.funnelPalette(),
           borderRadius: 4
         }]
@@ -343,40 +371,27 @@ function initReportCharts(sectorLabels, sectorValues, mhDates, mhN225, mhN225Ma,
       }
     });
 
-    // パターンA
-    var pa = data.pattern_a;
-    var aLabels = [['MA200上昇', 'ma200_rising'], ['MA整列', 'ma_aligned'], ['52週高値近傍', 'high_52w_near'], ['出来高急増', 'volume_surge'], ['RSI適正', 'rsi_ok'], ['MA25上方', 'above_ma25']];
-    var aHtml = '<table class="table table-sm table-bordered mb-0" style="font-size:0.8rem"><tbody>';
-    aLabels.forEach(function(pair) {
-      var cnt = pa[pair[1]]; var pct = pa.total > 0 ? (cnt / pa.total * 100).toFixed(1) : '0';
-      var w = pa.total > 0 ? Math.round(cnt / pa.total * 100) : 0;
-      aHtml += '<tr><td style="width:45%">' + pair[0] + '</td><td><div class="funnel-a-bg" style="border-radius:4px;overflow:hidden"><div class="funnel-a-bar" style="width:' + w + '%;height:16px;border-radius:4px"></div></div></td><td style="width:25%;text-align:right">' + cnt + ' <span class="text-muted-custom">(' + pct + '%)</span></td></tr>';
+    var swingLabels = [['EMA25>EMA75', 'uptrend'], ['RSI売られ過ぎ', 'rsi_oversold'], ['MACD確認', 'macd_confirm']];
+    var total = sw.total || f.screened || 1;
+    var sHtml = '<table class="table table-sm table-bordered mb-0" style="font-size:0.8rem"><tbody>';
+    swingLabels.forEach(function(pair) {
+      var cnt = sw[pair[1]] || 0;
+      var pct = total > 0 ? (cnt / total * 100).toFixed(1) : '0';
+      var w = total > 0 ? Math.round(cnt / total * 100) : 0;
+      sHtml += '<tr><td style="width:45%">' + pair[0] + '</td><td><div class="funnel-a-bg" style="border-radius:4px;overflow:hidden"><div class="funnel-a-bar" style="width:' + w + '%;height:16px;border-radius:4px"></div></div></td><td style="width:25%;text-align:right">' + cnt + ' <span class="text-muted-custom">(' + pct + '%)</span></td></tr>';
     });
-    aHtml += '</tbody></table><div class="meta-small" style="margin-top:4px">対象: ' + pa.total.toLocaleString() + ' 銘柄</div>';
-    document.getElementById('condATable').innerHTML = aHtml;
+    sHtml += '</tbody></table><div class="meta-small" style="margin-top:4px">対象: ' + total.toLocaleString() + ' 銘柄（スイング戦略）</div>';
+    document.getElementById('swingCondTable').innerHTML = sHtml;
 
-    // パターンB
-    var pb = data.pattern_b;
-    var bLabels = [['MA200上昇', 'ma200_rising'], ['MA整列', 'ma_aligned'], ['押し目タッチ', 'pullback_touched'], ['反発確認', 'bounced'], ['MA25上昇', 'ma25_rising'], ['RSI適正', 'rsi_ok']];
-    var bHtml = '<table class="table table-sm table-bordered mb-0" style="font-size:0.8rem"><tbody>';
-    bLabels.forEach(function(pair) {
-      var cnt = pb[pair[1]]; var pct = pb.total > 0 ? (cnt / pb.total * 100).toFixed(1) : '0';
-      var w = pb.total > 0 ? Math.round(cnt / pb.total * 100) : 0;
-      bHtml += '<tr><td style="width:45%">' + pair[0] + '</td><td><div class="funnel-b-bg" style="border-radius:4px;overflow:hidden"><div class="funnel-b-bar" style="width:' + w + '%;height:16px;border-radius:4px"></div></div></td><td style="width:25%;text-align:right">' + cnt + ' <span class="text-muted-custom">(' + pct + '%)</span></td></tr>';
-    });
-    bHtml += '</tbody></table><div class="meta-small" style="margin-top:4px">対象: ' + pb.total.toLocaleString() + ' 銘柄</div>';
-    document.getElementById('condBTable').innerHTML = bHtml;
-
-    // スコア分布
-    var sd = data.score_distribution;
-    var buckets = ['0-19', '20-39', '40-59', '60-79', '80-100'];
-    new Chart(document.getElementById('scoreDistChart'), {
+    var cm = sw.cond_met || {};
+    var metBuckets = ['0', '1', '2', '3'];
+    new Chart(document.getElementById('condMetChart'), {
       type: 'bar',
       data: {
-        labels: buckets,
+        labels: metBuckets.map(function(b) { return b + '/3'; }),
         datasets: [{
-          data: buckets.map(function(b) { return sd[b] || 0; }),
-          backgroundColor: ChartTheme.scoreBuckets(),
+          data: metBuckets.map(function(b) { return cm[b] || 0; }),
+          backgroundColor: ['#94a3b8', '#fbbf24', '#fb923c', '#22c55e'],
           borderRadius: 4
         }]
       },
@@ -391,8 +406,7 @@ function initReportCharts(sectorLabels, sectorValues, mhDates, mhN225, mhN225Ma,
     });
   }).catch(function() {
     showChartError('funnelChart', 'ファネルデータの取得に失敗しました');
-    document.getElementById('condATable').textContent = 'データ取得失敗';
-    document.getElementById('condBTable').textContent = 'データ取得失敗';
-    showChartError('scoreDistChart', 'データ取得失敗');
+    document.getElementById('swingCondTable').textContent = 'データ取得失敗';
+    showChartError('condMetChart', 'データ取得失敗');
   });
 }

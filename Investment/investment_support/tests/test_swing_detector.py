@@ -37,6 +37,52 @@ class EvaluateSwingTests(unittest.TestCase):
         self.assertEqual(row["cond_c_weekly_uptrend"], 1)
         self.assertEqual(row["cond_c_rsi_oversold"], 1)
         self.assertEqual(row["cond_c_sar_reversal"], 1)
+        self.assertEqual(row["macd_confirm_type"], "both")
+
+    def test_macd_hist_only(self):
+        row = evaluate_swing(
+            _base_tk(
+                macd_diff=-2.22,
+                macd_dea=-1.33,
+                macd_hist=-0.89,
+                macd_diff_prev=-2.09,
+                macd_dea_prev=-1.11,
+                macd_hist_prev=-0.98,
+            ),
+            "2026-06-26",
+        )
+        self.assertEqual(row["macd_confirm_type"], "hist")
+        self.assertEqual(row["cond_c_sar_reversal"], 1)
+
+    def test_macd_gc_only(self):
+        row = evaluate_swing(
+            _base_tk(
+                macd_diff=0.2,
+                macd_dea=0.1,
+                macd_hist=0.1,
+                macd_diff_prev=-0.1,
+                macd_dea_prev=0.05,
+                macd_hist_prev=0.2,
+            ),
+            "2026-06-27",
+        )
+        self.assertEqual(row["macd_confirm_type"], "gc")
+        self.assertEqual(row["cond_c_sar_reversal"], 1)
+
+    def test_macd_neither(self):
+        row = evaluate_swing(
+            _base_tk(
+                macd_diff=-0.5,
+                macd_dea=-0.2,
+                macd_hist=-0.3,
+                macd_diff_prev=-0.4,
+                macd_dea_prev=-0.2,
+                macd_hist_prev=-0.2,
+            ),
+            "2026-06-27",
+        )
+        self.assertIsNone(row["macd_confirm_type"])
+        self.assertEqual(row["cond_c_sar_reversal"], 0)
 
     def test_watch_when_uptrend_only(self):
         row = evaluate_swing(_base_tk(rsi14=45.0), "2026-06-27")
@@ -46,6 +92,12 @@ class EvaluateSwingTests(unittest.TestCase):
     def test_skip_when_not_uptrend(self):
         row = evaluate_swing(_base_tk(ema25=20.0, ema75=25.0), "2026-06-27")
         self.assertEqual(row["label"], "skip")
+
+    @patch("src.swing_detector.dynamic_rsi_threshold", return_value=50.0)
+    def test_dynamic_rsi_allows_higher_rsi(self, _mock_dyn):
+        row = evaluate_swing(_base_tk(rsi14=45.0, rs_score=100.0), "2026-06-27")
+        self.assertEqual(row["cond_c_rsi_oversold"], 1)
+        self.assertEqual(row["_rsi_threshold"], 50.0)
 
     @patch("src.swing_detector.fetch_all")
     @patch("src.swing_detector.get_connection")

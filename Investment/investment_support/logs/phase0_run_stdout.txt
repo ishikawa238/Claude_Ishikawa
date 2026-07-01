@@ -1,0 +1,70 @@
+﻿=== Phase 0: moomoo お気に入り監視 API 検証 ===
+
+2026-07-01 23:36:30,991 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189258566730(1) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C903CE0980>
+[1] グループ一覧 (25 件):
+    - 'システム候補'  type=CUSTOM
+    - 'Favorites'  type=SYSTEM
+    - 'All'  type=SYSTEM
+    - '量子コンピュータ'  type=CUSTOM
+    - '仮想通貨'  type=CUSTOM
+    - 'Korean Stocks'  type=SYSTEM
+    - 'ストレージ'  type=CUSTOM
+    - 'Options'  type=SYSTEM
+    - 'フィジカルAI'  type=CUSTOM
+    - 'US Options'  type=SYSTEM
+    - '宇宙'  type=CUSTOM
+    - 'Futures'  type=SYSTEM
+    - '電力'  type=CUSTOM
+    - 'US'  type=SYSTEM
+    - 'JP'  type=SYSTEM
+    - 'HK'  type=SYSTEM
+    - 'Crypto'  type=SYSTEM
+    - 'SG'  type=SYSTEM
+    - 'MY'  type=SYSTEM
+    - 'CN'  type=SYSTEM
+    - 'CA'  type=SYSTEM
+    - 'AU'  type=SYSTEM
+    - 'Index'  type=SYSTEM
+    - 'Bonds'  type=SYSTEM
+    - 'Notes'  type=SYSTEM
+2026-07-01 23:36:30,995 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(1) reason=CallClose
+2026-07-01 23:36:30,997 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189276801044(2) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9196816D0>
+
+[2] get_user_security('All'): ret=0, total=36, by_market={'US': 35, '_other': 1}
+2026-07-01 23:36:31,014 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(2) reason=CallClose
+2026-07-01 23:36:31,016 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189349532731(3) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C919682FD0>
+
+[2] get_user_security('Favorites'): ret=0, total=0, by_market={}
+2026-07-01 23:36:31,029 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(3) reason=CallClose
+2026-07-01 23:36:31,031 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189419632389(4) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9195CE650>
+
+[2] get_user_security('US'): ret=0, total=35, by_market={'US': 35}
+
+[3] 採用グループ: 'All'  (US=35, JP=0)
+2026-07-01 23:36:31,053 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(4) reason=CallClose
+2026-07-01 23:36:31,055 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189486867283(5) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9195CFBB0>
+2026-07-01 23:36:31,058 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(5) reason=CallClose
+2026-07-01 23:36:31,060 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189542684824(6) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9196A9480>
+
+[4b] JP kline 単体検証:
+    JP.7203: kline=False error=Unknown stock 7203
+    JP.7974: kline=False error=Unknown stock 7974
+
+[4] 指標検証 (3 銘柄):
+2026-07-01 23:36:31,064 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(6) reason=CallClose
+2026-07-01 23:36:31,067 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094189558659072(7) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9196AAB10>
+    US.SM: kline=True snapshot=True label=watch macd=None strict_ok=False
+2026-07-01 23:36:31,364 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(7) reason=CallClose
+2026-07-01 23:36:31,366 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094190825061924(8) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9196AAC40>
+    US.RNG: kline=True snapshot=True label=watch macd=None strict_ok=False
+2026-07-01 23:36:31,653 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(8) reason=CallClose
+2026-07-01 23:36:31,655 | 101844 | 79336 | [open_context_base.py:409] _init_connect_sync: New connect ready: conn=7478094192042399933(9) context=<moomoo.quote.open_quote_context.OpenQuoteContext object at 0x000001C9196A95B0>
+    US.PAA: kline=True snapshot=True label=watch macd=None strict_ok=False
+2026-07-01 23:36:31,945 | 101844 | 97156 | [open_context_base.py:516] on_disconnect: Disconnected: conn=0(9) reason=CallClose
+
+[5] 推奨事項:
+    - 初版 markets は ["US"] で問題ありません。
+    - JP の kline/snapshot は本環境では取得不可（Unknown stock）。初版 watchlist_monitor の markets は ["US"] のみとする。
+    - 検証銘柄 3 件中 MACD both=0, 厳格3条件=0（both 必須は日次より厳しい）
+
+レポート保存: C:\Users\bun22\Desktop\Ishikawa238\Investment\investment_support\logs\phase0_watchlist_20260701.json

@@ -13,6 +13,7 @@ from typing import Optional
 from src.config import CONFIG, get_swing_config
 from src.data_store import fetch_all, fetch_one, get_connection, upsert
 from src.logger import get_logger
+from src.rs_score import apply_rs_filter
 from src.trading_calendar import latest_price_date_for_market
 
 logger = get_logger(__name__)
@@ -179,8 +180,8 @@ def _liquidity_filter_sql(market: str) -> tuple[str, str]:
             t.macd_diff, t.macd_dea, t.macd_hist,
             t.macd_diff_prev, t.macd_dea_prev, t.macd_hist_prev,
             t.ma5_5d_ago, t.ma25_5d_ago, t.ma200_5d_ago,
-            t.vol_20d_avg, t.high_20d, t.high_52w, t.low_52w,
-            t.return_5d, t.return_20d,
+            t.vol_20d_avg, t.high_20d, t.high_60d_prior, t.high_52w, t.low_52w,
+            t.return_5d, t.return_20d, t.return_126d, t.rs_score,
             t.rsi14, t.atr14, t.volatility_20d,
             t.est_turnover, t.est_market_cap,
             t.weekly_ma25, t.weekly_ma25_5w_ago,
@@ -294,6 +295,7 @@ def get_screened_tickers(target_date: date, market: str) -> list[dict]:
     target_str = target_date.strftime("%Y-%m-%d")
     rows = _fetch_liquidity_candidates(target_date, market)
     filtered = _filter_inactive(rows, target_date)
+    filtered = apply_rs_filter(filtered)
 
     logger.info(
         f"流動性フィルタ: {market} {target_str} → "

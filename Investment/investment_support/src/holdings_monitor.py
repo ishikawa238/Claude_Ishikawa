@@ -15,18 +15,18 @@ from pathlib import Path
 from typing import Optional
 
 from src.config import CONFIG, get_offensive_config, is_offensive
-from src.data_store import fetch_all, fetch_one, get_connection, upsert
+from src.data_store import fetch_all, fetch_one, get_connection, insert_one, upsert
 from src.exit_simple import (
     cleanup_closed_holdings,
-    effective_target_pct,
     evaluate_exit,
     is_exit_simple_enabled,
-    target_price as exit_target_price,
+    resolve_exit_targets,
 )
 from src.logger import get_logger
 from src.take_profit import (
     check_target_reached,
     cleanup_stale_targets,
+    deactivate_legacy_take_profit_targets,
     ensure_targets,
     get_targets,
 )
@@ -277,7 +277,10 @@ def _upsert_holdings(conn, rows: list[dict]) -> None:
 # 保有銘柄の判定
 # ============================================================
 
-def evaluate_holdings(target_date: date) -> list[dict]:
+def evaluate_holdings(
+    target_date: date,
+    live_prices: dict[str, float] | None = None,
+) -> list[dict]:
     """
     保有銘柄全件を評価して判定結果リストを返す。
     未決済（is_closed=0）の保有銘柄のみ対象。
@@ -295,6 +298,7 @@ def evaluate_holdings(target_date: date) -> list[dict]:
 
     if is_exit_simple_enabled():
         cleanup_closed_holdings()
+        deactivate_legacy_take_profit_targets()
     else:
         cleanup_stale_targets()
 
@@ -313,7 +317,10 @@ def evaluate_holdings(target_date: date) -> list[dict]:
         ticker = h["ticker"]
         market = h["market"]
 
-        current_price = _get_latest_price(ticker, target_str)
+        if live_prices and ticker in live_prices:
+            current_price = float(live_prices[ticker])
+        else:
+            current_price = _get_latest_price(ticker, target_str)
         if current_price is None:
             logger.warning(f"価格データなし: {ticker} → スキップ")
             continue
@@ -355,20 +362,18 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "trailing_level": None, "double_milestone": False,
         }
         exit_ex = None
-        eff_target_pct = None
-        eff_target_price = None
+        exit_targets: dict = {}
 
         if is_exit_simple_enabled() and label not in ("forced_stop", "sl_near"):
+            res_level = snap.get("resistance_level") if snap else None
+            exit_targets = resolve_exit_targets(
+                entry_price, holding_days, res_level,
+            )
             exit_ex = evaluate_exit(
                 ticker, entry_price, current_price, pnl_pct,
                 quantity, holding_days, snap,
+                resistance_level=res_level,
             )
-            if holding_days is not None:
-                eff_target_pct = effective_target_pct(holding_days)
-                eff_target_price = exit_target_price(entry_price, eff_target_pct)
-            elif is_exit_simple_enabled():
-                eff_target_pct = effective_target_pct(0)
-                eff_target_price = exit_target_price(entry_price, eff_target_pct)
             if exit_ex:
                 if exit_ex["label"] in (
                     "tp_full", "tp_partial", "tp_extend_hold",
@@ -418,7 +423,7 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "earnings_date":   next_earnings["date"] if next_earnings else None,
             "earnings_days":   next_earnings["days"] if next_earnings else None,
             "holding_days":    holding_days,
-            "target_price":    eff_target_price or _get_target_price(ticker),
+            "target_price":    exit_targets.get("effective_target_price") or _get_target_price(ticker),
             # テクニカル指標（notifier で使用）
             "tech_ma5":   snap.get("ma5")   if snap else None,
             "tech_ma25":  ma25,
@@ -428,8 +433,15 @@ def evaluate_holdings(target_date: date) -> list[dict]:
             "tech_ema25": snap.get("ema25") if snap else None,
             "tech_ema75": snap.get("ema75") if snap else None,
             # シンプル出口
-            "exit_effective_target_pct": eff_target_pct,
-            "exit_effective_target_price": eff_target_price,
+            "exit_effective_target_pct": exit_targets.get("effective_target_pct"),
+            "exit_effective_target_price": exit_targets.get("effective_target_price"),
+            "exit_time_decay_target_pct": exit_targets.get("time_decay_target_pct"),
+            "exit_time_decay_target_price": exit_targets.get("time_decay_target_price"),
+            "exit_resistance_cap_pct": exit_targets.get("resistance_cap_pct"),
+            "exit_resistance_cap_price": exit_targets.get("resistance_cap_price"),
+            "exit_resistance_level": exit_targets.get("resistance_level"),
+            "exit_target_binding": exit_targets.get("target_binding"),
+            "exit_resistance_cap_active": exit_targets.get("resistance_cap_active"),
             "exit_extend_active": bool(exit_ex.get("extend_active")) if exit_ex else False,
             "exit_hold_ok": exit_ex.get("hold_ok") if exit_ex else None,
             "exit_sell_qty": tp_result.get("sell_qty", 0),
@@ -925,3 +937,215 @@ def _to_float(val) -> Optional[float]:
         return float(val)
     except ValueError:
         return None
+
+
+# ============================================================
+# 毎時バッチ向け: 保有銘柄の損切り・利確アラート
+# ============================================================
+
+_HOLDINGS_SL_LABELS = frozenset({"forced_stop"})
+_HOLDINGS_TP_LABELS = frozenset({
+    "tp_full", "tp_partial", "tp_extend_hold",
+    "tp_t1", "tp_t2", "tp_t3",
+})
+
+
+def fetch_live_snapshots_for_holdings(
+    markets: list[str],
+) -> tuple[dict[str, float], dict[str, dict]]:
+    """開場中市場の保有銘柄について moomoo スナップショットから現値・OHLCV を取得する。"""
+    allowed = {m.upper() for m in markets}
+    with get_connection() as conn:
+        rows = fetch_all(
+            conn,
+            "SELECT ticker, market FROM holdings WHERE is_closed = 0",
+        )
+    targets = [
+        (r["ticker"], r["market"])
+        for r in rows
+        if (r["market"] or "").upper() in allowed
+    ]
+    if not targets:
+        return {}, {}
+
+    from src.moomoo_quote import MoomooQuoteClient
+    from src.moomoo_watchlist import ticker_to_moomoo_code
+
+    moomoo_cfg = CONFIG.get("moomoo") or {}
+    host = moomoo_cfg.get("host", "127.0.0.1")
+    port = int(moomoo_cfg.get("port", 11111))
+    code_map = {
+        ticker_to_moomoo_code(ticker, market): ticker
+        for ticker, market in targets
+    }
+    prices: dict[str, float] = {}
+    snapshots: dict[str, dict] = {}
+    with MoomooQuoteClient(host, port) as client:
+        snaps = client.fetch_snapshots(list(code_map.keys()))
+    for code, ticker in code_map.items():
+        snap = snaps.get(code)
+        if not snap:
+            continue
+        last = snap.get("last_price")
+        if last is not None:
+            prices[ticker] = float(last)
+            snapshots[ticker] = snap
+    logger.info(f"保有銘柄ライブ価格: {len(prices)}/{len(targets)} 件")
+    return prices, snapshots
+
+
+def fetch_live_prices_for_holdings(markets: list[str]) -> dict[str, float]:
+    """開場中市場の保有銘柄について moomoo スナップショットから現値を取得する。"""
+    prices, _ = fetch_live_snapshots_for_holdings(markets)
+    return prices
+
+
+def upsert_intraday_price_history(
+    snapshots_by_ticker: dict[str, dict],
+    target_date: date,
+) -> int:
+    """moomoo スナップショットを当日の price_history に反映する（ダッシュボード現値更新用）。"""
+    if not snapshots_by_ticker:
+        return 0
+    date_str = target_date.strftime("%Y-%m-%d")
+    rows: list[dict] = []
+    for ticker, snap in snapshots_by_ticker.items():
+        last = snap.get("last_price")
+        if last is None:
+            continue
+        lp = float(last)
+        rows.append({
+            "ticker": ticker,
+            "date": date_str,
+            "open": float(snap.get("open_price") or lp),
+            "high": float(snap.get("high_price") or lp),
+            "low": float(snap.get("low_price") or lp),
+            "close": lp,
+            "adj_close": lp,
+            "volume": float(snap.get("volume") or 0),
+            "is_holiday": 0,
+        })
+    with get_connection() as conn:
+        count = upsert(conn, "price_history", rows)
+    logger.info(f"price_history 当日更新: {count} 銘柄 ({date_str})")
+    return count
+
+
+def refresh_dashboard_from_live(
+    snapshots_by_ticker: dict[str, dict],
+    target_date: date,
+    *,
+    batch_type: str = "watchlist_hourly",
+) -> dict:
+    """ライブ価格を DB に反映し、ポートフォリオスナップショットを保存する。"""
+    prices_updated = upsert_intraday_price_history(snapshots_by_ticker, target_date)
+    from src.portfolio_snapshot import compute_and_save_snapshot
+
+    snapshot = compute_and_save_snapshot(batch_type, target_date)
+    return {"prices_updated": prices_updated, "snapshot": snapshot}
+
+
+def classify_holdings_intraday_alert(holding: dict) -> str | None:
+    """
+    毎時通知対象か判定する。
+    返り値: 'stop_loss' / 'take_profit' / None
+    """
+    label = holding.get("label") or ""
+    if label in _HOLDINGS_SL_LABELS:
+        return "stop_loss"
+    if label in _HOLDINGS_TP_LABELS:
+        return "take_profit"
+
+    current = holding.get("current_price")
+    if current is None:
+        return None
+
+    eff_price = holding.get("exit_effective_target_price")
+    if eff_price and current >= float(eff_price):
+        return "take_profit"
+
+    target_price = holding.get("target_price")
+    if target_price and current >= float(target_price):
+        return "take_profit"
+
+    for key in ("tp_t3_price", "tp_t2_price", "tp_t1_price"):
+        tp = holding.get(key)
+        if tp and current >= float(tp):
+            return "take_profit"
+
+    return None
+
+
+def already_notified_holding_alert(
+    ticker: str,
+    market: str,
+    alert_date: str,
+    alert_type: str,
+) -> bool:
+    with get_connection() as conn:
+        row = fetch_one(
+            conn,
+            """SELECT notified FROM intraday_holding_alert_log
+               WHERE alert_date = ? AND ticker = ? AND market = ?
+                 AND alert_type = ?""",
+            (alert_date, ticker, market, alert_type),
+        )
+    return bool(row and row["notified"])
+
+
+def filter_new_holding_alerts(holdings: list[dict], alert_date: str) -> list[dict]:
+    """その日未通知の損切り・利確アラートのみ返す。"""
+    alerts: list[dict] = []
+    for h in holdings:
+        alert_type = classify_holdings_intraday_alert(h)
+        if not alert_type:
+            continue
+        if already_notified_holding_alert(
+            h["ticker"], h["market"], alert_date, alert_type,
+        ):
+            continue
+        enriched = dict(h)
+        enriched["alert_type"] = alert_type
+        enriched["alert_date"] = alert_date
+        alerts.append(enriched)
+    return alerts
+
+
+def mark_holding_alerts_notified(holdings: list[dict]) -> None:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_connection() as conn:
+        for h in holdings:
+            alert_date = h.get("alert_date") or date.today().strftime("%Y-%m-%d")
+            alert_type = h["alert_type"]
+            existing = fetch_one(
+                conn,
+                """SELECT id, first_alert_at FROM intraday_holding_alert_log
+                   WHERE alert_date = ? AND ticker = ? AND market = ?
+                     AND alert_type = ?""",
+                (alert_date, h["ticker"], h["market"], alert_type),
+            )
+            row = {
+                "alert_date": alert_date,
+                "ticker": h["ticker"],
+                "market": h["market"],
+                "alert_type": alert_type,
+                "label": h.get("label"),
+                "current_price": h.get("current_price"),
+                "stop_loss_price": h.get("stop_loss_price"),
+                "target_price": h.get("exit_effective_target_price") or h.get("target_price"),
+                "pnl_pct": h.get("pnl_pct"),
+                "notified": 1,
+                "first_alert_at": now,
+                "last_check_at": now,
+            }
+            if existing:
+                row["first_alert_at"] = existing["first_alert_at"] or now
+                cols = list(row.keys())
+                conn.execute(
+                    f"UPDATE intraday_holding_alert_log SET "
+                    + ", ".join(f"{c}=?" for c in cols)
+                    + " WHERE id=?",
+                    tuple(row[c] for c in cols) + (existing["id"],),
+                )
+            else:
+                insert_one(conn, "intraday_holding_alert_log", row)

@@ -1,0 +1,316 @@
+{
+  "phase": 0,
+  "date": "2026-07-01",
+  "opend": {
+    "host": "127.0.0.1",
+    "port": 11111
+  },
+  "config_group_name": "All",
+  "groups": [
+    {
+      "group_name": "システム候補",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "Favorites",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "All",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "量子コンピュータ",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "仮想通貨",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "Korean Stocks",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "ストレージ",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "Options",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "フィジカルAI",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "US Options",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "宇宙",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "Futures",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "電力",
+      "group_type": "CUSTOM"
+    },
+    {
+      "group_name": "US",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "JP",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "HK",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "Crypto",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "SG",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "MY",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "CN",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "CA",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "AU",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "Index",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "Bonds",
+      "group_type": "SYSTEM"
+    },
+    {
+      "group_name": "Notes",
+      "group_type": "SYSTEM"
+    }
+  ],
+  "group_probe": [
+    {
+      "group_name": "All",
+      "ret": 0,
+      "exists_in_list": true,
+      "total": 36,
+      "by_market": {
+        "US": 35,
+        "_other": 1
+      },
+      "samples": [
+        {
+          "code": "US.SM",
+          "ticker": "SM",
+          "market": "US",
+          "name": "SM Energy"
+        },
+        {
+          "code": "US.RNG",
+          "ticker": "RNG",
+          "market": "US",
+          "name": "RingCentral"
+        },
+        {
+          "code": "US.PAA",
+          "ticker": "PAA",
+          "market": "US",
+          "name": "Plains All American Pipeline"
+        },
+        {
+          "code": "US.NWSA",
+          "ticker": "NWSA",
+          "market": "US",
+          "name": "News Corp-A"
+        },
+        {
+          "code": "US.NWS",
+          "ticker": "NWS",
+          "market": "US",
+          "name": "News Corp-B"
+        }
+      ]
+    },
+    {
+      "group_name": "Favorites",
+      "ret": 0,
+      "exists_in_list": true,
+      "total": 0,
+      "by_market": {},
+      "samples": []
+    },
+    {
+      "group_name": "US",
+      "ret": 0,
+      "exists_in_list": true,
+      "total": 35,
+      "by_market": {
+        "US": 35
+      },
+      "samples": [
+        {
+          "code": "US.SM",
+          "ticker": "SM",
+          "market": "US",
+          "name": "SM Energy"
+        },
+        {
+          "code": "US.RNG",
+          "ticker": "RNG",
+          "market": "US",
+          "name": "RingCentral"
+        },
+        {
+          "code": "US.PAA",
+          "ticker": "PAA",
+          "market": "US",
+          "name": "Plains All American Pipeline"
+        },
+        {
+          "code": "US.NWSA",
+          "ticker": "NWSA",
+          "market": "US",
+          "name": "News Corp-A"
+        },
+        {
+          "code": "US.NWS",
+          "ticker": "NWS",
+          "market": "US",
+          "name": "News Corp-B"
+        }
+      ]
+    }
+  ],
+  "resolved_group": "All",
+  "resolved_summary": {
+    "total": 36,
+    "by_market": {
+      "US": 35,
+      "_other": 1
+    },
+    "samples": [
+      {
+        "code": "US.SM",
+        "ticker": "SM",
+        "market": "US",
+        "name": "SM Energy"
+      },
+      {
+        "code": "US.RNG",
+        "ticker": "RNG",
+        "market": "US",
+        "name": "RingCentral"
+      },
+      {
+        "code": "US.PAA",
+        "ticker": "PAA",
+        "market": "US",
+        "name": "Plains All American Pipeline"
+      },
+      {
+        "code": "US.NWSA",
+        "ticker": "NWSA",
+        "market": "US",
+        "name": "News Corp-A"
+      },
+      {
+        "code": "US.NWS",
+        "ticker": "NWS",
+        "market": "US",
+        "name": "News Corp-B"
+      }
+    ]
+  },
+  "indicator_probe": [
+    {
+      "code": "US.SM",
+      "kline_ok": true,
+      "snapshot_ok": true,
+      "ticker": "SM",
+      "price_bars": 253,
+      "last_price": 25.75,
+      "ema25": 30.630910770806107,
+      "ema75": 27.968346455155466,
+      "rsi14": 34.30847874540494,
+      "macd_confirm_type": null,
+      "label": "watch",
+      "conditions_met": 2,
+      "macd_both": false,
+      "watchlist_strict_ok": false
+    },
+    {
+      "code": "US.RNG",
+      "kline_ok": true,
+      "snapshot_ok": true,
+      "ticker": "RNG",
+      "price_bars": 253,
+      "last_price": 40.99,
+      "ema25": 41.71340844002957,
+      "ema75": 38.488458821555255,
+      "rsi14": 48.06738094199861,
+      "macd_confirm_type": null,
+      "label": "watch",
+      "conditions_met": 2,
+      "macd_both": false,
+      "watchlist_strict_ok": false
+    },
+    {
+      "code": "US.PAA",
+      "kline_ok": true,
+      "snapshot_ok": true,
+      "ticker": "PAA",
+      "price_bars": 253,
+      "last_price": 22.24,
+      "ema25": 22.55514681954721,
+      "ema75": 21.344987996378563,
+      "rsi14": 47.215462570772914,
+      "macd_confirm_type": null,
+      "label": "watch",
+      "conditions_met": 2,
+      "macd_both": false,
+      "watchlist_strict_ok": false
+    }
+  ],
+  "jp_read_ok": false,
+  "us_read_ok": true,
+  "recommendations": [
+    "初版 markets は [\"US\"] で問題ありません。",
+    "JP の kline/snapshot は本環境では取得不可（Unknown stock）。初版 watchlist_monitor の markets は [\"US\"] のみとする。",
+    "検証銘柄 3 件中 MACD both=0, 厳格3条件=0（both 必須は日次より厳しい）"
+  ],
+  "jp_kline_probe": [
+    {
+      "code": "JP.7203",
+      "kline_ok": false,
+      "snapshot_ok": false,
+      "kline_error": "Unknown stock 7203"
+    },
+    {
+      "code": "JP.7974",
+      "kline_ok": false,
+      "snapshot_ok": false,
+      "kline_error": "Unknown stock 7974"
+    }
+  ],
+  "jp_kline_ok": false
+}

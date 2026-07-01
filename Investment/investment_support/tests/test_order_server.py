@@ -86,6 +86,9 @@ def _init_test_db(conn):
             weekly_ma25 REAL, weekly_ma25_5w_ago REAL,
             parabolic_sar REAL, sar_direction TEXT,
             support_level REAL, resistance_level REAL,
+            ema25 REAL, ema75 REAL,
+            macd_diff REAL, macd_dea REAL, macd_hist REAL,
+            macd_diff_prev REAL, macd_dea_prev REAL, macd_hist_prev REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_ts_td ON technical_snapshot(ticker, date);
@@ -120,6 +123,7 @@ def _init_test_db(conn):
             cond_b_ma25_rising INTEGER, cond_b_rsi_ok INTEGER,
             cond_c_weekly_uptrend INTEGER, cond_c_at_support INTEGER,
             cond_c_rsi_oversold INTEGER, cond_c_sar_reversal INTEGER,
+            macd_confirm_type TEXT,
             close REAL, rsi14 REAL, atr14 REAL, vol_ratio REAL, rs_rank INTEGER,
             trend_score REAL, pattern_a_score REAL, pattern_b_score REAL,
             pattern_c_score REAL,
@@ -177,6 +181,13 @@ def _init_test_db(conn):
             is_active INTEGER DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS exit_simple_state (
+            ticker TEXT PRIMARY KEY,
+            extend_active INTEGER NOT NULL DEFAULT 0,
+            partial_taken INTEGER NOT NULL DEFAULT 0,
+            last_target_pct REAL,
+            updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS batch_run_log (
             id INTEGER PRIMARY KEY, run_date DATE, batch_type TEXT,
@@ -241,13 +252,13 @@ def _init_test_db(conn):
 
     # テクニカルスナップショット
     conn.execute(
-        "INSERT INTO technical_snapshot (ticker, date, ma5, ma25, ma75, ma200, rsi14, atr14, vol_20d_avg) "
-        "VALUES ('7203', ?, 3050, 2900, 2800, 2600, 58.5, 85.0, 1200000)",
+        "INSERT INTO technical_snapshot (ticker, date, ma5, ma25, ma75, ma200, ema25, ema75, rsi14, atr14, vol_20d_avg) "
+        "VALUES ('7203', ?, 3050, 2900, 2800, 2600, 2950, 2850, 58.5, 85.0, 1200000)",
         (today_str,),
     )
     conn.execute(
-        "INSERT INTO technical_snapshot (ticker, date, ma5, ma25, ma75, ma200, rsi14, atr14, vol_20d_avg) "
-        "VALUES ('AAPL', ?, 182, 178, 170, 160, 62.3, 3.5, 55000000)",
+        "INSERT INTO technical_snapshot (ticker, date, ma5, ma25, ma75, ma200, ema25, ema75, rsi14, atr14, vol_20d_avg) "
+        "VALUES ('AAPL', ?, 182, 178, 170, 160, 181, 172, 62.3, 3.5, 55000000)",
         (today_str,),
     )
 
@@ -396,6 +407,12 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("Rank", html)
         self.assertIn("Trend", html)
 
+    def test_report_shows_exit_simple_targets(self):
+        resp = self.client.get("/report")
+        html = resp.data.decode()
+        self.assertIn("シンプル利確", html)
+        self.assertIn("A・時間減衰", html)
+
     def test_report_contains_chart_elements(self):
         resp = self.client.get("/report")
         html = resp.data.decode()
@@ -447,6 +464,22 @@ class OrderServerTestCase(unittest.TestCase):
     def test_screening_returns_200(self):
         resp = self.client.get("/screening")
         self.assertEqual(resp.status_code, 200)
+
+    def test_screening_shows_swing_ui(self):
+        resp = self.client.get("/screening")
+        html = resp.data.decode()
+        self.assertIn("swing-strategy-banner", html)
+        self.assertIn("EMA押し目スイング", html)
+        self.assertIn("スコアリング", html)
+        self.assertNotIn("sortScore", html)
+        self.assertNotIn("data-pattern", html)
+        self.assertNotIn('setFilter(\'pattern\'', html)
+        self.assertIn("data-cond-met", html)
+        self.assertIn("data-uptrend", html)
+        self.assertIn("swing-cond-badge", html)
+        self.assertIn("swing-cond-macd-hist", html)
+        self.assertIn("swing-cond-macd-gc", html)
+        self.assertIn("data-macd-hist", html)
 
     def test_screening_shows_price_jpy_column(self):
         resp = self.client.get("/screening")

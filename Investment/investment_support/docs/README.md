@@ -1,9 +1,7 @@
-# docs/
+# docs/（移行済み）
 
-Investment Support システムのドキュメントを格納するフォルダ。
+ドキュメントは `Investment/docs/` に集約しました。
 
-## ファイル一覧
-
-| ファイル | 内容 |
-|---------|------|
-| `dashboard_upgrade_plan.txt` | ダッシュボード・アップグレード実装計画 (Phase 1〜3) |
+- [Investment/docs/README.md](../../docs/README.md)
+- [システム概要と投資戦略](../../docs/system_overview_and_strategy.md)
+- [アーカイブ](../../docs/archive/README.md)

@@ -58,15 +58,8 @@ _SERVER_CFG = CONFIG.get("report_server", {})
 _HOST = _SERVER_CFG.get("host", "127.0.0.1")
 _PORT = int(_SERVER_CFG.get("port", 5100))
 
-# 見送り条件の閾値（entry_calculator と同じ設定を参照）
-_SIG_CFG = CONFIG.get("signal", {})
 _CAP_CFG = CONFIG.get("capital", {})
-_SKIP_SL_MIN_PCT = float(_SIG_CFG.get("stop_loss_warning_min_pct", 1.0))
-_SKIP_ATR_MULT = float(_SIG_CFG.get("atr_stop_multiplier", 2.0))
-_SKIP_CAPITAL_JPY = float(_CAP_CFG.get("total_capital_jpy", 200000))
-_SKIP_CAPITAL_USD = float(_CAP_CFG.get("total_capital_usd", 1500))
-_SKIP_RISK_PCT = float(_CAP_CFG.get("max_risk_per_trade_pct", 2.0)) / 100
-_SKIP_MAX_HOLDINGS = int(_CAP_CFG.get("max_concurrent_holdings", 3))
+_MAX_HOLDINGS = int(_CAP_CFG.get("max_concurrent_holdings", 3))
 
 # --- USD/JPY 為替レート（1時間キャッシュ） ---
 _fx_cache: dict[str, tuple[float, float]] = {}
@@ -127,22 +120,72 @@ _PROFIT_TYPE_LABEL = {"I": "ブレイクアウト", "II": "トレンドフォロ
 
 
 def _build_tp_target_html(h: dict, cp: float) -> str:
-    """保有銘柄の利確ターゲットをHTML文字列で構築する。"""
+    """保有銘柄の利確ターゲットをHTML文字列で構築する（二段表示）。"""
     eff_pct = h.get("exit_effective_target_pct")
     if eff_pct is not None and cp > 0:
         eff_price = float(h.get("exit_effective_target_price") or 0)
-        dist = (eff_price - cp) / cp * 100 if eff_price else 0
+        time_pct = h.get("exit_time_decay_target_pct")
+        time_price = h.get("exit_time_decay_target_price")
+        res_pct = h.get("exit_resistance_cap_pct")
+        res_price = h.get("exit_resistance_cap_price")
+        res_level = h.get("exit_resistance_level")
+        binding = h.get("exit_target_binding") or "time_decay"
+        entry = float(h.get("entry_price") or 0)
+        pnl_pct = (cp - entry) / entry * 100 if entry > 0 else 0
+
         parts = ["<span class='tp-type-label'>シンプル利確</span>"]
-        parts.append(
-            f"<span class='tp-pending'>目標 +{eff_pct:g}% {eff_price:,.0f}"
-            f" <span class='tp-sub'>（あと{dist:+.1f}%）</span></span>"
-        )
+
+        def _line(
+            key: str,
+            label: str,
+            pct,
+            price,
+            hint: str = "",
+        ) -> None:
+            if pct is None or not price:
+                return
+            dist = (float(price) - cp) / cp * 100
+            reached = pnl_pct >= float(pct)
+            is_binding = binding == key
+            if reached:
+                css = "tp-reached"
+                marker = "&#10003; "
+            elif is_binding:
+                css = "tp-active"
+                marker = "&#8594; "
+            else:
+                css = "tp-pending"
+                marker = ""
+            hint_html = f"{hint} " if hint else ""
+            parts.append(
+                f"<span class='{css}'>{marker}{label}: +{float(pct):g}% "
+                f"{float(price):,.0f} "
+                f"<span class='tp-sub'>（{hint_html}あと{dist:+.1f}%）</span></span>"
+            )
+
+        _line("time_decay", "A・時間減衰", time_pct, time_price)
+        if h.get("exit_resistance_cap_active") and res_pct is not None:
+            res_hint = f"レジ {float(res_level):,.0f} / " if res_level else ""
+            _line("resistance", "B・レジキャップ", res_pct, res_price, res_hint)
+
+        if binding == "resistance" and h.get("exit_resistance_cap_active"):
+            parts.append(
+                "<span class='tp-sub'>有効目標: B（レジスタンス・キャップ）</span>"
+            )
+
         if h.get("exit_extend_active"):
             parts.append("<span class='tp-active'>&#8594; 延長保有中</span>")
         sell_q = float(h.get("exit_sell_qty") or 0)
         if sell_q > 0:
             parts.append(f"<span class='tp-active'>&#8594; 推奨売却 {sell_q:.0f}株</span>")
         return "<br>".join(parts)
+
+    try:
+        from src.exit_simple import is_exit_simple_enabled
+        if is_exit_simple_enabled():
+            return "—"
+    except Exception:
+        pass
 
     from src.take_profit import _split_quantity
 
@@ -227,11 +270,11 @@ _COND_B_LABELS = [
     ("cond_b_rsi_ok",           "RSI適正"),
 ]
 _COND_C_LABELS = [
-    ("cond_c_weekly_uptrend", "週足MA25上昇"),
-    ("cond_c_at_support",     "サポート近傍"),
-    ("cond_c_rsi_oversold",   "RSI売られ過ぎ"),
-    ("cond_c_sar_reversal",   "SAR反転"),
+    ("cond_c_weekly_uptrend", "EMA25 > EMA75"),
+    ("cond_c_rsi_oversold",   "RSI ≤ 35"),
+    ("cond_c_sar_reversal",   "MACD確認"),
 ]
+_SWING_COND_LABELS = _COND_C_LABELS
 
 
 # ============================================================
@@ -268,17 +311,11 @@ def report():
                     ORDER BY date DESC LIMIT 1) AS current_price,
                    (SELECT target_price FROM trade_signal_log
                     WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
-                   (SELECT pattern FROM trade_signal_log
-                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS signal_pattern,
                    t.rsi14, t.atr14, t.ma5, t.ma25, t.ma75, t.ma200,
+                   t.ema25, t.ema75, t.resistance_level,
                    d.final_score, d.recommend_rank,
                    d.trend_score, d.pattern_a_score, d.pattern_b_score, d.pattern_c_score, d.liquidity_score,
-                   u.sector,
-                   tp.profit_type, tp.r_value,
-                   tp.t1_price, tp.t1_pct, tp.t1_reached,
-                   tp.t2_price, tp.t2_pct, tp.t2_reached,
-                   tp.t3_price, tp.t3_pct, tp.t3_reached,
-                   tp.adjusted_stop, tp.trailing_active
+                   u.sector
             FROM holdings h
             LEFT JOIN technical_snapshot t
               ON t.ticker = h.ticker
@@ -287,8 +324,6 @@ def report():
               ON d.ticker = h.ticker
               AND d.date = (SELECT MAX(date) FROM daily_signals WHERE ticker = h.ticker)
             LEFT JOIN universe_master u ON u.ticker = h.ticker
-            LEFT JOIN take_profit_targets tp
-              ON tp.ticker = h.ticker AND tp.is_active = 1
             WHERE h.is_closed = 0
             ORDER BY h.entry_date
             """,
@@ -399,15 +434,12 @@ def report():
     except Exception:
         latest_snapshot = None
 
-    # 保有銘柄の評価結果（add_buy_signal / tp_trailing_level / tp_double_milestone 等）
-    # 攻めモード時のみ呼び出し、失敗時は空 dict にフォールバックして既存表示を壊さない。
+    # 保有銘柄の評価（exit_simple 利確目標・状態判定など）
     holdings_eval_map: dict = {}
     try:
-        from src.config import is_offensive as _is_offensive_cfg
-        if _is_offensive_cfg():
-            from src.holdings_monitor import evaluate_holdings as _evaluate_holdings
-            for _r in _evaluate_holdings(date.today()):
-                holdings_eval_map[_r["ticker"]] = _r
+        from src.holdings_monitor import evaluate_holdings as _evaluate_holdings
+        for _r in _evaluate_holdings(date.today()):
+            holdings_eval_map[_r["ticker"]] = _r
     except Exception as _eval_err:
         logger.debug(f"evaluate_holdings の呼び出しに失敗（report は継続表示）: {_eval_err}")
 
@@ -615,29 +647,21 @@ def screening():
         rows = fetch_all(
             conn,
             """SELECT d.ticker, u.name, u.sector, d.market, d.pattern, d.label,
-                      d.cond_a_ma200_rising, d.cond_a_ma_aligned,
-                      d.cond_a_52w_high_near, d.cond_a_volume_surge,
-                      d.cond_a_rsi_ok, d.cond_a_above_ma25,
-                      d.cond_b_ma200_rising, d.cond_b_ma_aligned,
-                      d.cond_b_pullback_touched, d.cond_b_bounced,
-                      d.cond_b_ma25_rising, d.cond_b_rsi_ok,
-                      d.cond_c_weekly_uptrend, d.cond_c_at_support,
-                      d.cond_c_rsi_oversold, d.cond_c_sar_reversal,
-                      d.close, d.rsi14, d.atr14, d.vol_ratio, d.rs_rank,
-                      d.final_score, d.recommend_rank, d.recommend_reason,
-                      d.pattern_c_score
+                      d.cond_c_weekly_uptrend, d.cond_c_rsi_oversold, d.cond_c_sar_reversal,
+                      d.macd_confirm_type,
+                      d.close, d.rsi14, d.atr14, d.vol_ratio, d.rs_rank, d.market_mode,
+                      t.macd_diff, t.macd_dea, t.macd_hist,
+                      t.macd_diff_prev, t.macd_dea_prev, t.macd_hist_prev
                FROM daily_signals d
                LEFT JOIN universe_master u ON u.ticker = d.ticker
+               LEFT JOIN technical_snapshot t ON t.ticker = d.ticker AND t.date = d.date
                WHERE (d.market, d.date) IN (
                    SELECT market, MAX(date) FROM daily_signals GROUP BY market
                )
-               ORDER BY d.final_score DESC""",
-        )
-
-        from src.score_trend import fetch_score_trends_for_tickers
-
-        score_trend_map = fetch_score_trends_for_tickers(
-            conn, [dict(r)["ticker"] for r in rows],
+               ORDER BY
+                 CASE d.label WHEN 'candidate' THEN 0 WHEN 'watch' THEN 1 ELSE 2 END,
+                 d.rsi14 IS NULL, d.rsi14 ASC,
+                 d.ticker""",
         )
 
     # 表示用日付文字列
@@ -647,7 +671,7 @@ def screening():
         parts = [f"{m}: {d}" for m, d in sorted(date_map.items())]
         display_date = " / ".join(parts)
 
-    return _render_screening(display_date, [dict(r) for r in rows], score_trend_map)
+    return _render_screening(display_date, [dict(r) for r in rows])
 
 
 
@@ -898,7 +922,12 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
     sig_b = sum(1 for c in candidates if c.get("pattern") == "B")
 
     # バッチ鮮度情報（B-3）
-    _BATCH_TYPE_LABEL = {"evening_jp": "夜バッチ(JP)", "morning_all": "朝バッチ(全体)", "monthly": "月次バッチ"}
+    _BATCH_TYPE_LABEL = {
+        "evening_jp": "夜バッチ(JP)",
+        "morning_all": "朝バッチ(全体)",
+        "monthly": "月次バッチ",
+        "watchlist_hourly": "毎時バッチ",
+    }
     if last_batch:
         lb = dict(last_batch)
         batch_label = _BATCH_TYPE_LABEL.get(lb.get("batch_type", ""), lb.get("batch_type", ""))
@@ -945,20 +974,20 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
                 f"🎯 {h['ticker']} {h.get('name', '')} — "
                 f"{_eval_label}。{_sell_str}を検討",
             ))
-        else:
-            _pt = h.get("profit_type")
+        elif not _simple_exit_global:
+            _pt = _eval.get("profit_type") or h.get("profit_type")
             if _pt in ("I", "II") and cp > 0:
                 from src.take_profit import _split_quantity
-                _r_val = float(h.get("r_value") or 0)
+                _r_val = float(_eval.get("r_value") or h.get("r_value") or 0)
                 _qty_total = int(float(h.get("quantity") or 1)) or 1
-                _t1_pct = float(h.get("t1_pct") or 50)
-                _t2_pct = float(h.get("t2_pct") or 30)
-                _t3_pct = float(h.get("t3_pct") or 20)
+                _t1_pct = float(_eval.get("t1_pct") or h.get("t1_pct") or 50)
+                _t2_pct = float(_eval.get("t2_pct") or h.get("t2_pct") or 30)
+                _t3_pct = float(_eval.get("t3_pct") or h.get("t3_pct") or 20)
                 _sq1, _sq2, _sq3 = _split_quantity(_qty_total, _t1_pct, _t2_pct, _t3_pct)
                 _sell_map = {"t1": _sq1, "t2": _sq2, "t3": _sq3}
                 for stage, label_str in [("t1", "T1"), ("t2", "T2"), ("t3", "T3")]:
-                    t_price = h.get(f"{stage}_price")
-                    t_reached = h.get(f"{stage}_reached")
+                    t_price = _eval.get(f"tp_{stage}_price") or h.get(f"{stage}_price")
+                    t_reached = _eval.get(f"tp_{stage}_reached") or h.get(f"{stage}_reached")
                     if t_price and not t_reached and cp >= t_price:
                         _r_mult = f"+{(t_price - ep) / _r_val:.1f}R" if _r_val > 0 else ""
                         _sell_n = _sell_map.get(stage, 0)
@@ -968,8 +997,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
                             f"🎯 {h['ticker']} {h.get('name', '')} — "
                             f"{label_str}到達（{_r_mult}）。{_sell_str}を検討"
                         ))
-                # SL引き上げ推奨
-                _adj = h.get("adjusted_stop")
+                _adj = _eval.get("tp_adjusted_stop") or h.get("adjusted_stop")
                 if _adj and _adj > sl:
                     action_items.append((
                         "info",
@@ -995,11 +1023,11 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         action_items.append(("info", f"⚠️ データ不足のため一部条件を判定保留: {data_insufficient}銘柄"))
 
     # 保有枠の状況
-    remaining_slots = _SKIP_MAX_HOLDINGS - len(holdings)
+    remaining_slots = _MAX_HOLDINGS - len(holdings)
     if remaining_slots <= 0:
-        action_items.append(("warn", f"🈵 保有枠が満杯です（{len(holdings)}/{_SKIP_MAX_HOLDINGS}）— 新規エントリーは既存ポジション整理後に検討してください"))
+        action_items.append(("warn", f"🈵 保有枠が満杯です（{len(holdings)}/{_MAX_HOLDINGS}）— 新規エントリーは既存ポジション整理後に検討してください"))
     else:
-        action_items.append(("info", f"📦 保有枠: {len(holdings)}/{_SKIP_MAX_HOLDINGS}（残り{remaining_slots}枠）"))
+        action_items.append(("info", f"📦 保有枠: {len(holdings)}/{_MAX_HOLDINGS}（残り{remaining_slots}枠）"))
 
     if not action_items:
         action_items.append(("ok", "✅ 特に対応が必要な事項はありません"))
@@ -1037,7 +1065,7 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
     sector_values = json.dumps([round(v) for v in sector_map.values()])
 
     # --- 保有銘柄テーブル行リスト構築 ---
-    # 攻めモード時のみ、evaluate_holdings() の追加情報を行に付与する。
+    # evaluate_holdings() の出口・利確情報を行に付与する。
     try:
         from src.config import is_offensive as _is_offensive_mode
         _offensive_now = bool(_is_offensive_mode())
@@ -1070,37 +1098,50 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         cp_str = f"{cp:,.2f}" if cp else "—"
         entry_str = f"@{ep:,.2f}" if ep else ""
 
-        # 利確ターゲット表示の構築
-        profit_type = h.get("profit_type")
-        # profit_type 未設定の場合、signal_pattern から推定
-        if not profit_type:
-            sp = h.get("signal_pattern")
-            if sp == "A":
-                profit_type = "I"
-            elif sp == "B":
-                profit_type = "II"
-            else:
-                profit_type = "III"
+        # 利確ターゲット表示（exit_simple 優先）
         target_str = "—"
         target_html = "—"
         h_merged = {**h, **_eval}
-        try:
-            from src.exit_simple import is_exit_simple_enabled
-            _simple_exit = is_exit_simple_enabled()
-        except Exception:
-            _simple_exit = False
-        if _simple_exit and _eval.get("exit_effective_target_pct") is not None and cp:
+        if _simple_exit_global and _eval.get("exit_effective_target_pct") is not None and cp:
             target_html = _build_tp_target_html(h_merged, cp)
-        elif profit_type in ("I", "II") and cp:
-            target_html = _build_tp_target_html(h, cp)
-        elif profit_type == "III":
-            target_html = "<span class='tp-type-label'>手動管理</span>"
-            if tp and cp:
+        elif _simple_exit_global and cp and ep > 0:
+            try:
+                from src.exit_simple import resolve_exit_targets
+                holding_days = _eval.get("holding_days")
+                if holding_days is None and h.get("entry_date"):
+                    entry_dt = datetime.strptime(h["entry_date"], "%Y-%m-%d").date()
+                    holding_days = (date.today() - entry_dt).days
+                _targets = resolve_exit_targets(
+                    ep, holding_days, h.get("resistance_level"),
+                )
+                h_merged.update({
+                    "exit_effective_target_pct": _targets.get("effective_target_pct"),
+                    "exit_effective_target_price": _targets.get("effective_target_price"),
+                    "exit_time_decay_target_pct": _targets.get("time_decay_target_pct"),
+                    "exit_time_decay_target_price": _targets.get("time_decay_target_price"),
+                    "exit_resistance_cap_pct": _targets.get("resistance_cap_pct"),
+                    "exit_resistance_cap_price": _targets.get("resistance_cap_price"),
+                    "exit_resistance_level": _targets.get("resistance_level"),
+                    "exit_target_binding": _targets.get("target_binding"),
+                    "exit_resistance_cap_active": _targets.get("resistance_cap_active"),
+                    "exit_extend_active": bool(_eval.get("exit_extend_active")),
+                    "exit_sell_qty": _eval.get("exit_sell_qty") or 0,
+                })
+                target_html = _build_tp_target_html(h_merged, cp)
+            except Exception:
+                target_html = "—"
+        elif not _simple_exit_global:
+            profit_type = _eval.get("profit_type") or h.get("profit_type") or "III"
+            if profit_type in ("I", "II") and cp:
+                target_html = _build_tp_target_html({**h, **_eval}, cp)
+            elif profit_type == "III":
+                target_html = "<span class='tp-type-label'>手動管理</span>"
+                if tp and cp:
+                    dist = (tp - cp) / cp * 100
+                    target_html += f"<br><span class='tp-pending'>目安 {tp:,.2f}（{dist:+.1f}%）</span>"
+            elif tp and cp:
                 dist = (tp - cp) / cp * 100
-                target_html += f"<br><span class='tp-pending'>目安 {tp:,.2f}（{dist:+.1f}%）</span>"
-        elif tp and cp:
-            dist = (tp - cp) / cp * 100
-            target_html = f"{tp:,.2f}（{dist:+.1f}%）"
+                target_html = f"{tp:,.2f}（{dist:+.1f}%）"
         target_str = target_html
 
         days_str = "—"
@@ -1172,13 +1213,19 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         _exit_label = _eval.get("label", "")
         _any_tp_reached = _exit_label in (
             "tp_full", "tp_partial", "tp_extend_hold", "tp_extend_exit", "stale_exit",
-        ) if _simple_exit else (
-            profit_type in ("I", "II")
+        ) if _simple_exit_global else (
+            (_eval.get("profit_type") or h.get("profit_type")) in ("I", "II")
             and cp
             and (
-                (h.get("t1_price") and not h.get("t1_reached") and cp >= h["t1_price"])
-                or (h.get("t2_price") and not h.get("t2_reached") and cp >= h["t2_price"])
-                or (h.get("t3_price") and not h.get("t3_reached") and cp >= h["t3_price"])
+                ((_eval.get("tp_t1_price") or h.get("t1_price"))
+                 and not (_eval.get("tp_t1_reached") or h.get("t1_reached"))
+                 and cp >= float(_eval.get("tp_t1_price") or h.get("t1_price") or 0))
+                or ((_eval.get("tp_t2_price") or h.get("t2_price"))
+                    and not (_eval.get("tp_t2_reached") or h.get("t2_reached"))
+                    and cp >= float(_eval.get("tp_t2_price") or h.get("t2_price") or 0))
+                or ((_eval.get("tp_t3_price") or h.get("t3_price"))
+                    and not (_eval.get("tp_t3_reached") or h.get("t3_reached"))
+                    and cp >= float(_eval.get("tp_t3_price") or h.get("t3_price") or 0))
             )
         )
         if pnl_pct <= -5 or sl_dist_pct <= 2:
@@ -1236,7 +1283,10 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "status_label": status_label,
             "sl_str": f"{sl:,.2f}",
             "sl_raw": sl,
-            "adjusted_stop": float(h["adjusted_stop"]) if h.get("adjusted_stop") else None,
+            "adjusted_stop": (
+                float(_eval["tp_adjusted_stop"])
+                if _eval.get("tp_adjusted_stop") else None
+            ),
             "target_str": target_str,
             "days_str": days_str,
             "days_css": days_css,
@@ -1331,12 +1381,6 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         mh_sp500=mh_sp500,
         mh_sp500_ma=mh_sp500_ma,
         mh_modes=mh_modes,
-        skip_sl_min_pct=_SKIP_SL_MIN_PCT,
-        skip_atr_mult=_SKIP_ATR_MULT,
-        skip_capital_jpy=_SKIP_CAPITAL_JPY,
-        skip_capital_usd=_SKIP_CAPITAL_USD,
-        skip_risk_pct=_SKIP_RISK_PCT,
-        skip_max_holdings=_SKIP_MAX_HOLDINGS,
         usdjpy_rate=usdjpy,
         total_assets=total_assets,
         total_assets_source=total_assets_source,
@@ -1588,83 +1632,97 @@ def _bookmark_btn_html(ticker: str, name: str, market: str, bookmarked: bool) ->
     )
 
 
-def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict | None = None) -> str:
-    from src.score_trend import format_score_cell_html
+def _swing_cond_badge(
+    value: int | bool | None,
+    short: str,
+    tip: str,
+    extra_css: str = "",
+) -> str:
+    """スイング条件をバッジで描画する。"""
+    met = value == 1 or value is True
+    css = "swing-cond-met" if met else "swing-cond-unmet"
+    if extra_css:
+        css = f"{css} {extra_css}"
+    mark = "✓" if met else "—"
+    return (
+        f'<span class="swing-cond-badge {css} tip" data-tip="{escape(tip)}">'
+        f"{mark} {escape(short)}</span>"
+    )
+
+
+def _macd_cond_badges_html(row: dict) -> str:
+    """MACD 条件をヒスト反転 / GC の2バッジで表示する。"""
+    from src.swing_detector import macd_confirm_flags
+
+    hist_ok, gc_ok = macd_confirm_flags(row)
+    hist_tip = (
+        "ヒストグラム反転: 前日ヒスト≤0 かつ 当日ヒストが前日より上向き"
+        "（DIFがDEAを上抜けていなくても可）"
+    )
+    gc_tip = "MACDゴールデンクロス: 前日 DIF≤DEA かつ 当日 DIF>DEA"
+    return (
+        _swing_cond_badge(hist_ok, "ヒスト", hist_tip, "swing-cond-macd-hist")
+        + _swing_cond_badge(gc_ok, "GC", gc_tip, "swing-cond-macd-gc")
+    )
+
+
+def _render_screening(target_date: str, rows: list[dict]) -> str:
+    from src.config import get_swing_config
     from src.screening_bookmarks import get_bookmark_tickers
 
     usdjpy = _get_usdjpy()
-    score_trend_map = score_trend_map or {}
+    swing_cfg = get_swing_config()
+    rsi_max = int(float(swing_cfg.get("rsi_max", 35)))
     bookmark_tickers = get_bookmark_tickers()
     total = len(rows)
     cand_cnt = sum(1 for r in rows if r["label"] == "candidate")
     watch_cnt = sum(1 for r in rows if r["label"] == "watch")
     skip_cnt = sum(1 for r in rows if r["label"] == "skip")
+    funnel_uptrend = sum(1 for r in rows if r.get("cond_c_weekly_uptrend") == 1)
+    funnel_rsi = sum(1 for r in rows if r.get("cond_c_rsi_oversold") == 1)
+    funnel_macd = sum(1 for r in rows if r.get("cond_c_sar_reversal") == 1)
 
-    # --- テーブル行リスト（row_html を pre-render）---
     table_rows = []
     for r in rows:
         ticker = r["ticker"] or ""
         name = r.get("name") or ""
         market = r.get("market") or ""
-        pattern = r.get("pattern") or ""
         label = r.get("label") or "skip"
         close = r.get("close")
         price_jpy = _close_price_jpy(close, market, usdjpy)
         rsi = r.get("rsi14")
         vol_ratio = r.get("vol_ratio")
-        fscore = r.get("final_score")
-        frank = r.get("recommend_rank") or "—"
         sector = r.get("sector") or "—"
 
-        # ラベルバッジ
+        uptrend = r.get("cond_c_weekly_uptrend") == 1
+        rsi_ok = r.get("cond_c_rsi_oversold") == 1
+        macd_ok = r.get("cond_c_sar_reversal") == 1
+        from src.swing_detector import macd_confirm_flags
+
+        hist_ok, gc_ok = macd_confirm_flags(r)
+        met_count = sum((uptrend, rsi_ok, macd_ok))
+
         lbl_css = _LABEL_CSS.get(label, "label-skip")
         lbl_text = _LABEL_DISPLAY.get(label, label)
 
-        # ランクバッジ
-        rank_css = _RANK_CSS.get(frank, "rank-default")
-
-        # 条件フラグドット
-        conds_html = ""
-        cond_labels = {"A": _COND_A_LABELS, "B": _COND_B_LABELS, "C": _COND_C_LABELS}.get(pattern, _COND_A_LABELS)
-        for col, tip in cond_labels:
-            conds_html += _cond_dot(r.get(col), tip)
-
-        # パターン表示
-        pat_name = _PATTERN_NAME.get(pattern, "—")
-        pat_html = f'<span class="tip" data-tip="{escape(pat_name)}">{escape(pattern)}</span>' if pattern else "—"
-
-        # Score 表示
-        score_str = f"{fscore:.0f}" if fscore is not None else "—"
-        score_html = format_score_cell_html(
-            float(fscore) if fscore is not None else None,
-            score_trend_map.get(ticker),
-            score_str=score_str,
+        conds_html = (
+            _swing_cond_badge(uptrend, "トレンド", "EMA25 > EMA75（上昇トレンド）")
+            + _swing_cond_badge(rsi_ok, f"RSI≤{rsi_max}", f"RSI ≤ {rsi_max}")
+            + _macd_cond_badges_html(r)
         )
-        trend_dir = (score_trend_map.get(ticker) or {}).get("direction", "")
 
-        # 買い判定 — 条件フラグから未達の条件名を列挙
-        reason_text = r.get("recommend_reason") or ""
-        met_count = sum(1 for col, _ in cond_labels if r.get(col) == 1)
-        total_conds = len(cond_labels)
-        failed_names = [tip for col, tip in cond_labels if r.get(col) == 0]
+        met_css = "swing-met-full" if met_count == 3 else (
+            "swing-met-partial" if met_count == 2 else "swing-met-low"
+        )
+        met_html = f'<span class="swing-met-count {met_css}">{met_count}/3</span>'
+
         if label == "candidate":
             verdict_html = '<span class="verdict-candidate">買い候補</span>'
         elif label == "watch":
-            verdict_html = '<span class="verdict-watch">監視</span>'
+            verdict_html = '<span class="verdict-watch">あと1条件</span>'
         else:
             verdict_html = '<span class="verdict-skip">対象外</span>'
-        # 未達条件を赤で表示
-        if failed_names:
-            failed_html = ", ".join(
-                f'<span class="verdict-failed">{escape(n)}</span>' for n in failed_names
-            )
-            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})<br><span class="reason-text">未達: {failed_html}</span>'
-        else:
-            verdict_detail = f'{verdict_html} ({met_count}/{total_conds})'
-        # 理由
-        reason_html = f'<span class="reason-text">{escape(reason_text)}</span>' if reason_text else "—"
 
-        # 株価（円/株）
         if price_jpy is not None:
             price_jpy_rounded = int(round(price_jpy))
             price_jpy_str = f"{price_jpy_rounded:,}円"
@@ -1673,29 +1731,31 @@ def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict 
             price_jpy_str = "—"
             price_jpy_attr = ""
 
-        # 詳細列
         close_str = f"{close:,.2f}" if close else "—"
         rsi_str = f"{rsi:.0f}" if rsi is not None else "—"
         rsi_css = ""
         if rsi is not None:
-            if rsi >= 70:
+            if rsi > rsi_max:
                 rsi_css = "rsi-high"
-            elif rsi <= 30:
+            elif rsi <= rsi_max:
                 rsi_css = "rsi-low"
         vr_str = f"{vol_ratio:.1f}x" if vol_ratio is not None else "—"
 
         is_bm = ticker in bookmark_tickers
         bookmark_html = _bookmark_btn_html(ticker, name, market, is_bm)
 
-        prompt_href = (
-            f"/prompt-builder?from=screening&theme=buy&tickers={escape(ticker)}"
-        )
+        prompt_href = f"/prompt-builder?from=screening&theme=buy&tickers={escape(ticker)}"
         row_html = (
             f'<tr data-ticker="{escape(ticker)}" data-label="{escape(label)}"'
             f' data-market="{escape(market)}"'
-            f' data-pattern="{escape(pattern)}" data-score="{fscore or 0}"'
+            f' data-uptrend="{"1" if uptrend else "0"}"'
+            f' data-rsi-ok="{"1" if rsi_ok else "0"}"'
+            f' data-macd-ok="{"1" if macd_ok else "0"}"'
+            f' data-macd-hist="{"1" if hist_ok else "0"}"'
+            f' data-macd-gc="{"1" if gc_ok else "0"}"'
+            f' data-cond-met="{met_count}"'
+            f' data-rsi="{rsi if rsi is not None else ""}"'
             f' data-price-jpy="{escape(price_jpy_attr)}"'
-            f' data-score-trend="{escape(trend_dir)}"'
             f' data-bookmarked="{"1" if is_bm else "0"}">'
             f'<td class="bookmark-cell">{bookmark_html}</td>'
             f'<td class="screening-ticker-cell">'
@@ -1704,19 +1764,16 @@ def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict 
             f' data-tip="Prompt Builder で購入相談プロンプトを作成">Prompt</a>'
             f"</td>"
             f'<td class="mobile-hide">{escape(name)}</td>'
-            f'<td class="mobile-hide">{escape(market)}</td>'
-            f"<td>{pat_html}</td>"
+            f'<td class="mobile-hide"><span class="market-pill market-{escape(market.lower())}">{escape(market)}</span></td>'
             f'<td><span class="rank-badge {lbl_css}">{lbl_text}</span></td>'
-            f'<td class="mobile-hide" style="white-space:nowrap">{conds_html}</td>'
-            f"<td>{score_html}</td>"
-            f'<td><span class="rank-badge {rank_css}">{escape(frank)}</span></td>'
+            f'<td class="swing-cond-col">{conds_html}</td>'
+            f'<td class="text-center">{met_html}</td>'
+            f'<td class="text-center rsi-col {rsi_css}"><strong>{rsi_str}</strong></td>'
+            f'<td>{verdict_html}</td>'
             f'<td class="price-jpy-col text-end">{price_jpy_str}</td>'
-            f'<td class="mobile-hide">{verdict_detail}</td>'
-            f'<td class="mobile-hide">{reason_html}</td>'
             f'<td class="detail-col">{close_str}</td>'
-            f'<td class="detail-col {rsi_css}">{rsi_str}</td>'
             f'<td class="detail-col">{vr_str}</td>'
-            f'<td class="detail-col">{escape(sector)}</td>'
+            f'<td class="detail-col mobile-hide">{escape(sector)}</td>'
             f"</tr>"
         )
         table_rows.append({"row_html": row_html})
@@ -1729,6 +1786,10 @@ def _render_screening(target_date: str, rows: list[dict], score_trend_map: dict 
         cand_cnt=cand_cnt,
         watch_cnt=watch_cnt,
         skip_cnt=skip_cnt,
+        funnel_uptrend=funnel_uptrend,
+        funnel_rsi=funnel_rsi,
+        funnel_macd=funnel_macd,
+        swing_rsi_max=rsi_max,
         bookmark_cnt=len(bookmark_tickers),
         usdjpy_rate=usdjpy,
         table_rows=table_rows,
@@ -1822,12 +1883,19 @@ def _build_rules_context() -> dict:
                 f"損切りはサポートライン下（バッファ {_cfg_float(swing, 'support_stop_buffer_pct', 1.0):.1f}%）を優先します。",
                 f"サポートが不明な場合は ATR x {_cfg_float(sig, 'atr_stop_multiplier', 2.0):.1f} を使います。",
                 (
-                    f"利確目標は保有日数で段階的に低下します（"
+                    f"利確目標A（時間減衰）: 保有日数で段階的に低下（"
                     f"+{_cfg_float(exit_cfg, 'initial_target_pct', 20):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - 2 * _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'target_floor_pct', 5):.0f}%、"
                     f"{_cfg_int(exit_cfg, 'target_decay_every_days', 30)}日ごと）。"
+                ),
+                (
+                    "利確目標B（レジスタンス・キャップ）: 推定レジスタンスの手前で目標%を引き下げ。"
+                    f"バッファ {_cfg_float(exit_cfg.get('resistance_cap', {}), 'buffer_pct', 1.5):.1f}%、"
+                    f"適用範囲 +{_cfg_float(exit_cfg.get('resistance_cap', {}), 'min_reward_pct', 8):.0f}%〜"
+                    f"+{_cfg_float(exit_cfg.get('resistance_cap', {}), 'ignore_if_above_pct', 25):.0f}%。"
+                    "AとBのうち近い方が有効目標。"
                 ),
                 (
                     f"目標到達時: 延長条件（EMA25>EMA75 / MA25上 / RSI≤"

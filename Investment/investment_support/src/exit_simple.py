@@ -42,7 +42,7 @@ def is_exit_simple_enabled() -> bool:
 
 
 def effective_target_pct(holding_days: Optional[int], cfg: Optional[dict] = None) -> float:
-    """保有日数から有効な利確目標%を返す。"""
+    """保有日数から時間減衰の利確目標%を返す。"""
     cfg = cfg or get_exit_simple_config()
     initial = float(cfg.get("initial_target_pct", 20.0))
     decay = float(cfg.get("target_decay_pct", 5.0))
@@ -51,6 +51,86 @@ def effective_target_pct(holding_days: Optional[int], cfg: Optional[dict] = None
     days = max(int(holding_days or 0), 0)
     periods = days // every if every > 0 else 0
     return max(initial - periods * decay, floor)
+
+
+def _resistance_cap_cfg(cfg: Optional[dict] = None) -> dict:
+    cfg = cfg or get_exit_simple_config()
+    nested = cfg.get("resistance_cap")
+    if isinstance(nested, dict):
+        return nested
+    return {}
+
+
+def resistance_reward_pct(
+    entry_price: float,
+    resistance_level: Optional[float],
+    cfg: Optional[dict] = None,
+) -> Optional[float]:
+    """
+    レジスタンス・キャップによる利確目標%を返す。
+
+    適用外のときは None（時間減衰目標のみ使用）。
+    """
+    rcfg = _resistance_cap_cfg(cfg)
+    if not rcfg.get("enabled", True):
+        return None
+    if not resistance_level or entry_price <= 0:
+        return None
+    if float(resistance_level) <= entry_price:
+        return None
+
+    buffer_pct = float(rcfg.get("buffer_pct", 1.5))
+    cap_price = float(resistance_level) * (1 - buffer_pct / 100)
+    if cap_price <= entry_price:
+        return None
+
+    reward_pct = (cap_price - entry_price) / entry_price * 100
+
+    min_reward = float(rcfg.get("min_reward_pct", 8.0))
+    if reward_pct < min_reward:
+        return None
+
+    ignore_above = float(rcfg.get("ignore_if_above_pct", 25.0))
+    if reward_pct > ignore_above:
+        return None
+
+    return round(reward_pct, 4)
+
+
+def resolve_exit_targets(
+    entry_price: float,
+    holding_days: Optional[int],
+    resistance_level: Optional[float] = None,
+    cfg: Optional[dict] = None,
+) -> dict:
+    """時間減衰目標とレジスタンス・キャップを統合した利確目標を返す。"""
+    cfg = cfg or get_exit_simple_config()
+    time_pct = effective_target_pct(holding_days, cfg)
+    time_price = target_price(entry_price, time_pct)
+
+    res_pct = resistance_reward_pct(entry_price, resistance_level, cfg)
+    res_price = target_price(entry_price, res_pct) if res_pct is not None else None
+
+    if res_pct is not None and res_pct < time_pct:
+        binding = "resistance"
+        eff_pct = res_pct
+        eff_price = res_price
+    else:
+        binding = "time_decay"
+        eff_pct = time_pct
+        eff_price = time_price
+
+    return {
+        "time_decay_target_pct": time_pct,
+        "time_decay_target_price": time_price,
+        "resistance_cap_pct": res_pct,
+        "resistance_cap_price": res_price,
+        "resistance_level": resistance_level,
+        "resistance_cap_active": res_pct is not None,
+        "effective_target_pct": eff_pct,
+        "effective_target_price": eff_price,
+        "target_binding": binding,
+    }
 
 
 def target_price(entry_price: float, target_pct: float) -> float:
@@ -94,6 +174,7 @@ def evaluate_exit(
     quantity: Optional[float],
     holding_days: Optional[int],
     snap: Optional[dict],
+    resistance_level: Optional[float] = None,
     persist_state: bool = True,
 ) -> Optional[dict]:
     """
@@ -110,8 +191,16 @@ def evaluate_exit(
     qty = max(int(float(quantity or 1)), 1)
     state = get_state(ticker) if persist_state else {}
     extend_active = bool(state.get("extend_active"))
-    eff_pct = effective_target_pct(holding_days, cfg)
-    eff_price = target_price(entry_price, eff_pct)
+
+    if resistance_level is None and snap:
+        resistance_level = snap.get("resistance_level")
+
+    targets = resolve_exit_targets(
+        entry_price, holding_days, resistance_level, cfg,
+    )
+    eff_pct = targets["effective_target_pct"]
+    eff_price = targets["effective_target_price"]
+    binding = targets["target_binding"]
     hold_ok, hold_failures = hold_conditions_met(snap, current_price, cfg)
     ratio = float(cfg.get("partial_sell_ratio", 0.5))
 
@@ -122,6 +211,7 @@ def evaluate_exit(
     days = holding_days if holding_days is not None else -1
 
     base = {
+        **targets,
         "effective_target_pct": eff_pct,
         "effective_target_price": eff_price,
         "extend_active": extend_active,
@@ -129,6 +219,15 @@ def evaluate_exit(
         "sell_qty": 0,
         "priority": 0,
     }
+
+    def _tp_reached_message() -> str:
+        if binding == "resistance" and targets.get("resistance_level"):
+            res_lv = float(targets["resistance_level"])
+            return (
+                f"レジスタンス利確ライン到達（+{eff_pct:g}% / 目標 {eff_price:,.2f} / "
+                f"レジスタンス {res_lv:,.2f}）"
+            )
+        return f"利確ライン到達（+{eff_pct:g}% / 目標価格 {eff_price:,.2f}）"
 
     # --- 長期停滞（延長中でも優先） ---
     if days >= stale_hard:
@@ -179,7 +278,7 @@ def evaluate_exit(
                 sell_qty = max(int(qty * ratio), 1)
                 sell_qty = min(sell_qty, qty - 1) if qty > 1 else sell_qty
                 reasons = [
-                    f"利確ライン到達（+{eff_pct:g}% / 目標価格 {eff_price:,.2f}）",
+                    _tp_reached_message(),
                     "トレンド継続のため半分売却・残りは延長保有",
                     "（EMA25>EMA75 / MA25上 / RSI適正）",
                 ]
@@ -187,7 +286,7 @@ def evaluate_exit(
                     save_state(ticker, extend_active=True, partial_taken=True, last_target_pct=eff_pct)
                 return _result(LABEL_TP_PARTIAL, reasons, sell_qty, base)
             reasons = [
-                f"利確ライン到達（+{eff_pct:g}% / 目標価格 {eff_price:,.2f}）",
+                _tp_reached_message(),
                 "トレンド継続のため1株は温存（半分売却不可）",
             ]
             if persist_state:
@@ -195,7 +294,7 @@ def evaluate_exit(
             return _result(LABEL_TP_EXTEND_HOLD, reasons, 0, base)
 
         reasons = [
-            f"利確ライン到達（+{eff_pct:g}% / 目標価格 {eff_price:,.2f}）",
+            _tp_reached_message(),
             "延長条件未達のため全量売却を推奨",
         ]
         if hold_failures:

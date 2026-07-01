@@ -328,6 +328,8 @@ def _run_batch(
             calculate_and_save_snapshots(
                 tickers_with_market, jp_price_date, shares_map=shares_map,
             )
+            from src.rs_score import update_rs_scores
+            update_rs_scores("JP", jp_price_date)
             if _TODAY != jp_price_date:
                 _prune_jp_technical_orphans(_TODAY)
 
@@ -369,6 +371,12 @@ def _run_batch(
                 logger.info("STEP 6.5: ペーパートレード更新")
                 record_paper_entries(entry_sets)
                 update_paper_trades(jp_price_date)
+
+            try:
+                from src.moomoo_watchlist import sync_watchlist
+                sync_watchlist("JP", jp_price_date)
+            except Exception as e:
+                logger.warning(f"moomoo お気に入り同期スキップ: {e}")
 
         # ────────────────────────────────────────
         # STEP 7: 保有銘柄判定

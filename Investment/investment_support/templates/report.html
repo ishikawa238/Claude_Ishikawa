@@ -141,7 +141,13 @@
       <div class="col-md-6 col-lg-4">
         <div class="candidate-card" data-pattern="{{ card.pattern }}">
           <div class="candidate-card-header">
+            {% if card.strategy_label %}
+            <span class="strategy-badge {{ card.strategy_css }}">{{ card.strategy_label }}</span>
+            {% endif %}
             <span class="pattern-badge pattern-{{ card.pattern }}">{{ card.pattern }}: {{ card.pattern_name }}</span>
+            {% if card.rs_score_str != '—' %}
+            <span class="rs-score-badge {{ card.rs_score_css }}">RS {{ card.rs_score_str }}</span>
+            {% endif %}
             {% if card.source_css %}<span class="{{ card.source_css }}">{{ card.source_label }}</span>{% endif %}
           </div>
           <div class="candidate-card-title">
@@ -319,7 +325,8 @@
       <table class="table table-bordered table-sm table-hover bg-white mb-0">
         <thead class="table-light sticky-thead">
           <tr>
-            <th>日付</th><th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th><th class="mobile-hide">パターン</th>
+            <th>日付</th><th>Ticker</th><th class="mobile-hide">銘柄名</th><th class="mobile-hide">市場</th>
+            <th>戦略</th><th class="text-center">RS</th><th class="mobile-hide">パターン</th>
             <th>エントリー</th><th>損切りSL</th><th class="mobile-hide">利確目安</th><th>推奨投入額</th>
           </tr>
         </thead>
@@ -330,6 +337,8 @@
             <td><a class="ticker-link" href="/stock/{{ s.ticker }}">{{ s.ticker }}</a></td>
             <td class="mobile-hide">{{ s.name or "" }}</td>
             <td class="mobile-hide">{{ s.market or "" }}</td>
+            <td><span class="strategy-badge {{ s.strategy_css }}">{{ s.strategy_label }}</span></td>
+            <td class="text-center">{% if s.rs_score_str != '—' %}<span class="rs-score-badge {{ s.rs_score_css }}">{{ s.rs_score_str }}</span>{% else %}—{% endif %}</td>
             <td class="mobile-hide">{{ s.pattern_name }}</td>
             <td>{{ s.entry_str }}</td>
             <td>{{ s.sl_str }}</td>
@@ -337,7 +346,7 @@
             <td>{{ s.amt_str }}<br><span class="reason-text">{{ s.qty_str }}</span></td>
           </tr>
           {% else %}
-          <tr><td colspan="9" class="text-center text-muted-custom">直近7日間のシグナルなし</td></tr>
+          <tr><td colspan="11" class="text-center text-muted-custom">直近7日間のシグナルなし</td></tr>
           {% endfor %}
         </tbody>
       </table>

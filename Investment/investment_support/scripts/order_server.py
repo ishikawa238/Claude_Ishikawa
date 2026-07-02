@@ -117,6 +117,58 @@ _RANK_CSS = {"S": "rank-s", "A": "rank-a", "B": "rank-b", "C": "rank-c", "Watch"
 _LABEL_CSS = {"candidate": "label-candidate", "watch": "label-watch", "skip": "label-skip"}
 _LABEL_DISPLAY = {"candidate": "候補", "watch": "監視", "skip": "スキップ"}
 _PROFIT_TYPE_LABEL = {"I": "ブレイクアウト", "II": "トレンドフォロー", "III": "手動管理"}
+_STRATEGY_LABELS = {
+    "swing_jp": "押し目",
+    "moomoo_swing": "押し目",
+    "breakout_jp": "ブレイクアウト",
+    "breakout_us": "ブレイクアウト",
+}
+
+
+def _is_breakout_strategy(strategy: str | None) -> bool:
+    return bool(strategy and str(strategy).startswith("breakout"))
+
+
+def _strategy_kind(strategy: str | None, pattern: str | None) -> str:
+    if _is_breakout_strategy(strategy):
+        return "breakout"
+    if strategy in ("swing_jp", "moomoo_swing"):
+        return "swing"
+    if pattern == "A":
+        return "breakout"
+    return "swing"
+
+
+def _rs_score_css(rs_score) -> str:
+    if rs_score is None:
+        return ""
+    score = float(rs_score)
+    if score >= 70:
+        return "rs-high"
+    if score >= 40:
+        return "rs-mid"
+    return "rs-low"
+
+
+def _strategy_badge_html(strategy: str | None) -> str:
+    if not strategy:
+        return '<span class="strategy-badge strategy-unknown">—</span>'
+    label = _STRATEGY_LABELS.get(strategy, strategy)
+    css = "strategy-breakout" if _is_breakout_strategy(strategy) else "strategy-swing"
+    return f'<span class="strategy-badge {css}">{escape(label)}</span>'
+
+
+def _rs_score_html(rs_score) -> str:
+    if rs_score is None:
+        return "—"
+    score = float(rs_score)
+    if score >= 70:
+        css = "rs-high"
+    elif score >= 40:
+        css = "rs-mid"
+    else:
+        css = "rs-low"
+    return f'<span class="rs-score-badge {css}">{score:.0f}</span>'
 
 
 def _build_tp_target_html(h: dict, cp: float) -> str:
@@ -274,7 +326,11 @@ _COND_C_LABELS = [
     ("cond_c_rsi_oversold",   "RSI ≤ 35"),
     ("cond_c_sar_reversal",   "MACD確認"),
 ]
-_SWING_COND_LABELS = _COND_C_LABELS
+_BREAKOUT_COND_LABELS = [
+    ("cond_a_52w_high_near", "60日高値更新"),
+    ("cond_a_volume_surge", "出来高1.5x以上"),
+    ("cond_a_rsi_ok", "RSスコア"),
+]
 
 
 # ============================================================
@@ -332,11 +388,15 @@ def report():
         candidates = fetch_all(
             conn,
             """
-            SELECT ticker, name, market, pattern, entry_price, stop_loss_price,
-                   stop_loss_pct, target_price, recommended_amount, signal_date
-            FROM trade_signal_log
-            WHERE signal_date >= date(?, '-7 days')
-            ORDER BY signal_date DESC, ticker
+            SELECT tsl.ticker, tsl.name, tsl.market, tsl.pattern, tsl.entry_price,
+                   tsl.stop_loss_price, tsl.stop_loss_pct, tsl.target_price,
+                   tsl.recommended_amount, tsl.signal_date,
+                   d.strategy, d.rs_score
+            FROM trade_signal_log tsl
+            LEFT JOIN daily_signals d
+              ON d.ticker = tsl.ticker AND d.date = tsl.signal_date AND d.pattern = tsl.pattern
+            WHERE tsl.signal_date >= date(?, '-7 days')
+            ORDER BY tsl.signal_date DESC, tsl.ticker
             """,
             (today_str,),
         )
@@ -348,7 +408,7 @@ def report():
                    tsl.entry_price, tsl.stop_loss_price, tsl.stop_loss_pct,
                    tsl.target_price, tsl.recommended_amount, tsl.signal_date,
                    tsl.conditions_met,
-                   d.final_score, d.recommend_rank,
+                   d.final_score, d.recommend_rank, d.rs_score, d.strategy,
                    d.trend_score, d.pattern_a_score, d.pattern_b_score,
                    d.pattern_c_score, d.liquidity_score,
                    d.cond_a_ma200_rising, d.cond_a_ma_aligned, d.cond_a_52w_high_near,
@@ -358,7 +418,8 @@ def report():
                    d.cond_c_weekly_uptrend, d.cond_c_at_support, d.cond_c_rsi_oversold,
                    d.cond_c_sar_reversal
             FROM trade_signal_log tsl
-            LEFT JOIN daily_signals d ON d.ticker = tsl.ticker AND d.date = tsl.signal_date
+            LEFT JOIN daily_signals d
+              ON d.ticker = tsl.ticker AND d.date = tsl.signal_date AND d.pattern = tsl.pattern
             WHERE tsl.signal_date = (
                 SELECT MAX(signal_date) FROM trade_signal_log WHERE signal_date <= ?
             )
@@ -646,8 +707,10 @@ def screening():
 
         rows = fetch_all(
             conn,
-            """SELECT d.ticker, u.name, u.sector, d.market, d.pattern, d.label,
+            """SELECT d.ticker, u.name, u.sector, d.market, d.pattern, d.label, d.strategy,
+                      d.rs_score,
                       d.cond_c_weekly_uptrend, d.cond_c_rsi_oversold, d.cond_c_sar_reversal,
+                      d.cond_a_52w_high_near, d.cond_a_volume_surge, d.cond_a_rsi_ok,
                       d.macd_confirm_type,
                       d.close, d.rsi14, d.atr14, d.vol_ratio, d.rs_rank, d.market_mode,
                       t.macd_diff, t.macd_dea, t.macd_hist,
@@ -660,6 +723,7 @@ def screening():
                )
                ORDER BY
                  CASE d.label WHEN 'candidate' THEN 0 WHEN 'watch' THEN 1 ELSE 2 END,
+                 d.rs_score IS NULL, d.rs_score DESC,
                  d.rsi14 IS NULL, d.rsi14 ASC,
                  d.ticker""",
         )
@@ -815,7 +879,10 @@ def _build_candidate_cards(
 
         # 条件ドット HTML
         cond_labels_map = {"A": _COND_A_LABELS, "B": _COND_B_LABELS, "C": _COND_C_LABELS}
-        cond_labels = cond_labels_map.get(pattern, _COND_A_LABELS)
+        if _is_breakout_strategy(bc.get("strategy")):
+            cond_labels = _BREAKOUT_COND_LABELS
+        else:
+            cond_labels = cond_labels_map.get(pattern, _COND_A_LABELS)
         conds_html = ""
         for col, tip in cond_labels:
             conds_html += _cond_dot(bc.get(col), tip)
@@ -826,6 +893,15 @@ def _build_candidate_cards(
             "market": market,
             "pattern": pattern,
             "pattern_name": _PATTERN_NAME.get(pattern, pattern),
+            "strategy": bc.get("strategy"),
+            "strategy_label": _STRATEGY_LABELS.get(bc.get("strategy") or "", ""),
+            "strategy_css": (
+                "strategy-breakout" if _is_breakout_strategy(bc.get("strategy")) else "strategy-swing"
+            ),
+            "rs_score_str": (
+                f"{float(bc['rs_score']):.0f}" if bc.get("rs_score") is not None else "—"
+            ),
+            "rs_score_css": _rs_score_css(bc.get("rs_score")),
             "source_label": source_label,
             "source_css": source_css,
             "score_pct": score_pct,
@@ -1325,6 +1401,14 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "name": s.get("name") or "",
             "market": s.get("market") or "",
             "pattern_name": _PATTERN_NAME.get(s["pattern"], s["pattern"]),
+            "strategy_label": _STRATEGY_LABELS.get(s.get("strategy") or "", "—"),
+            "strategy_css": (
+                "strategy-breakout" if _is_breakout_strategy(s.get("strategy")) else "strategy-swing"
+            ),
+            "rs_score_str": (
+                f"{float(s['rs_score']):.0f}" if s.get("rs_score") is not None else "—"
+            ),
+            "rs_score_css": _rs_score_css(s.get("rs_score")),
             "entry_str": f"{ep:,.2f}",
             "sl_str": f"{float(s['stop_loss_price']):,.2f}（-{sl_p:.1f}%）",
             "target_str": f"{float(s['target_price']):,.2f}（+{tg_p:.1f}%）",
@@ -1650,6 +1734,18 @@ def _swing_cond_badge(
     )
 
 
+def _breakout_cond_badges_html(row: dict) -> str:
+    """ブレイクアウト戦略の3条件バッジ。"""
+    c_high = row.get("cond_a_52w_high_near") == 1
+    c_vol = row.get("cond_a_volume_surge") == 1
+    c_rs = row.get("cond_a_rsi_ok") == 1
+    return (
+        _swing_cond_badge(c_high, "60日高値", "終値が直近60日高値を更新")
+        + _swing_cond_badge(c_vol, "出来高", "出来高 ≥ 20日平均の1.5倍")
+        + _swing_cond_badge(c_rs, "RS", "RSスコア条件を満たす")
+    )
+
+
 def _macd_cond_badges_html(row: dict) -> str:
     """MACD 条件をヒスト反転 / GC の2バッジで表示する。"""
     from src.swing_detector import macd_confirm_flags
@@ -1678,9 +1774,19 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
     cand_cnt = sum(1 for r in rows if r["label"] == "candidate")
     watch_cnt = sum(1 for r in rows if r["label"] == "watch")
     skip_cnt = sum(1 for r in rows if r["label"] == "skip")
-    funnel_uptrend = sum(1 for r in rows if r.get("cond_c_weekly_uptrend") == 1)
-    funnel_rsi = sum(1 for r in rows if r.get("cond_c_rsi_oversold") == 1)
-    funnel_macd = sum(1 for r in rows if r.get("cond_c_sar_reversal") == 1)
+    swing_rows = [
+        r for r in rows
+        if _strategy_kind(r.get("strategy"), r.get("pattern")) == "swing"
+    ]
+    breakout_rows = [
+        r for r in rows
+        if _strategy_kind(r.get("strategy"), r.get("pattern")) == "breakout"
+    ]
+    funnel_uptrend = sum(1 for r in swing_rows if r.get("cond_c_weekly_uptrend") == 1)
+    funnel_rsi = sum(1 for r in swing_rows if r.get("cond_c_rsi_oversold") == 1)
+    funnel_macd = sum(1 for r in swing_rows if r.get("cond_c_sar_reversal") == 1)
+    breakout_cand_cnt = sum(1 for r in breakout_rows if r["label"] == "candidate")
+    breakout_watch_cnt = sum(1 for r in breakout_rows if r["label"] == "watch")
 
     table_rows = []
     for r in rows:
@@ -1688,29 +1794,42 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         name = r.get("name") or ""
         market = r.get("market") or ""
         label = r.get("label") or "skip"
+        strategy = r.get("strategy") or ""
+        kind = _strategy_kind(strategy, r.get("pattern"))
         close = r.get("close")
         price_jpy = _close_price_jpy(close, market, usdjpy)
         rsi = r.get("rsi14")
         vol_ratio = r.get("vol_ratio")
         sector = r.get("sector") or "—"
+        rs_score = r.get("rs_score")
 
-        uptrend = r.get("cond_c_weekly_uptrend") == 1
-        rsi_ok = r.get("cond_c_rsi_oversold") == 1
-        macd_ok = r.get("cond_c_sar_reversal") == 1
-        from src.swing_detector import macd_confirm_flags
+        if kind == "breakout":
+            c_high = r.get("cond_a_52w_high_near") == 1
+            c_vol = r.get("cond_a_volume_surge") == 1
+            c_rs = r.get("cond_a_rsi_ok") == 1
+            met_count = sum((c_high, c_vol, c_rs))
+            uptrend = rsi_ok = macd_ok = False
+            hist_ok = gc_ok = False
+            conds_html = _breakout_cond_badges_html(r)
+        else:
+            uptrend = r.get("cond_c_weekly_uptrend") == 1
+            rsi_ok = r.get("cond_c_rsi_oversold") == 1
+            macd_ok = r.get("cond_c_sar_reversal") == 1
+            from src.swing_detector import macd_confirm_flags
 
-        hist_ok, gc_ok = macd_confirm_flags(r)
-        met_count = sum((uptrend, rsi_ok, macd_ok))
+            hist_ok, gc_ok = macd_confirm_flags(r)
+            met_count = sum((uptrend, rsi_ok, macd_ok))
+            conds_html = (
+                _swing_cond_badge(uptrend, "トレンド", "EMA25 > EMA75（上昇トレンド）")
+                + _swing_cond_badge(rsi_ok, f"RSI≤{rsi_max}", f"RSI ≤ {rsi_max}")
+                + _macd_cond_badges_html(r)
+            )
 
         lbl_css = _LABEL_CSS.get(label, "label-skip")
         lbl_text = _LABEL_DISPLAY.get(label, label)
 
-        conds_html = (
-            _swing_cond_badge(uptrend, "トレンド", "EMA25 > EMA75（上昇トレンド）")
-            + _swing_cond_badge(rsi_ok, f"RSI≤{rsi_max}", f"RSI ≤ {rsi_max}")
-            + _macd_cond_badges_html(r)
-        )
-
+        strategy_html = _strategy_badge_html(strategy or None)
+        rs_html = _rs_score_html(rs_score)
         met_css = "swing-met-full" if met_count == 3 else (
             "swing-met-partial" if met_count == 2 else "swing-met-low"
         )
@@ -1745,9 +1864,12 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         bookmark_html = _bookmark_btn_html(ticker, name, market, is_bm)
 
         prompt_href = f"/prompt-builder?from=screening&theme=buy&tickers={escape(ticker)}"
+        rs_attr = f"{float(rs_score):.0f}" if rs_score is not None else ""
         row_html = (
             f'<tr data-ticker="{escape(ticker)}" data-label="{escape(label)}"'
             f' data-market="{escape(market)}"'
+            f' data-strategy="{escape(strategy)}"'
+            f' data-strategy-kind="{kind}"'
             f' data-uptrend="{"1" if uptrend else "0"}"'
             f' data-rsi-ok="{"1" if rsi_ok else "0"}"'
             f' data-macd-ok="{"1" if macd_ok else "0"}"'
@@ -1755,6 +1877,7 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
             f' data-macd-gc="{"1" if gc_ok else "0"}"'
             f' data-cond-met="{met_count}"'
             f' data-rsi="{rsi if rsi is not None else ""}"'
+            f' data-rs-score="{escape(rs_attr)}"'
             f' data-price-jpy="{escape(price_jpy_attr)}"'
             f' data-bookmarked="{"1" if is_bm else "0"}">'
             f'<td class="bookmark-cell">{bookmark_html}</td>'
@@ -1765,6 +1888,8 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
             f"</td>"
             f'<td class="mobile-hide">{escape(name)}</td>'
             f'<td class="mobile-hide"><span class="market-pill market-{escape(market.lower())}">{escape(market)}</span></td>'
+            f'<td class="text-center">{strategy_html}</td>'
+            f'<td class="text-center rs-col">{rs_html}</td>'
             f'<td><span class="rank-badge {lbl_css}">{lbl_text}</span></td>'
             f'<td class="swing-cond-col">{conds_html}</td>'
             f'<td class="text-center">{met_html}</td>'
@@ -1789,6 +1914,8 @@ def _render_screening(target_date: str, rows: list[dict]) -> str:
         funnel_uptrend=funnel_uptrend,
         funnel_rsi=funnel_rsi,
         funnel_macd=funnel_macd,
+        breakout_cand_cnt=breakout_cand_cnt,
+        breakout_watch_cnt=breakout_watch_cnt,
         swing_rsi_max=rsi_max,
         bookmark_cnt=len(bookmark_tickers),
         usdjpy_rate=usdjpy,

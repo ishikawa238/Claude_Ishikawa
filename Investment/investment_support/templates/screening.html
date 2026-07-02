@@ -1,25 +1,35 @@
 {% extends "base.html" %}
-{% block title %}スイングスクリーニング {{ target_date }}{% endblock %}
+{% block title %}スクリーニング {{ target_date }}{% endblock %}
 
 {% block content %}
 <!-- 戦略バナー -->
 <div class="swing-strategy-banner mb-4">
   <div class="swing-banner-head">
     <div>
-      <span class="swing-strategy-tag">EMA押し目スイング</span>
-      <h1 class="swing-banner-title">スイングスクリーニング</h1>
+      <span class="swing-strategy-tag">押し目 + ブレイクアウト</span>
+      <h1 class="swing-banner-title">スクリーニング</h1>
       <p class="swing-banner-sub">
-        スコアリング・Pattern A/B は廃止済み。
-        <strong>3条件すべて</strong>を満たした銘柄だけが買い候補（candidate）になります。
+        <strong>押し目スイング</strong>（EMAトレンド + RSI + MACD）と
+        <strong>ブレイクアウト</strong>（60日高値 + 出来高 + RS）の2戦略を並列表示します。
+        各戦略で<strong>3条件すべて</strong>を満たした銘柄が買い候補（candidate）です。
       </p>
     </div>
     <div class="swing-banner-date text-muted-custom">{{ target_date }}</div>
   </div>
-  <ol class="swing-rule-list">
-    <li><span class="swing-rule-num">1</span> EMA25 &gt; EMA75（上昇トレンド）</li>
-    <li><span class="swing-rule-num">2</span> RSI ≤ {{ swing_rsi_max }}（売られ過ぎゾーン）</li>
-    <li><span class="swing-rule-num">3</span> MACD: <strong>ヒスト反転</strong> または <strong>GC</strong>（個別に表示）</li>
-  </ol>
+  <div class="swing-rule-columns">
+    <ol class="swing-rule-list">
+      <li class="swing-rule-heading"><span class="strategy-badge strategy-swing">押し目</span></li>
+      <li><span class="swing-rule-num">1</span> EMA25 &gt; EMA75（上昇トレンド）</li>
+      <li><span class="swing-rule-num">2</span> RSI ≤ {{ swing_rsi_max }}（売られ過ぎゾーン）</li>
+      <li><span class="swing-rule-num">3</span> MACD: <strong>ヒスト反転</strong> または <strong>GC</strong></li>
+    </ol>
+    <ol class="swing-rule-list">
+      <li class="swing-rule-heading"><span class="strategy-badge strategy-breakout">ブレイクアウト</span></li>
+      <li><span class="swing-rule-num">1</span> 60日高値更新</li>
+      <li><span class="swing-rule-num">2</span> 出来高 ≥ 20日平均の1.5倍</li>
+      <li><span class="swing-rule-num">3</span> RSスコア条件</li>
+    </ol>
+  </div>
 </div>
 
 <!-- 条件ファネル -->
@@ -48,12 +58,21 @@
   </div>
   <div class="swing-funnel-arrow">→</div>
   <div class="swing-funnel-step swing-funnel-candidate">
-    <div class="swing-funnel-label">候補</div>
-    <div class="swing-funnel-value text-profit">{{ cand_cnt }}</div>
+    <div class="swing-funnel-label">押し目候補</div>
+    <div class="swing-funnel-value text-profit">{{ cand_cnt - breakout_cand_cnt }}</div>
   </div>
   <div class="swing-funnel-step swing-funnel-watch">
-    <div class="swing-funnel-label">あと1条件</div>
-    <div class="swing-funnel-value" style="color:var(--color-warning)">{{ watch_cnt }}</div>
+    <div class="swing-funnel-label">押し目あと1</div>
+    <div class="swing-funnel-value" style="color:var(--color-warning)">{{ watch_cnt - breakout_watch_cnt }}</div>
+  </div>
+  <div class="swing-funnel-arrow">|</div>
+  <div class="swing-funnel-step swing-funnel-candidate">
+    <div class="swing-funnel-label">BO候補</div>
+    <div class="swing-funnel-value text-profit">{{ breakout_cand_cnt }}</div>
+  </div>
+  <div class="swing-funnel-step swing-funnel-watch">
+    <div class="swing-funnel-label">BOあと1</div>
+    <div class="swing-funnel-value" style="color:var(--color-warning)">{{ breakout_watch_cnt }}</div>
   </div>
 </div>
 
@@ -98,6 +117,12 @@
     <div class="filter-group" id="bookmarkFilterGroup">
       <button class="filter-btn" id="bookmarkFilterBtn" onclick="toggleBookmarkFilter(this)">★ ブックマークのみ</button>
     </div>
+    <span class="meta-medium" style="font-weight:600">戦略:</span>
+    <div class="filter-group" id="strategyFilterGroup">
+      <button class="filter-btn active" data-filter-strategy="all" onclick="setFilter('strategy','all',this)">All</button>
+      <button class="filter-btn" data-filter-strategy="swing" onclick="setFilter('strategy','swing',this)">押し目</button>
+      <button class="filter-btn" data-filter-strategy="breakout" onclick="setFilter('strategy','breakout',this)">ブレイクアウト</button>
+    </div>
     <span class="meta-medium" style="font-weight:600">ラベル:</span>
     <div class="filter-group" id="labelFilterGroup">
       <button class="filter-btn active" data-filter-label="candidate" onclick="setFilter('label','candidate',this)">候補</button>
@@ -141,8 +166,10 @@
           <th>Ticker</th>
           <th class="mobile-hide">銘柄名</th>
           <th class="mobile-hide">市場</th>
+          <th><span class="tip" data-tip="押し目スイング / ブレイクアウト">戦略</span></th>
+          <th id="sortRsScore" style="cursor:pointer" class="text-center"><span class="tip" data-tip="126日リターンの相対強度（0〜100）。高いほど指数より強い">RS ⇅</span></th>
           <th>ラベル</th>
-          <th class="swing-cond-col"><span class="tip" data-tip="トレンド・RSI・MACD（ヒスト反転/GCは別バッジ）">スイング条件</span></th>
+          <th class="swing-cond-col"><span class="tip" data-tip="戦略ごとの3条件（MACDはヒスト/GC別バッジ）">条件</span></th>
           <th id="sortCondMet" style="cursor:pointer" class="text-center"><span class="tip" data-tip="充足した条件数。クリックで並び替え">達成 ⇅</span></th>
           <th id="sortRsi" style="cursor:pointer" class="text-center"><span class="tip" data-tip="RSI14。低いほど売られ過ぎ。クリックで並び替え">RSI ⇅</span></th>
           <th>判定</th>

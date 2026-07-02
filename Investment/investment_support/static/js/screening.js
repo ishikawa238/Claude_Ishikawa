@@ -4,6 +4,7 @@ var _urlFilter = new URLSearchParams(window.location.search).get('filter');
 var _validLabels = ['candidate', 'watch', 'skip', 'all'];
 var filterLabel = (_urlFilter && _validLabels.indexOf(_urlFilter) >= 0) ? _urlFilter : 'candidate';
 var filterMarket = 'all';
+var filterStrategy = 'all';
 var filterNearMiss = 'all';
 var filterBookmarkOnly = false;
 var sortRsiAsc = true;
@@ -56,6 +57,7 @@ function toggleBookmarkFilter(btn) {
 function setFilter(type, value, btn) {
   if (type === 'label') filterLabel = value;
   else if (type === 'market') filterMarket = value;
+  else if (type === 'strategy') filterStrategy = value;
   else if (type === 'nearmiss') filterNearMiss = value;
   btn.parentElement.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
@@ -64,6 +66,11 @@ function setFilter(type, value, btn) {
 
 function matchesNearMiss(tr) {
   if (filterNearMiss === 'all') return true;
+  if (tr.dataset.strategyKind === 'breakout') {
+    if (filterNearMiss === 'macd-wait' || filterNearMiss === 'rsi-wait') return false;
+    if (filterNearMiss === 'full') return tr.dataset.condMet === '3';
+    return true;
+  }
   var uptrend = tr.dataset.uptrend === '1';
   var rsiOk = tr.dataset.rsiOk === '1';
   var macdOk = tr.dataset.macdOk === '1';
@@ -99,6 +106,7 @@ function applyFilters() {
   rows.forEach(function(tr) {
     var matchLabel = (filterLabel === 'all' || tr.dataset.label === filterLabel);
     var matchMarket = (filterMarket === 'all' || tr.dataset.market === filterMarket);
+    var matchStrategy = (filterStrategy === 'all' || tr.dataset.strategyKind === filterStrategy);
     var matchNearMiss = matchesNearMiss(tr);
     var matchBookmark = !filterBookmarkOnly || tr.dataset.bookmarked === '1';
     var matchPrice = true;
@@ -112,7 +120,7 @@ function applyFilters() {
         if (priceBounds.max !== null && priceJpy > priceBounds.max) matchPrice = false;
       }
     }
-    if (matchLabel && matchMarket && matchNearMiss && matchBookmark && matchPrice) {
+    if (matchLabel && matchMarket && matchStrategy && matchNearMiss && matchBookmark && matchPrice) {
       tr.style.display = '';
       shown++;
     } else {
@@ -183,6 +191,23 @@ function parseRsiForSort(tr, asc) {
   var v = parseFloat(raw);
   return isNaN(v) ? (asc ? Infinity : -Infinity) : v;
 }
+
+function parseRsScoreForSort(tr, asc) {
+  var raw = tr.dataset.rsScore;
+  if (raw === '' || raw === undefined) return asc ? -Infinity : Infinity;
+  var v = parseFloat(raw);
+  return isNaN(v) ? (asc ? -Infinity : Infinity) : v;
+}
+
+document.getElementById('sortRsScore').addEventListener('click', function() {
+  var sortRsAsc = this.dataset.sortAsc !== '1';
+  this.dataset.sortAsc = sortRsAsc ? '1' : '0';
+  sortTableRows(function(a, b) {
+    var va = parseRsScoreForSort(a, sortRsAsc);
+    var vb = parseRsScoreForSort(b, sortRsAsc);
+    return sortRsAsc ? va - vb : vb - va;
+  });
+});
 
 document.getElementById('sortRsi').addEventListener('click', function() {
   sortRsiAsc = !sortRsiAsc;

@@ -130,9 +130,12 @@ def _init_test_db(conn):
             liquidity_score REAL, base_score REAL, market_multiplier REAL,
             final_score REAL, recommend_rank TEXT, recommend_reason TEXT,
             market_mode TEXT,
+            strategy TEXT,
+            rs_score REAL,
+            return_126d REAL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_ds_td ON daily_signals(ticker, date);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ds_td ON daily_signals(ticker, date, strategy);
         CREATE TABLE IF NOT EXISTS trade_signal_log (
             id INTEGER PRIMARY KEY, signal_date DATE, ticker TEXT, name TEXT,
             market TEXT, pattern TEXT, entry_price REAL, stop_loss_price REAL,
@@ -289,17 +292,25 @@ def _init_test_db(conn):
     # daily_signals（スコア付き）
     conn.execute(
         "INSERT INTO daily_signals (ticker, date, market, pattern, label, close, "
+        "strategy, rs_score, "
+        "cond_c_weekly_uptrend, cond_c_rsi_oversold, cond_c_sar_reversal, rsi14, "
         "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('7203', ?, 'JP', 'A', 'candidate', 3000, 80, 65, 50, 10, 90, 78, 'A', "
+        "VALUES ('7203', ?, 'JP', 'C', 'candidate', 3000, "
+        "'swing_jp', 85, 1, 1, 1, 28, "
+        "80, 65, 50, 10, 90, 78, 'A', "
         "'上昇トレンドが継続中。52週高値に接近。流動性が高い', 'normal')",
         (today_str,),
     )
     conn.execute(
         "INSERT INTO daily_signals (ticker, date, market, pattern, label, close, "
+        "strategy, rs_score, "
+        "cond_c_weekly_uptrend, cond_c_rsi_oversold, cond_c_sar_reversal, rsi14, "
         "trend_score, pattern_a_score, pattern_b_score, pattern_c_score, liquidity_score, "
         "final_score, recommend_rank, recommend_reason, market_mode) "
-        "VALUES ('AAPL', ?, 'US', 'B', 'candidate', 180, 70, 55, 75, 15, 85, 72, 'B', "
+        "VALUES ('AAPL', ?, 'US', 'C', 'candidate', 180, "
+        "'moomoo_swing', 72, 1, 1, 0, 32, "
+        "70, 55, 75, 15, 85, 72, 'B', "
         "'中期トレンドは良好。押し目反発の形成を確認', 'normal')",
         (today_str,),
     )
@@ -308,7 +319,7 @@ def _init_test_db(conn):
     conn.execute(
         "INSERT INTO trade_signal_log (signal_date, ticker, name, market, pattern, "
         "entry_price, stop_loss_price, stop_loss_pct, target_price, recommended_amount, market_mode) "
-        "VALUES (?, '7203', 'トヨタ自動車', 'JP', 'A', 3000, 2850, 5.0, 3300, 500000, 'normal')",
+        "VALUES (?, '7203', 'トヨタ自動車', 'JP', 'C', 3000, 2850, 5.0, 3300, 500000, 'normal')",
         (today_str,),
     )
 
@@ -469,17 +480,21 @@ class OrderServerTestCase(unittest.TestCase):
         resp = self.client.get("/screening")
         html = resp.data.decode()
         self.assertIn("swing-strategy-banner", html)
-        self.assertIn("EMA押し目スイング", html)
-        self.assertIn("スコアリング", html)
+        self.assertIn("押し目", html)
+        self.assertIn("ブレイクアウト", html)
+        self.assertIn("strategy-badge", html)
         self.assertNotIn("sortScore", html)
         self.assertNotIn("data-pattern", html)
         self.assertNotIn('setFilter(\'pattern\'', html)
         self.assertIn("data-cond-met", html)
+        self.assertIn("data-strategy-kind", html)
         self.assertIn("data-uptrend", html)
         self.assertIn("swing-cond-badge", html)
         self.assertIn("swing-cond-macd-hist", html)
         self.assertIn("swing-cond-macd-gc", html)
         self.assertIn("data-macd-hist", html)
+        self.assertIn("data-filter-strategy", html)
+        self.assertIn("sortRsScore", html)
 
     def test_screening_shows_price_jpy_column(self):
         resp = self.client.get("/screening")
@@ -535,7 +550,7 @@ class OrderServerTestCase(unittest.TestCase):
         resp = self.client.get("/stock/7203")
         html = resp.data.decode()
         self.assertIn("シグナル履歴", html)
-        self.assertIn("モメンタムブレイクアウト", html)
+        self.assertIn("サポートバウンス", html)
 
     def test_stock_us_ticker(self):
         resp = self.client.get("/stock/AAPL")

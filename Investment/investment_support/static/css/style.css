@@ -359,6 +359,21 @@ a.ticker-link:hover {
 .status-danger { background: var(--color-danger-light); color: #991B1B; }
 .status-tp { background: var(--color-info-light); color: #075985; }
 
+/* 保有銘柄テーブル — 決算・イベント */
+.event-cell { white-space: nowrap; font-size: var(--text-sm); }
+.event-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.event-critical { background: var(--color-danger-light); color: #991B1B; }
+.event-warn { background: var(--color-warning-light); color: #92400E; }
+.event-info { background: var(--color-info-light); color: #075985; }
+td.event-cell.event-critical { background: color-mix(in srgb, var(--color-danger-light) 35%, transparent); }
+td.event-cell.event-warn { background: color-mix(in srgb, var(--color-warning-light) 35%, transparent); }
+
 /* ============================================================
    Condition Dots
    ============================================================ */

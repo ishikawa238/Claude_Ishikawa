@@ -256,6 +256,7 @@
             <th>損益</th><th>状態</th>
             <th><span class="tip" data-tip="損切りライン：ここまで下がったら売る価格">SL</span></th>
             <th class="mobile-hide"><span class="tip" data-tip="利確ターゲット：段階的に利益を確保する価格。✓=到達済み、→=次の目標、灰色=未到達">利確ターゲット</span></th><th class="mobile-hide">保有日数</th>
+            <th><span class="tip" data-tip="決算発表など株価に影響しやすいイベント（JPはJ-Quants。3日以内は赤、7日以内は黄で強調）">イベント</span></th>
             {% if is_offensive_mode %}
             <th><span class="tip" data-tip="攻めモードの追加シグナル：📈買い増し候補 / 📉トレーリング段階（MA25・MA50） / 💰株価2倍特例">攻めシグナル</span></th>
             {% endif %}
@@ -284,6 +285,7 @@
             </td>
             <td class="mobile-hide">{{ h.target_str|safe }}</td>
             <td class="mobile-hide {{ h.days_css }}">{{ h.days_str }}</td>
+            <td class="event-cell{% if h.event_css %} {{ h.event_css }}{% endif %}">{{ h.event_html|safe }}</td>
             {% if is_offensive_mode %}
             <td class="off-signal-cell"{% if h.offensive_title %} title="{{ h.offensive_title }}"{% endif %}>{{ h.offensive_html|safe }}</td>
             {% endif %}
@@ -297,7 +299,7 @@
             <td class="detail-col">{{ h.trend_str|safe }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="{% if is_offensive_mode %}9{% else %}8{% endif %}" class="text-center text-muted-custom">保有銘柄なし</td></tr>
+          <tr><td colspan="{% if is_offensive_mode %}10{% else %}9{% endif %}" class="text-center text-muted-custom">保有銘柄なし</td></tr>
           {% endfor %}
         </tbody>
       </table>

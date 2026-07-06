@@ -919,6 +919,74 @@ def _build_candidate_cards(
     return cards
 
 
+def _format_holding_event_html(eval_row: dict) -> tuple[str, str]:
+    """
+    保有銘柄行のイベント列（決算等）HTML とセル用 CSS クラスを返す。
+    eval_row は evaluate_holdings() の1件分（earnings_date / earnings_days を含む）。
+    """
+    ann = eval_row.get("earnings_date")
+    days = eval_row.get("earnings_days")
+    if not ann or days is None:
+        return "—", ""
+
+    try:
+        warn_days = int(CONFIG.get("jquants", {}).get("earnings_alert_days_warning", 7))
+        crit_days = int(CONFIG.get("jquants", {}).get("earnings_alert_days_critical", 3))
+    except (TypeError, ValueError):
+        warn_days, crit_days = 7, 3
+
+    if days <= crit_days:
+        badge_css = "event-critical"
+    elif days <= warn_days:
+        badge_css = "event-warn"
+    else:
+        badge_css = "event-info"
+
+    try:
+        dt = datetime.strptime(ann, "%Y-%m-%d")
+        date_short = f"{dt.month}/{dt.day}"
+    except ValueError:
+        date_short = ann
+
+    when = "本日" if days == 0 else f"{days}日後"
+    html = (
+        f'<span class="event-badge {badge_css}">決算</span>'
+        f'<br><span class="meta-small">{date_short}（{when}）</span>'
+    )
+    return html, badge_css
+
+
+def _resolve_holding_event(eval_row: dict, ticker: str, ref_date: date) -> tuple[str, str]:
+    """evaluate_holdings の結果を優先し、なければ earnings_schedule を直接参照する。"""
+    ann = eval_row.get("earnings_date")
+    days = eval_row.get("earnings_days")
+    if ann is None or days is None:
+        ref_str = ref_date.strftime("%Y-%m-%d")
+        with get_connection() as conn:
+            row = fetch_one(
+                conn,
+                "SELECT announcement_date FROM earnings_schedule "
+                "WHERE ticker=? AND announcement_date>=? "
+                "ORDER BY announcement_date ASC LIMIT 1",
+                (ticker, ref_str),
+            )
+        if row:
+            ann = row["announcement_date"]
+            try:
+                days = (
+                    datetime.strptime(ann, "%Y-%m-%d").date() - ref_date
+                ).days
+            except ValueError:
+                ann, days = None, None
+    if not ann or days is None:
+        return "—", ""
+    return _format_holding_event_html({
+        **eval_row,
+        "earnings_date": ann,
+        "earnings_days": days,
+    })
+
+
 def _render_report(today_str, market_env, holdings, candidates, market_history, llm_feedback=None, last_batch=None, data_insufficient=0, snapshot=None, buy_candidates=None, holdings_eval_map=None, score_trend_map=None):
     from src.score_trend import format_score_cell_html
 
@@ -1347,6 +1415,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
         )
         offensive_title = " | ".join(offensive_tips) if offensive_tips else ""
 
+        event_html, event_css = _resolve_holding_event(_eval, h["ticker"], date.today())
+
         holding_rows.append({
             "ticker": h["ticker"],
             "name": h.get("name") or "",
@@ -1378,6 +1448,8 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
             "trend_str": trend_str,
             "offensive_html": offensive_html,
             "offensive_title": offensive_title,
+            "event_html": event_html,
+            "event_css": event_css,
         })
 
     # シグナル履歴テーブル行リスト構築

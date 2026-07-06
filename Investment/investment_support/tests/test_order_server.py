@@ -37,6 +37,9 @@ _CONFIG_MOCK = {
     "logging": {"log_dir": "/tmp", "log_level": "INFO"},
     "report_server": {"host": "127.0.0.1", "port": "5100"},
     "risk": {"risk_free_rate_jp": "0.001", "risk_free_rate_us": "0.05"},
+    "jquants": {"earnings_alert_days_warning": "7", "earnings_alert_days_critical": "3"},
+    "signal": {"max_concurrent_holdings": "3"},
+    "exit_simple": {"enabled": "true"},
 }
 
 # テスト用 DB 接続を共有する仕組み
@@ -205,6 +208,17 @@ def _init_test_db(conn):
             error_type TEXT, error_message TEXT,
             is_fatal INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS earnings_schedule (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            announcement_date DATE NOT NULL,
+            fiscal_year TEXT,
+            fiscal_quarter TEXT,
+            fetched_at DATE NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_earnings_td
+            ON earnings_schedule(ticker, announcement_date);
     """)
 
     today = date.today()
@@ -287,6 +301,14 @@ def _init_test_db(conn):
         "INSERT INTO holdings (ticker, name, market, entry_price, entry_date, quantity, stop_loss_price, is_closed) "
         "VALUES ('AAPL', 'Apple Inc', 'US', 170, ?, 50, 160, 0)",
         ((today - timedelta(days=5)).strftime("%Y-%m-%d"),),
+    )
+
+    # 決算予定（7203: 5日後 → 警告色）
+    earnings_date = (today + timedelta(days=5)).strftime("%Y-%m-%d")
+    conn.execute(
+        "INSERT INTO earnings_schedule (ticker, announcement_date, fiscal_year, fiscal_quarter, fetched_at) "
+        "VALUES ('7203', ?, '2026', 'Q1', ?)",
+        (earnings_date, today_str),
     )
 
     # daily_signals（スコア付き）
@@ -417,6 +439,14 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("Score", html)
         self.assertIn("Rank", html)
         self.assertIn("Trend", html)
+        self.assertIn("イベント", html)
+
+    def test_report_shows_holding_earnings_event(self):
+        resp = self.client.get("/report")
+        html = resp.data.decode()
+        self.assertIn("決算", html)
+        self.assertIn("5日後", html)
+        self.assertIn("event-warn", html)
 
     def test_report_shows_exit_simple_targets(self):
         resp = self.client.get("/report")

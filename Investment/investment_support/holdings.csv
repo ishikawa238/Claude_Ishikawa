@@ -1,7 +1,4 @@
 ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
 SM,SM Energy,US,26.08,2026-07-02,1.0,,moomoo同期
 NVCR,Novocure,US,15.92,2026-07-02,4.0,,moomoo同期
-9256,Succeed,JP,5100.0,2026-06-25,1.0,5100.0,moomoo同期
-7013,IHI,JP,2574.0,2026-06-05,1.0,,moomoo同期
-7011,Mitsubishi Heavy Industries,JP,3573.0,2026-06-03,1.0,,moomoo同期
 6503,Mitsubishi Electric,JP,5925.0,2026-06-29,1.0,,moomoo同期

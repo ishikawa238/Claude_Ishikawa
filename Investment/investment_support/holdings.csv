@@ -1,4 +1,5 @@
 ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
-SM,SM Energy,US,26.08,2026-07-02,1.0,,moomoo同期
+SM,SM Energy,US,26.325,2026-07-02,2.0,,moomoo同期
 NVCR,Novocure,US,15.92,2026-07-02,4.0,,moomoo同期
+CVE,Cenovus Energy,US,24.75,2026-07-08,1.0,,moomoo同期
 6503,Mitsubishi Electric,JP,5925.0,2026-06-29,1.0,,moomoo同期

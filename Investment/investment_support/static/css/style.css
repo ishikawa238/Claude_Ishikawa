@@ -394,6 +394,7 @@ td.event-cell.event-warn { background: color-mix(in srgb, var(--color-warning-li
 .tp-reached { color: var(--color-success); }
 .tp-active { font-weight: 600; color: var(--color-accent-orange); }
 .tp-pending { color: var(--text-muted); }
+.tp-reference { color: var(--text-muted); font-style: italic; opacity: 0.85; }
 .tp-type-label { font-size: var(--text-xs); color: var(--text-secondary); }
 .tp-sub { font-size: 0.75rem; }
 

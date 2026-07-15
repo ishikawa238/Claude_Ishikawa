@@ -368,11 +368,13 @@ def evaluate_holdings(
             res_level = snap.get("resistance_level") if snap else None
             exit_targets = resolve_exit_targets(
                 entry_price, holding_days, res_level,
+                stop_loss_price=stop_loss_price,
             )
             exit_ex = evaluate_exit(
                 ticker, entry_price, current_price, pnl_pct,
                 quantity, holding_days, snap,
                 resistance_level=res_level,
+                stop_loss_price=stop_loss_price,
             )
             if exit_ex:
                 if exit_ex["label"] in (
@@ -435,6 +437,9 @@ def evaluate_holdings(
             # シンプル出口
             "exit_effective_target_pct": exit_targets.get("effective_target_pct"),
             "exit_effective_target_price": exit_targets.get("effective_target_price"),
+            "exit_r_target_mult": exit_targets.get("r_target_mult"),
+            "exit_r_linked_target_pct": exit_targets.get("r_linked_target_pct"),
+            "exit_r_linked_target_price": exit_targets.get("r_linked_target_price"),
             "exit_time_decay_target_pct": exit_targets.get("time_decay_target_pct"),
             "exit_time_decay_target_price": exit_targets.get("time_decay_target_price"),
             "exit_resistance_cap_pct": exit_targets.get("resistance_cap_pct"),

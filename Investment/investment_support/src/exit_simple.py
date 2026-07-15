@@ -1,7 +1,9 @@
 """
-シンプル出口ルール（時間減衰利確 + トレンド延長）。
+シンプル出口ルール（2R連動利確 + トレンド延長）。
 
-- 保有日数に応じて利確目標%を段階的に下げる（20→15→10→5%）
+- 有効利確目標: 損切り幅（1R）× r_target_mult（既定2）= 2R連動
+- レジスタンス・キャップが 2R より近い場合はそちらを有効目標にする
+- 時間減衰目標（20→15→10→5%）はダッシュボード参考表示のみ（判定には使わない）
 - 目標到達時: 延長条件なし→全売 / あり→2株以上は半分売却、1株は温存
 - 延長中はトレンド条件が崩れたら残り全売推奨
 - 長期停滞株は時間切れで売却検討
@@ -41,8 +43,31 @@ def is_exit_simple_enabled() -> bool:
     return bool(cfg.get("enabled", True))
 
 
+def r_reward_pct(
+    entry_price: float,
+    stop_loss_price: Optional[float],
+    cfg: Optional[dict] = None,
+) -> Optional[float]:
+    """
+    損切り幅から nR（既定2R）の利確目標%を返す。
+
+    損切り価格が無い場合は fallback_stop_loss_pct を 1R として使う。
+    """
+    cfg = cfg or get_exit_simple_config()
+    if entry_price <= 0:
+        return None
+    r_mult = float(cfg.get("r_target_mult", 2.0))
+    if stop_loss_price is not None and 0 < float(stop_loss_price) < entry_price:
+        stop_pct = (entry_price - float(stop_loss_price)) / entry_price * 100
+    else:
+        stop_pct = float(cfg.get("fallback_stop_loss_pct", 8.0))
+    if stop_pct <= 0:
+        return None
+    return round(stop_pct * r_mult, 4)
+
+
 def effective_target_pct(holding_days: Optional[int], cfg: Optional[dict] = None) -> float:
-    """保有日数から時間減衰の利確目標%を返す。"""
+    """保有日数から時間減衰の参考利確目標%を返す（判定には使わない）。"""
     cfg = cfg or get_exit_simple_config()
     initial = float(cfg.get("initial_target_pct", 20.0))
     decay = float(cfg.get("target_decay_pct", 5.0))
@@ -102,25 +127,37 @@ def resolve_exit_targets(
     holding_days: Optional[int],
     resistance_level: Optional[float] = None,
     cfg: Optional[dict] = None,
+    stop_loss_price: Optional[float] = None,
 ) -> dict:
-    """時間減衰目標とレジスタンス・キャップを統合した利確目標を返す。"""
+    """2R連動目標・レジスタンス・キャップ・時間減衰参考を統合した利確目標を返す。"""
     cfg = cfg or get_exit_simple_config()
     time_pct = effective_target_pct(holding_days, cfg)
     time_price = target_price(entry_price, time_pct)
 
+    r_pct = r_reward_pct(entry_price, stop_loss_price, cfg)
+    r_price = target_price(entry_price, r_pct) if r_pct is not None else None
+    r_mult = float(cfg.get("r_target_mult", 2.0))
+
     res_pct = resistance_reward_pct(entry_price, resistance_level, cfg)
     res_price = target_price(entry_price, res_pct) if res_pct is not None else None
 
-    if res_pct is not None and res_pct < time_pct:
+    if r_pct is None:
+        binding = "time_decay"
+        eff_pct = time_pct
+        eff_price = time_price
+    elif res_pct is not None and res_pct < r_pct:
         binding = "resistance"
         eff_pct = res_pct
         eff_price = res_price
     else:
-        binding = "time_decay"
-        eff_pct = time_pct
-        eff_price = time_price
+        binding = "r_linked"
+        eff_pct = r_pct
+        eff_price = r_price
 
     return {
+        "r_target_mult": r_mult,
+        "r_linked_target_pct": r_pct,
+        "r_linked_target_price": r_price,
         "time_decay_target_pct": time_pct,
         "time_decay_target_price": time_price,
         "resistance_cap_pct": res_pct,
@@ -175,6 +212,7 @@ def evaluate_exit(
     holding_days: Optional[int],
     snap: Optional[dict],
     resistance_level: Optional[float] = None,
+    stop_loss_price: Optional[float] = None,
     persist_state: bool = True,
 ) -> Optional[dict]:
     """
@@ -196,7 +234,7 @@ def evaluate_exit(
         resistance_level = snap.get("resistance_level")
 
     targets = resolve_exit_targets(
-        entry_price, holding_days, resistance_level, cfg,
+        entry_price, holding_days, resistance_level, cfg, stop_loss_price,
     )
     eff_pct = targets["effective_target_pct"]
     eff_price = targets["effective_target_price"]
@@ -226,6 +264,11 @@ def evaluate_exit(
             return (
                 f"レジスタンス利確ライン到達（+{eff_pct:g}% / 目標 {eff_price:,.2f} / "
                 f"レジスタンス {res_lv:,.2f}）"
+            )
+        if binding == "r_linked":
+            r_mult = targets.get("r_target_mult", 2.0)
+            return (
+                f"{r_mult:g}R利確ライン到達（+{eff_pct:g}% / 目標 {eff_price:,.2f}）"
             )
         return f"利確ライン到達（+{eff_pct:g}% / 目標価格 {eff_price:,.2f}）"
 

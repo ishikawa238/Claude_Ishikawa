@@ -13,10 +13,20 @@ from src.exit_simple import (
     effective_target_pct,
     evaluate_exit,
     hold_conditions_met,
+    r_reward_pct,
     resistance_reward_pct,
     resolve_exit_targets,
     target_price,
 )
+
+
+class TestRRewardPct(unittest.TestCase):
+    def test_from_stop_loss(self):
+        # entry 1000, stop 920 → 8% × 2 = 16%
+        self.assertAlmostEqual(r_reward_pct(1000.0, 920.0, _cfg()), 16.0)
+
+    def test_fallback_when_no_stop(self):
+        self.assertAlmostEqual(r_reward_pct(1000.0, None, _cfg()), 16.0)
 
 
 class TestEffectiveTargetPct(unittest.TestCase):
@@ -48,15 +58,23 @@ class TestResistanceCap(unittest.TestCase):
         self.assertIsNone(pct)
 
     def test_resolve_binding_resistance(self):
-        targets = resolve_exit_targets(100.0, 10, 112.0, _cfg())
+        targets = resolve_exit_targets(
+            100.0, 10, 112.0, _cfg(), stop_loss_price=88.0,
+        )
         self.assertEqual(targets["target_binding"], "resistance")
-        self.assertLess(targets["effective_target_pct"], targets["time_decay_target_pct"])
+        self.assertLess(targets["effective_target_pct"], targets["r_linked_target_pct"])
         self.assertEqual(targets["resistance_cap_active"], True)
 
-    def test_resolve_binding_time_decay(self):
-        targets = resolve_exit_targets(100.0, 10, 130.0, _cfg())
-        self.assertEqual(targets["target_binding"], "time_decay")
+    def test_resolve_binding_r_linked(self):
+        targets = resolve_exit_targets(
+            100.0, 10, 130.0, _cfg(), stop_loss_price=92.0,
+        )
+        self.assertEqual(targets["target_binding"], "r_linked")
+        self.assertAlmostEqual(targets["r_linked_target_pct"], 16.0)
+        self.assertAlmostEqual(targets["effective_target_pct"], 16.0)
         self.assertFalse(targets["resistance_cap_active"])
+        # 時間減衰は参考として残る
+        self.assertEqual(targets["time_decay_target_pct"], 20.0)
 
 
 class TestHoldConditions(unittest.TestCase):
@@ -90,19 +108,21 @@ class TestEvaluateExit(unittest.TestCase):
 
     def test_full_take_profit_without_hold(self):
         snap = {"ema25": 90, "ema75": 100, "ma25": 95, "rsi14": 50}
+        # entry 1000, stop 920 → 2R=1160 (+16%)
         result = evaluate_exit(
-            "TEST", 1000.0, 1200.0, 20.0, 1, 10, snap, persist_state=False,
+            "TEST", 1000.0, 1170.0, 17.0, 1, 10, snap,
+            stop_loss_price=920.0, persist_state=False,
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["label"], "tp_full")
         self.assertEqual(result["sell_qty"], 1)
+        self.assertEqual(result["target_binding"], "r_linked")
 
-    def test_resistance_cap_triggers_before_twenty_pct(self):
+    def test_resistance_cap_triggers_before_2r(self):
         snap = {"ema25": 90, "ema75": 100, "ma25": 95, "rsi14": 50}
-        # entry 100, resistance 112 → cap ~+10.32%
         result = evaluate_exit(
             "TEST", 100.0, 110.5, 10.5, 1, 10, snap,
-            resistance_level=112.0, persist_state=False,
+            resistance_level=112.0, stop_loss_price=88.0, persist_state=False,
         )
         self.assertIsNotNone(result)
         self.assertEqual(result["label"], "tp_full")
@@ -112,7 +132,8 @@ class TestEvaluateExit(unittest.TestCase):
     def test_partial_take_profit_with_hold(self):
         snap = {"ema25": 110, "ema75": 100, "ma25": 105, "rsi14": 55}
         result = evaluate_exit(
-            "TEST", 1000.0, 1200.0, 20.0, 6, 10, snap, persist_state=False,
+            "TEST", 1000.0, 1170.0, 17.0, 6, 10, snap,
+            stop_loss_price=920.0, persist_state=False,
         )
         self.assertEqual(result["label"], "tp_partial")
         self.assertEqual(result["sell_qty"], 3)
@@ -120,20 +141,23 @@ class TestEvaluateExit(unittest.TestCase):
     def test_extend_hold_single_share(self):
         snap = {"ema25": 110, "ema75": 100, "ma25": 105, "rsi14": 55}
         result = evaluate_exit(
-            "TEST", 1000.0, 1200.0, 20.0, 1, 10, snap, persist_state=False,
+            "TEST", 1000.0, 1170.0, 17.0, 1, 10, snap,
+            stop_loss_price=920.0, persist_state=False,
         )
         self.assertEqual(result["label"], "tp_extend_hold")
         self.assertEqual(result["sell_qty"], 0)
 
     def test_stale_soft(self):
         result = evaluate_exit(
-            "TEST", 1000.0, 1030.0, 3.0, 1, 95, None, persist_state=False,
+            "TEST", 1000.0, 1030.0, 3.0, 1, 95, None,
+            stop_loss_price=920.0, persist_state=False,
         )
         self.assertEqual(result["label"], "stale_watch")
 
     def test_stale_hard(self):
         result = evaluate_exit(
-            "TEST", 1000.0, 1050.0, 5.0, 1, 125, None, persist_state=False,
+            "TEST", 1000.0, 1050.0, 5.0, 1, 125, None,
+            stop_loss_price=920.0, persist_state=False,
         )
         self.assertEqual(result["label"], "stale_exit")
 
@@ -185,12 +209,13 @@ class TestExitSimpleState(unittest.TestCase):
 
     def test_extend_exit_after_hold_breaks(self):
         self.conn.execute(
-            "INSERT INTO exit_simple_state VALUES ('TEST', 1, 0, 20, 'now')"
+            "INSERT INTO exit_simple_state VALUES ('TEST', 1, 0, 16, 'now')"
         )
         snap = {"ema25": 90, "ema75": 100, "ma25": 95, "rsi14": 50}
         with self._patch_conn():
             result = evaluate_exit(
-                "TEST", 1000.0, 1250.0, 25.0, 3, 20, snap, persist_state=True,
+                "TEST", 1000.0, 1250.0, 25.0, 3, 20, snap,
+                stop_loss_price=920.0, persist_state=True,
             )
         self.assertEqual(result["label"], "tp_extend_exit")
         self.assertEqual(result["sell_qty"], 3)
@@ -202,6 +227,8 @@ class TestExitSimpleState(unittest.TestCase):
 
 def _cfg() -> dict:
     return {
+        "r_target_mult": 2.0,
+        "fallback_stop_loss_pct": 8.0,
         "initial_target_pct": 20.0,
         "target_decay_pct": 5.0,
         "target_decay_every_days": 30,

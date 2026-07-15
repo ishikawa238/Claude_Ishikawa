@@ -441,6 +441,25 @@ class OrderServerTestCase(unittest.TestCase):
         self.assertIn("Trend", html)
         self.assertIn("イベント", html)
 
+    def test_report_holdings_not_duplicated_with_multiple_daily_signals(self):
+        """同一銘柄に複数 strategy の daily_signals があっても保有は1行。"""
+        from datetime import date as date_cls
+
+        today_str = date_cls.today().strftime("%Y-%m-%d")
+        _test_conn.execute(
+            "INSERT INTO daily_signals (ticker, date, market, pattern, label, close, "
+            "strategy, final_score, recommend_rank) "
+            "VALUES ('AAPL', ?, 'US', NULL, 'skip', 180, 'breakout_us', 10, 'C')",
+            (today_str,),
+        )
+        _test_conn.commit()
+
+        holdings = _server_mod._fetch_dashboard_holdings(_test_conn, today_str)
+        tickers = [dict(h)["ticker"] for h in holdings]
+        self.assertEqual(tickers.count("AAPL"), 1)
+        aapl = next(dict(h) for h in holdings if dict(h)["ticker"] == "AAPL")
+        self.assertEqual(aapl["final_score"], 72)
+
     def test_report_shows_holding_earnings_event(self):
         resp = self.client.get("/report")
         html = resp.data.decode()
@@ -451,8 +470,9 @@ class OrderServerTestCase(unittest.TestCase):
     def test_report_shows_exit_simple_targets(self):
         resp = self.client.get("/report")
         html = resp.data.decode()
-        self.assertIn("シンプル利確", html)
-        self.assertIn("A・時間減衰", html)
+        self.assertIn("2R連動利確", html)
+        self.assertIn("A・2R連動", html)
+        self.assertIn("参考・時間減衰", html)
 
     def test_report_contains_chart_elements(self):
         resp = self.client.get("/report")

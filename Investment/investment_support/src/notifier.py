@@ -655,26 +655,36 @@ def _holding_block(h: dict, color: str = "", detail: bool = False) -> dict:
     eff_price = h.get("exit_effective_target_price")
     if eff_pct is not None and eff_price and current > 0:
         dist = (eff_price - current) / current * 100
+        r_mult = h.get("exit_r_target_mult", 2.0)
+        r_pct = h.get("exit_r_linked_target_pct")
+        r_price = h.get("exit_r_linked_target_price")
         time_pct = h.get("exit_time_decay_target_pct")
         time_price = h.get("exit_time_decay_target_price")
         res_pct = h.get("exit_resistance_cap_pct")
         res_price = h.get("exit_resistance_cap_price")
-        binding = h.get("exit_target_binding") or "time_decay"
+        binding = h.get("exit_target_binding") or "r_linked"
         tp_parts = []
-        if time_pct is not None and time_price:
-            dist_a = (time_price - current) / current * 100
-            mark = "→" if binding == "time_decay" else ""
-            tp_parts.append(f"{mark}A:+{time_pct:g}% {time_price:,.0f}({dist_a:+.1f}%)")
+        if r_pct is not None and r_price:
+            dist_r = (r_price - current) / current * 100
+            mark = "→" if binding == "r_linked" else ""
+            tp_parts.append(
+                f"{mark}A:{r_mult:g}R +{r_pct:g}% {r_price:,.0f}({dist_r:+.1f}%)"
+            )
         if h.get("exit_resistance_cap_active") and res_pct is not None and res_price:
             dist_b = (res_price - current) / current * 100
             mark = "→" if binding == "resistance" else ""
             tp_parts.append(f"{mark}B:+{res_pct:g}% {res_price:,.0f}({dist_b:+.1f}%)")
+        if time_pct is not None and time_price:
+            dist_a = (time_price - current) / current * 100
+            tp_parts.append(f"参考:+{time_pct:g}% {time_price:,.0f}({dist_a:+.1f}%)")
         if tp_parts:
             sub_parts.append("利確: " + " / ".join(tp_parts))
         else:
             sub_parts.append(f"利確目標: +{eff_pct:g}%（{eff_price:,.2f} / あと{dist:+.1f}%）")
         if binding == "resistance" and h.get("exit_resistance_cap_active"):
             sub_parts.append("有効=Bレジキャップ")
+        elif binding == "r_linked":
+            sub_parts.append(f"有効=A{r_mult:g}R")
         if h.get("exit_extend_active"):
             sub_parts.append("延長保有中")
         sell_q = h.get("exit_sell_qty") or 0

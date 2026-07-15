@@ -47,7 +47,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from markupsafe import escape
 
-from src.config import CONFIG
+from src.config import CONFIG, get_market_strategy
 from src.data_store import fetch_all, fetch_one, get_connection, insert_one
 from src.logger import get_logger
 from scripts.routes.api_routes import register_api_routes
@@ -60,6 +60,56 @@ _PORT = int(_SERVER_CFG.get("port", 5100))
 
 _CAP_CFG = CONFIG.get("capital", {})
 _MAX_HOLDINGS = int(_CAP_CFG.get("max_concurrent_holdings", 3))
+
+# daily_signals は (ticker, date, strategy) で複数行あり得るため、保有1件につき1行に絞る
+_HOLDINGS_DAILY_SIGNALS_JOIN = """
+LEFT JOIN daily_signals d
+  ON d.id = (
+    SELECT ds.id FROM daily_signals ds
+    WHERE ds.ticker = h.ticker
+      AND ds.date = (SELECT MAX(date) FROM daily_signals WHERE ticker = h.ticker)
+    ORDER BY
+      CASE
+        WHEN ds.strategy = CASE ds.market WHEN 'JP' THEN ? ELSE ? END THEN 0
+        ELSE 1
+      END,
+      COALESCE(ds.final_score, -1) DESC,
+      ds.id DESC
+    LIMIT 1
+  )
+"""
+
+
+def _fetch_dashboard_holdings(conn, today_str: str) -> list:
+    """ダッシュボード用の保有銘柄を取得する（daily_signals 結合による行増殖を防ぐ）。"""
+    jp_strategy = get_market_strategy("JP")
+    us_strategy = get_market_strategy("US")
+    return fetch_all(
+        conn,
+        f"""
+            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
+                   h.quantity, h.stop_loss_price,
+                   (SELECT adj_close FROM price_history
+                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
+                    ORDER BY date DESC LIMIT 1) AS current_price,
+                   (SELECT target_price FROM trade_signal_log
+                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
+                   t.rsi14, t.atr14, t.ma5, t.ma25, t.ma75, t.ma200,
+                   t.ema25, t.ema75, t.resistance_level,
+                   d.final_score, d.recommend_rank,
+                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.pattern_c_score, d.liquidity_score,
+                   u.sector
+            FROM holdings h
+            LEFT JOIN technical_snapshot t
+              ON t.ticker = h.ticker
+              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
+            {_HOLDINGS_DAILY_SIGNALS_JOIN}
+            LEFT JOIN universe_master u ON u.ticker = h.ticker
+            WHERE h.is_closed = 0
+            ORDER BY h.entry_date
+            """,
+        (today_str, jp_strategy, us_strategy),
+    )
 
 # --- USD/JPY 為替レート（1時間キャッシュ） ---
 _fx_cache: dict[str, tuple[float, float]] = {}
@@ -172,20 +222,23 @@ def _rs_score_html(rs_score) -> str:
 
 
 def _build_tp_target_html(h: dict, cp: float) -> str:
-    """保有銘柄の利確ターゲットをHTML文字列で構築する（二段表示）。"""
+    """保有銘柄の利確ターゲットをHTML文字列で構築する（2R連動 + 参考表示）。"""
     eff_pct = h.get("exit_effective_target_pct")
     if eff_pct is not None and cp > 0:
         eff_price = float(h.get("exit_effective_target_price") or 0)
+        r_mult = h.get("exit_r_target_mult", 2.0)
+        r_pct = h.get("exit_r_linked_target_pct")
+        r_price = h.get("exit_r_linked_target_price")
         time_pct = h.get("exit_time_decay_target_pct")
         time_price = h.get("exit_time_decay_target_price")
         res_pct = h.get("exit_resistance_cap_pct")
         res_price = h.get("exit_resistance_cap_price")
         res_level = h.get("exit_resistance_level")
-        binding = h.get("exit_target_binding") or "time_decay"
+        binding = h.get("exit_target_binding") or "r_linked"
         entry = float(h.get("entry_price") or 0)
         pnl_pct = (cp - entry) / entry * 100 if entry > 0 else 0
 
-        parts = ["<span class='tp-type-label'>シンプル利確</span>"]
+        parts = [f"<span class='tp-type-label'>{r_mult:g}R連動利確</span>"]
 
         def _line(
             key: str,
@@ -193,18 +246,23 @@ def _build_tp_target_html(h: dict, cp: float) -> str:
             pct,
             price,
             hint: str = "",
+            *,
+            reference: bool = False,
         ) -> None:
             if pct is None or not price:
                 return
             dist = (float(price) - cp) / cp * 100
             reached = pnl_pct >= float(pct)
-            is_binding = binding == key
+            is_binding = binding == key and not reference
             if reached:
                 css = "tp-reached"
                 marker = "&#10003; "
             elif is_binding:
                 css = "tp-active"
                 marker = "&#8594; "
+            elif reference:
+                css = "tp-reference"
+                marker = ""
             else:
                 css = "tp-pending"
                 marker = ""
@@ -215,14 +273,19 @@ def _build_tp_target_html(h: dict, cp: float) -> str:
                 f"<span class='tp-sub'>（{hint_html}あと{dist:+.1f}%）</span></span>"
             )
 
-        _line("time_decay", "A・時間減衰", time_pct, time_price)
+        _line("r_linked", f"A・{r_mult:g}R連動", r_pct, r_price)
         if h.get("exit_resistance_cap_active") and res_pct is not None:
             res_hint = f"レジ {float(res_level):,.0f} / " if res_level else ""
             _line("resistance", "B・レジキャップ", res_pct, res_price, res_hint)
+        _line("time_decay", "参考・時間減衰", time_pct, time_price, reference=True)
 
         if binding == "resistance" and h.get("exit_resistance_cap_active"):
             parts.append(
                 "<span class='tp-sub'>有効目標: B（レジスタンス・キャップ）</span>"
+            )
+        elif binding == "r_linked":
+            parts.append(
+                f"<span class='tp-sub'>有効目標: A（{r_mult:g}R連動）</span>"
             )
 
         if h.get("exit_extend_active"):
@@ -357,34 +420,7 @@ def report():
             conn,
             "SELECT * FROM market_environment ORDER BY date DESC LIMIT 1",
         )
-        holdings = fetch_all(
-            conn,
-            """
-            SELECT h.ticker, h.name, h.market, h.entry_price, h.entry_date,
-                   h.quantity, h.stop_loss_price,
-                   (SELECT adj_close FROM price_history
-                    WHERE ticker = h.ticker AND date <= ? AND is_holiday = 0
-                    ORDER BY date DESC LIMIT 1) AS current_price,
-                   (SELECT target_price FROM trade_signal_log
-                    WHERE ticker = h.ticker ORDER BY signal_date DESC LIMIT 1) AS target_price,
-                   t.rsi14, t.atr14, t.ma5, t.ma25, t.ma75, t.ma200,
-                   t.ema25, t.ema75, t.resistance_level,
-                   d.final_score, d.recommend_rank,
-                   d.trend_score, d.pattern_a_score, d.pattern_b_score, d.pattern_c_score, d.liquidity_score,
-                   u.sector
-            FROM holdings h
-            LEFT JOIN technical_snapshot t
-              ON t.ticker = h.ticker
-              AND t.date = (SELECT MAX(date) FROM technical_snapshot WHERE ticker = h.ticker)
-            LEFT JOIN daily_signals d
-              ON d.ticker = h.ticker
-              AND d.date = (SELECT MAX(date) FROM daily_signals WHERE ticker = h.ticker)
-            LEFT JOIN universe_master u ON u.ticker = h.ticker
-            WHERE h.is_closed = 0
-            ORDER BY h.entry_date
-            """,
-            (today_str,),
-        )
+        holdings = _fetch_dashboard_holdings(conn, today_str)
         candidates = fetch_all(
             conn,
             """
@@ -1257,10 +1293,14 @@ def _render_report(today_str, market_env, holdings, candidates, market_history, 
                     holding_days = (date.today() - entry_dt).days
                 _targets = resolve_exit_targets(
                     ep, holding_days, h.get("resistance_level"),
+                    stop_loss_price=sl if sl > 0 else None,
                 )
                 h_merged.update({
                     "exit_effective_target_pct": _targets.get("effective_target_pct"),
                     "exit_effective_target_price": _targets.get("effective_target_price"),
+                    "exit_r_target_mult": _targets.get("r_target_mult"),
+                    "exit_r_linked_target_pct": _targets.get("r_linked_target_pct"),
+                    "exit_r_linked_target_price": _targets.get("r_linked_target_price"),
                     "exit_time_decay_target_pct": _targets.get("time_decay_target_pct"),
                     "exit_time_decay_target_price": _targets.get("time_decay_target_price"),
                     "exit_resistance_cap_pct": _targets.get("resistance_cap_pct"),
@@ -2082,19 +2122,25 @@ def _build_rules_context() -> dict:
                 f"損切りはサポートライン下（バッファ {_cfg_float(swing, 'support_stop_buffer_pct', 1.0):.1f}%）を優先します。",
                 f"サポートが不明な場合は ATR x {_cfg_float(sig, 'atr_stop_multiplier', 2.0):.1f} を使います。",
                 (
-                    f"利確目標A（時間減衰）: 保有日数で段階的に低下（"
+                    f"利確目標A（{ _cfg_float(exit_cfg, 'r_target_mult', 2.0):.0f}R連動）: "
+                    f"損切り幅 × {_cfg_float(exit_cfg, 'r_target_mult', 2.0):.0f}。"
+                    f"損切り不明時は fallback {_cfg_float(exit_cfg, 'fallback_stop_loss_pct', 8):.0f}% を1Rとして計算。"
+                    "レジスタンス・キャップが近い場合はそちらを有効目標にする。"
+                ),
+                (
+                    f"参考・時間減衰目標（判定には使わない）: 保有日数で段階的に低下（"
                     f"+{_cfg_float(exit_cfg, 'initial_target_pct', 20):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'initial_target_pct', 20) - 2 * _cfg_float(exit_cfg, 'target_decay_pct', 5):.0f}%"
                     f"→+{_cfg_float(exit_cfg, 'target_floor_pct', 5):.0f}%、"
-                    f"{_cfg_int(exit_cfg, 'target_decay_every_days', 30)}日ごと）。"
+                    f"{_cfg_int(exit_cfg, 'target_decay_every_days', 30)}日ごと）。ダッシュボード参考表示のみ。"
                 ),
                 (
                     "利確目標B（レジスタンス・キャップ）: 推定レジスタンスの手前で目標%を引き下げ。"
                     f"バッファ {_cfg_float(exit_cfg.get('resistance_cap', {}), 'buffer_pct', 1.5):.1f}%、"
                     f"適用範囲 +{_cfg_float(exit_cfg.get('resistance_cap', {}), 'min_reward_pct', 8):.0f}%〜"
                     f"+{_cfg_float(exit_cfg.get('resistance_cap', {}), 'ignore_if_above_pct', 25):.0f}%。"
-                    "AとBのうち近い方が有効目標。"
+                    "2Rより近い場合はBが有効目標。"
                 ),
                 (
                     f"目標到達時: 延長条件（EMA25>EMA75 / MA25上 / RSI≤"

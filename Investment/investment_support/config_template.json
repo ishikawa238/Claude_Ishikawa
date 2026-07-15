@@ -43,9 +43,11 @@
     "support_stop_buffer_pct": 1.0
   },
 
-  "_exit_simple_comment": "保有銘柄のシンプル利確ルール。時間減衰目標 + トレンド延長 + 長期停滞手仕舞い。",
+  "_exit_simple_comment": "保有銘柄の利確ルール。有効目標=2R連動。時間減衰(20%→…)はダッシュボード参考表示のみ。",
   "exit_simple": {
     "enabled": true,
+    "r_target_mult": 2.0,
+    "fallback_stop_loss_pct": 8.0,
     "initial_target_pct": 20.0,
     "target_decay_pct": 5.0,
     "target_decay_every_days": 30,

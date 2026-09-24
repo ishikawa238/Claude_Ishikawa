@@ -8,7 +8,7 @@
 - 利確目安（リスクリワード 2:1）
 - 推奨投入額（総資金 × 2% / 損切り幅）
 - 投入額の上限制御（総資金・同時保有上限）
-- 警告フラグ（損切り幅が狭すぎ / 広すぎ）
+- 損切り幅フィルタ（下限未満 / 上限超は除外。パターンCのサポートが遠すぎる場合は ATR 基準に切替）
 """
 
 import json
@@ -52,17 +52,32 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
     support = signal.get("support_level")
     buffer_pct = float(swing_cfg.get("support_stop_buffer_pct", 1.0))
 
+    stop_loss_price = None
     if pattern == "C" and support and float(support) > 0:
-        stop_loss_price = float(support) * (1 - buffer_pct / 100)
-    elif atr14 > 0:
-        stop_loss_price = entry_price - atr14 * settings["atr_mult"]
-    else:
-        stop_loss_price = entry_price * (1 - settings["default_stop_loss_pct"] / 100)
+        support_stop = float(support) * (1 - buffer_pct / 100)
+        support_pct = (entry_price - support_stop) / entry_price * 100
+        if support_pct <= settings["warn_max_pct"] or atr14 <= 0:
+            stop_loss_price = support_stop
+        else:
+            logger.info(
+                f"サポート基準の損切り幅が広すぎるため ATR 基準に切替: "
+                f"{ticker}（サポート {support_pct:.1f}%）"
+            )
+    if stop_loss_price is None:
+        if atr14 > 0:
+            stop_loss_price = entry_price - atr14 * settings["atr_mult"]
+        else:
+            stop_loss_price = entry_price * (1 - settings["default_stop_loss_pct"] / 100)
     stop_loss_pct   = (entry_price - stop_loss_price) / entry_price * 100
 
     # 損切り幅が1%未満 → エントリー候補から除外
     if stop_loss_pct < settings["warn_min_pct"]:
         logger.info(f"損切り幅が狭すぎるため除外: {ticker}（{stop_loss_pct:.2f}%）")
+        return {}
+
+    # 損切り幅が上限超 → エントリー候補から除外（高ボラティリティで管理不能）
+    if stop_loss_pct > settings["warn_max_pct"]:
+        logger.info(f"損切り幅が広すぎるため除外: {ticker}（{stop_loss_pct:.2f}%）")
         return {}
 
     # 利確目安: リスクリワード 2:1

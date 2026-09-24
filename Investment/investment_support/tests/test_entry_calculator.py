@@ -126,12 +126,30 @@ class CalcEntrySetStopLossFilterTests(ConfigPatchMixin, unittest.TestCase):
         result = calc_entry_set(sig)
         self.assertEqual(result, {})
 
-    def test_wide_stop_loss_warns(self):
-        """損切り幅が15%超の場合は候補に残るが警告"""
+    def test_wide_stop_loss_excluded(self):
+        """損切り幅が15%超の場合は候補から除外"""
         sig = _make_signal(close=2500.0, atr14=250.0)  # SL幅 = 20%
         result = calc_entry_set(sig)
-        self.assertNotEqual(result, {})
-        self.assertTrue(result.get("_warn_wide"))
+        self.assertEqual(result, {})
+
+    def test_pattern_c_uses_support_when_within_limit(self):
+        """パターンC: サポート基準の損切り幅が上限内ならサポートを使う"""
+        sig = _make_signal(pattern="C", close=1000.0, atr14=30.0, support_level=950.0)
+        result = calc_entry_set(sig)
+        self.assertAlmostEqual(result["stop_loss_price"], 940.5)  # 950 × 0.99
+
+    def test_pattern_c_falls_back_to_atr_when_support_too_far(self):
+        """パターンC: サポートが遠すぎる（74%）場合は ATR 基準に切り替える"""
+        sig = _make_signal(pattern="C", close=1000.0, atr14=50.0, support_level=260.0)
+        result = calc_entry_set(sig)
+        self.assertAlmostEqual(result["stop_loss_price"], 900.0)  # 1000 - 50 × 2
+        self.assertAlmostEqual(result["stop_loss_pct"], 10.0)
+
+    def test_pattern_c_excluded_when_atr_also_too_wide(self):
+        """パターンC: ATR 基準でも上限超なら除外"""
+        sig = _make_signal(pattern="C", close=1000.0, atr14=100.0, support_level=260.0)
+        result = calc_entry_set(sig)
+        self.assertEqual(result, {})
 
     def test_normal_stop_loss_no_warning(self):
         """損切り幅が正常範囲では警告なし"""

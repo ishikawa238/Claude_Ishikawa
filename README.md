@@ -13,7 +13,7 @@
 | `EnglishDaily/` | 英語学習習慣化システム。曜日別カリキュラムを毎朝 Slack に配信し、連続学習日数（ストリーク）を管理する。 |
 | `MorningPlaylist/` | 英語ポッドキャスト自動再生システム。Spotify API で最新エピソードをプレイリストに入れ替え、Spotify Connect で Echo に再生開始する。 |
 | `watchdog/` | 横断監視スクリプト。全システムの SQLite DB を巡回し、バッチ未実行や致命的エラーを検知して Slack に通知する。 |
-| `shared/` | 共通モジュール（config, db, slack, logger, net）。各システムから `pip install -e "../../[slack]"` で利用する。 |
+| `shared/` | 共通モジュール（config, db, slack, logger, net）。各システムから `pip install -e "../../[slack]"` で利用する。`logger` は環境変数 `SHARED_LOG_DIR` でログ出力先を上書きできる（テスト用）。 |
 | `claude-study/` | Claude Code の練習用プロジェクト。CLI 電卓と CSV 集計ツール。 |
 
 ## Slack 通知スケジュール

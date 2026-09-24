@@ -7,11 +7,16 @@
 
 import io
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from shared.config import get_config
+
+# ログ出力先を config より優先して差し替える環境変数。
+# テスト実行が本番の batch_YYYYMMDD.log を汚さないようにするために使う。
+LOG_DIR_ENV = "SHARED_LOG_DIR"
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -41,7 +46,9 @@ def get_logger(name: str) -> logging.Logger:
     logger.addHandler(console_handler)
 
     # ファイルハンドラ
-    log_dir = Path(cfg.get("logging", {}).get("log_dir", "./logs"))
+    log_dir = Path(
+        os.environ.get(LOG_DIR_ENV) or cfg.get("logging", {}).get("log_dir", "./logs")
+    )
     log_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y%m%d")
     log_file = log_dir / f"batch_{today}.log"

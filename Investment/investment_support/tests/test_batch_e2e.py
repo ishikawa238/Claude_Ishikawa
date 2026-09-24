@@ -73,6 +73,7 @@ _CONFIG_MOCK = {
 import src.config as _src_config
 _src_config.CONFIG = _CONFIG_MOCK
 
+from scripts.init_db import apply_schema
 from src.technical_calculator import calculate_and_save_snapshots, calculate_index_mas
 from src.signal_detector import detect_and_save_signals
 from src import notifier as _notifier_module
@@ -82,190 +83,18 @@ from src import notifier as _notifier_module
 # DB セットアップヘルパー
 # ============================================================
 
-_DDL = [
-    # universe_master（FK 対象）
-    """CREATE TABLE IF NOT EXISTS universe_master (
-        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker             TEXT    NOT NULL,
-        name               TEXT    NOT NULL,
-        market             TEXT    NOT NULL,
-        exchange           TEXT,
-        shares_outstanding REAL,
-        is_active          INTEGER NOT NULL DEFAULT 1,
-        is_excluded        INTEGER NOT NULL DEFAULT 0,
-        exclude_reason     TEXT,
-        last_updated       DATE    NOT NULL,
-        created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_um_ticker ON universe_master(ticker)",
-
-    # price_history
-    """CREATE TABLE IF NOT EXISTS price_history (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker     TEXT    NOT NULL,
-        date       DATE    NOT NULL,
-        open       REAL,
-        high       REAL,
-        low        REAL,
-        close      REAL,
-        adj_close  REAL,
-        volume     REAL,
-        is_holiday INTEGER NOT NULL DEFAULT 0,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ph_ticker_date ON price_history(ticker, date)",
-
-    # index_snapshot
-    """CREATE TABLE IF NOT EXISTS index_snapshot (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        index_code  TEXT    NOT NULL,
-        date        DATE    NOT NULL,
-        close       REAL    NOT NULL,
-        ma25        REAL,
-        ma75        REAL,
-        ma200       REAL,
-        ma25_5d_ago REAL,
-        created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_is_code_date ON index_snapshot(index_code, date)",
-
-    # technical_snapshot
-    """CREATE TABLE IF NOT EXISTS technical_snapshot (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker         TEXT    NOT NULL,
-        date           DATE    NOT NULL,
-        ma5            REAL,
-        ma25           REAL,
-        ma75           REAL,
-        ma200          REAL,
-        ma5_5d_ago     REAL,
-        ma25_5d_ago    REAL,
-        ma200_5d_ago   REAL,
-        vol_20d_avg    REAL,
-        high_20d       REAL,
-        high_52w       REAL,
-        low_52w        REAL,
-        return_5d      REAL,
-        return_20d     REAL,
-        rsi14          REAL,
-        atr14          REAL,
-        volatility_20d REAL,
-        est_turnover      REAL,
-        est_market_cap    REAL,
-        weekly_ma25       REAL,
-        weekly_ma25_5w_ago REAL,
-        parabolic_sar     REAL,
-        sar_direction     TEXT,
-        support_level     REAL,
-        resistance_level  REAL,
-        ema25             REAL,
-        ema75             REAL,
-        macd_diff         REAL,
-        macd_dea          REAL,
-        macd_hist         REAL,
-        macd_diff_prev    REAL,
-        macd_dea_prev     REAL,
-        macd_hist_prev    REAL,
-        created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ts_ticker_date ON technical_snapshot(ticker, date)",
-
-    # daily_signals（マイグレーション後のカラム構成）
-    """CREATE TABLE IF NOT EXISTS daily_signals (
-        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-        ticker                  TEXT    NOT NULL,
-        date                    DATE    NOT NULL,
-        market                  TEXT    NOT NULL,
-        pattern                 TEXT,
-        label                   TEXT    NOT NULL,
-        cond_a_ma200_rising     INTEGER,
-        cond_a_ma_aligned       INTEGER,
-        cond_a_52w_high_near    INTEGER,
-        cond_a_volume_surge     INTEGER,
-        cond_a_rsi_ok           INTEGER,
-        cond_a_above_ma25       INTEGER,
-        cond_b_ma200_rising     INTEGER,
-        cond_b_ma_aligned       INTEGER,
-        cond_b_pullback_touched INTEGER,
-        cond_b_bounced          INTEGER,
-        cond_b_ma25_rising      INTEGER,
-        cond_b_rsi_ok           INTEGER,
-        cond_c_weekly_uptrend   INTEGER,
-        cond_c_at_support       INTEGER,
-        cond_c_rsi_oversold     INTEGER,
-        cond_c_sar_reversal     INTEGER,
-        macd_confirm_type       TEXT,
-        close                   REAL,
-        rsi14                   REAL,
-        atr14                   REAL,
-        vol_ratio               REAL,
-        rs_rank                 INTEGER,
-        trend_score             REAL,
-        pattern_a_score         REAL,
-        pattern_b_score         REAL,
-        pattern_c_score         REAL,
-        liquidity_score         REAL,
-        base_score              REAL,
-        market_multiplier       REAL,
-        final_score             REAL,
-        recommend_rank          TEXT,
-        recommend_reason        TEXT,
-        market_mode             TEXT,
-        created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ds_ticker_date ON daily_signals(ticker, date)",
-
-    # trade_signal_log（fetch_near_misses の LEFT JOIN 用）
-    """CREATE TABLE IF NOT EXISTS trade_signal_log (
-        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-        signal_date        DATE    NOT NULL,
-        ticker             TEXT    NOT NULL,
-        name               TEXT,
-        market             TEXT    NOT NULL,
-        pattern            TEXT    NOT NULL,
-        entry_price        REAL    NOT NULL,
-        stop_loss_price    REAL    NOT NULL,
-        stop_loss_pct      REAL    NOT NULL,
-        target_price       REAL    NOT NULL,
-        recommended_amount REAL,
-        market_mode        TEXT    NOT NULL,
-        conditions_met     TEXT,
-        created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-
-    # report_log（notifier._send が INSERT する）
-    """CREATE TABLE IF NOT EXISTS report_log (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        report_date  DATE    NOT NULL,
-        report_type  TEXT    NOT NULL,
-        content      TEXT    NOT NULL,
-        slack_status TEXT,
-        created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""",
-
-    # batch_run_log（notifier._get_data_freshness が参照）
-    """CREATE TABLE IF NOT EXISTS batch_run_log (
-        id                INTEGER PRIMARY KEY AUTOINCREMENT,
-        run_date          DATE    NOT NULL,
-        batch_type        TEXT    NOT NULL,
-        start_time        DATETIME,
-        end_time          DATETIME,
-        status            TEXT,
-        total_tickers     INTEGER DEFAULT 0,
-        failed_tickers    INTEGER DEFAULT 0,
-        signals_generated INTEGER DEFAULT 0,
-        memo              TEXT
-    )""",
-]
-
 
 def _build_in_memory_db() -> sqlite3.Connection:
-    """全テーブルを含むインメモリ DB 接続を返す。"""
+    """全テーブルを含むインメモリ DB 接続を返す。
+
+    スキーマは scripts.init_db の DDL / マイグレーションをそのまま適用する。
+    テスト側で DDL を複製すると本番スキーマとずれて偽の失敗が出るため。
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = OFF")  # FK チェックはテスト不要
-    for ddl in _DDL:
-        conn.execute(ddl)
+    apply_schema(conn)
+    conn.execute("PRAGMA foreign_keys = OFF")  # マイグレーションが ON に戻す場合がある
     conn.commit()
     return conn
 
@@ -486,7 +315,7 @@ class TestSignalDetectorPipeline(unittest.TestCase):
         return base
 
     def test_signals_are_saved_to_daily_signals(self):
-        """1 銘柄を渡すと daily_signals に 1 件保存されること。"""
+        """1 銘柄を渡すと daily_signals に戦略ごとの行が保存されること。"""
         screened = [self._make_screened_ticker()]
 
         with patch("src.signal_detector.get_connection", self._fake_conn), \
@@ -494,10 +323,13 @@ class TestSignalDetectorPipeline(unittest.TestCase):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 
         rows = self.conn.execute(
-            "SELECT ticker, label, cond_c_weekly_uptrend FROM daily_signals WHERE date = ?",
+            "SELECT ticker, strategy, label FROM daily_signals WHERE date = ?",
             (_TARGET_DATE.strftime("%Y-%m-%d"),),
         ).fetchall()
-        self.assertEqual(len(rows), 1, "1 銘柄分のシグナル行が保存されるはず")
+        self.assertEqual({r["ticker"] for r in rows}, {_TICKER_JP},
+                         "1 銘柄分のシグナル行が保存されるはず")
+        # daily_signals は (ticker, date, strategy) で一意なのでスイングとブレイクアウトが並ぶ
+        self.assertEqual({r["strategy"] for r in rows}, {"swing_jp", "breakout_jp"})
 
     def test_daily_signals_has_swing_fields(self):
         """保存された行にスイング条件フィールドが含まれること。"""
@@ -508,7 +340,8 @@ class TestSignalDetectorPipeline(unittest.TestCase):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 
         row = self.conn.execute(
-            "SELECT cond_c_weekly_uptrend, cond_c_rsi_oversold, market_mode FROM daily_signals LIMIT 1"
+            "SELECT cond_c_weekly_uptrend, cond_c_rsi_oversold, market_mode "
+            "FROM daily_signals WHERE strategy = 'swing_jp' LIMIT 1"
         ).fetchone()
         self.assertEqual(row["cond_c_weekly_uptrend"], 1)
         self.assertEqual(row["market_mode"], "normal")
@@ -521,7 +354,9 @@ class TestSignalDetectorPipeline(unittest.TestCase):
              patch("src.data_store.get_connection", self._fake_conn):
             result = detect_and_save_signals(screened, _TARGET_DATE, "caution")
 
-        row = self.conn.execute("SELECT label FROM daily_signals LIMIT 1").fetchone()
+        row = self.conn.execute(
+            "SELECT label FROM daily_signals WHERE strategy = 'swing_jp' LIMIT 1"
+        ).fetchone()
         self.assertIsNotNone(row)
         self.assertNotEqual(row["label"], "candidate",
                             "caution モードでは candidate が存在しないはず")
@@ -587,12 +422,13 @@ class TestFullPipelineIntegration(unittest.TestCase):
              patch("src.data_store.get_connection", self._fake_conn):
             detect_and_save_signals(screened, _TARGET_DATE, "normal")
 
-        # STEP 4: daily_signals に 2 件保存されていること
+        # STEP 4: daily_signals に 2 銘柄分保存されていること（行数は戦略数だけ増える）
         sig_rows = self.conn.execute(
-            "SELECT ticker, label FROM daily_signals WHERE date = ?",
+            "SELECT ticker, strategy, label FROM daily_signals WHERE date = ?",
             (_TARGET_DATE.strftime("%Y-%m-%d"),),
         ).fetchall()
-        self.assertEqual(len(sig_rows), 2, "2 銘柄分のシグナル行が保存されるはず")
+        self.assertEqual({r["ticker"] for r in sig_rows}, {_TICKER_JP, _TICKER_JP2},
+                         "2 銘柄分のシグナル行が保存されるはず")
 
     def test_notifier_builds_evening_message_without_exception(self):
         """

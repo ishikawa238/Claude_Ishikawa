@@ -677,6 +677,56 @@ DATA_MIGRATION_STATEMENTS = [
 # 初期化処理
 # ============================================================
 
+def apply_schema(conn: sqlite3.Connection) -> int:
+    """
+    渡された接続に全テーブルの DDL とマイグレーションを適用する（冪等）。
+
+    init_db() とテストの両方から呼び出し、スキーマ定義をこのモジュールに一本化する。
+    返り値: CREATE TABLE を実行した（または存在を確認した）テーブル数
+    """
+    success_count = 0
+    deferred_indexes: list[str] = []
+
+    for i, ddl in enumerate(DDL_STATEMENTS, start=1):
+        stmt = ddl.strip()
+        if not stmt:
+            continue
+        try:
+            conn.execute(stmt)
+            # CREATE TABLE / INDEX の場合のみカウント表示
+            if stmt.upper().startswith("CREATE TABLE"):
+                table_name = _extract_table_name(stmt)
+                logger.info(f"  テーブル作成（または確認）: {table_name}")
+                success_count += 1
+            elif stmt.upper().startswith("CREATE"):
+                pass  # インデックスは個別表示しない
+        except sqlite3.Error as e:
+            # CREATE INDEX はマイグレーション追加カラムに依存する場合があるため、
+            # エラー時はマイグレーション後にリトライする
+            if stmt.upper().lstrip().startswith("CREATE INDEX") or \
+               stmt.upper().lstrip().startswith("CREATE UNIQUE INDEX"):
+                deferred_indexes.append(stmt)
+                logger.debug(f"  インデックス作成をマイグレーション後に延期: {stmt[:60]}...")
+            else:
+                logger.error(f"  DDL実行エラー（ステップ{i}）: {e}\n  SQL: {stmt[:80]}...")
+                raise
+
+    _run_migrations(conn)
+
+    # マイグレーション後に延期されたインデックスをリトライ
+    for stmt in deferred_indexes:
+        try:
+            conn.execute(stmt)
+            logger.info(f"  延期インデックス作成成功: {stmt.strip()[:60]}")
+        except sqlite3.OperationalError as e:
+            if "already exists" in str(e).lower():
+                pass
+            else:
+                logger.warning(f"  延期インデックス作成失敗: {e}")
+
+    return success_count
+
+
 def init_db() -> None:
     """DB を初期化する。テーブルが既に存在する場合はスキップされる（冪等）。"""
     db_path = Path(CONFIG["database"]["db_path"])
@@ -689,47 +739,7 @@ def init_db() -> None:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
 
-        success_count = 0
-        skip_count = 0
-        deferred_indexes: list[str] = []
-
-        for i, ddl in enumerate(DDL_STATEMENTS, start=1):
-            stmt = ddl.strip()
-            if not stmt:
-                continue
-            try:
-                conn.execute(stmt)
-                # CREATE TABLE / INDEX の場合のみカウント表示
-                if stmt.upper().startswith("CREATE TABLE"):
-                    table_name = _extract_table_name(stmt)
-                    logger.info(f"  テーブル作成（または確認）: {table_name}")
-                    success_count += 1
-                elif stmt.upper().startswith("CREATE"):
-                    pass  # インデックスは個別表示しない
-            except sqlite3.Error as e:
-                # CREATE INDEX はマイグレーション追加カラムに依存する場合があるため、
-                # エラー時はマイグレーション後にリトライする
-                if stmt.upper().lstrip().startswith("CREATE INDEX") or \
-                   stmt.upper().lstrip().startswith("CREATE UNIQUE INDEX"):
-                    deferred_indexes.append(stmt)
-                    logger.debug(f"  インデックス作成をマイグレーション後に延期: {stmt[:60]}...")
-                else:
-                    logger.error(f"  DDL実行エラー（ステップ{i}）: {e}\n  SQL: {stmt[:80]}...")
-                    conn.close()
-                    raise
-
-        _run_migrations(conn)
-
-        # マイグレーション後に延期されたインデックスをリトライ
-        for stmt in deferred_indexes:
-            try:
-                conn.execute(stmt)
-                logger.info(f"  延期インデックス作成成功: {stmt.strip()[:60]}")
-            except sqlite3.OperationalError as e:
-                if "already exists" in str(e).lower():
-                    pass
-                else:
-                    logger.warning(f"  延期インデックス作成失敗: {e}")
+        success_count = apply_schema(conn)
 
         conn.commit()
         logger.info(f"DB初期化完了: テーブル {success_count} 件を作成（または確認）しました。")

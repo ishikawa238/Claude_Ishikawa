@@ -376,6 +376,11 @@ python -m unittest discover -s tests        # 全テスト実行
 python -m unittest tests.test_notifier      # 個別テスト
 ```
 
+- テストのログは本番の `logs/batch_YYYYMMDD.log` ではなく一時ディレクトリに出力される
+  （`tests/__init__.py` が環境変数 `SHARED_LOG_DIR` を設定する）。
+- E2Eテスト（`tests/test_batch_e2e.py`）のインメモリDBは `scripts.init_db.apply_schema()` で作る。
+  テスト側にDDLを複製すると本番スキーマとずれるため、スキーマ定義は `scripts/init_db.py` に一本化している。
+
 ## 関連ドキュメント
 
 ドキュメントは [docs/](docs/) フォルダに集約しています。

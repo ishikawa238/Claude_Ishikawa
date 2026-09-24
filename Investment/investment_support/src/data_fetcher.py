@@ -35,6 +35,9 @@ _INTERVAL = float(CONFIG["eodhd"].get("request_interval_sec", 0.5))
 _MAX_RETRIES = 3
 _RETRY_WAIT_SEC = 5
 _EODHD_FUNDAMENTALS_DISABLED = False
+# false の場合は HTTP を送らず即座に失敗扱いにし、呼び出し元の yfinance フォールバックに任せる
+_ENABLED = str(CONFIG["eodhd"].get("enabled", True)).lower() not in ("false", "0", "no")
+_disabled_logged = False
 
 # 市場インデックスのティッカー定義
 INDEX_TICKERS = {
@@ -61,6 +64,13 @@ def _get(url: str, params: dict) -> Optional[list | dict]:
     GET リクエストを送信する。失敗した場合は最大3回リトライする。
     返り値: JSONのリストまたは辞書。失敗時は None。
     """
+    if not _ENABLED:
+        global _disabled_logged
+        if not _disabled_logged:
+            logger.info("EODHD は無効（eodhd.enabled=false）のため呼び出しをスキップします")
+            _disabled_logged = True
+        return None
+
     params["api_token"] = _API_KEY
     params["fmt"] = "json"
 

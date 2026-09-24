@@ -96,6 +96,25 @@ class TradingCalendarTestCase(unittest.TestCase):
         d = resolve_snapshot_date(date(2026, 5, 30), "JP", rows)
         self.assertEqual(d, date(2026, 5, 29))
 
+    def test_resolve_snapshot_date_prefers_latest_covered_date(self):
+        """取引の薄い銘柄で直近日の行が欠けても、半分以上揃っていれば最新日を使う"""
+        rows = (
+            [{"date": "2026-09-21", "ticker": f"T{i}"} for i in range(100)]
+            + [{"date": "2026-09-22", "ticker": f"T{i}"} for i in range(80)]
+            + [{"date": "2026-09-23", "ticker": f"T{i}"} for i in range(60)]
+        )
+        d = resolve_snapshot_date(date(2026, 9, 24), "US", rows)
+        self.assertEqual(d, date(2026, 9, 23))
+
+    def test_resolve_snapshot_date_ignores_sparse_latest_date(self):
+        """件数が最多日の半分未満の日付（紛れ込んだ1件など）は採用しない"""
+        rows = (
+            [{"date": "2026-09-23", "ticker": f"T{i}"} for i in range(100)]
+            + [{"date": "2026-09-24", "ticker": "T0"}]
+        )
+        d = resolve_snapshot_date(date(2026, 9, 24), "US", rows)
+        self.assertEqual(d, date(2026, 9, 23))
+
     @patch("src.market_filter._fetch_liquidity_candidates", return_value=[])
     def test_diagnose_date_mismatch(self, _fetch):
         msg = diagnose_screening_empty(date(2026, 5, 30), "JP")

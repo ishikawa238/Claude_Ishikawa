@@ -1,10 +1,12 @@
 {
   "_comment": "このファイルをコピーして config.json を作成してください。config.json は Git にコミットしないでください。",
 
+  "_eodhd_comment": "enabled=false で EODHD を呼ばず yfinance のみで動作する（指数・価格は自動で yfinance にフォールバック）。有効なデータ契約がない場合は false にする。",
   "eodhd": {
     "api_key": "YOUR_EODHD_API_KEY",
     "base_url": "https://eodhd.com/api",
-    "request_interval_sec": 0.5
+    "request_interval_sec": 0.5,
+    "enabled": true
   },
 
   "slack": {
@@ -98,6 +100,12 @@
     "volume_ratio_min": 1.5,
     "max_candidates_per_batch": 1,
     "min_rs_score": null
+  },
+
+  "_market_filter_comment": "市場環境モード: per_market_mode=true で日本株は日経平均のみ、米国株は S&P500 のみで判定（他市場の下落で巻き添えに停止しない）。false で従来の全体モードに戻る。index_max_stale_days は指数データの許容鮮度（日）で、これより古い場合は判定不能=警戒扱い。0 で無効。",
+  "market_filter": {
+    "per_market_mode": true,
+    "index_max_stale_days": 5
   },
 
   "signal": {

@@ -8,6 +8,9 @@ from datetime import date
 
 from src.data_store import fetch_one, get_connection
 
+# 判定日として採用するのに必要な件数（最多日付の件数に対する比率）
+_MIN_DATE_COVERAGE_RATIO = 0.5
+
 
 def latest_price_date_for_market(target_date: date, market: str) -> date | None:
     """
@@ -39,14 +42,19 @@ def resolve_snapshot_date(
     """
     テクニカル・スクリーニングに使う日付を決める。
 
-    1. 当日取得した価格行があれば、その最多日付
+    1. 当日取得した価格行があれば、最多日付の半分以上の件数がある日付のうち最新の日
     2. なければ DB 上の最新価格日
     3. どちらもなければ None
+
+    最多日付をそのまま使わないのは、yfinance が約定のない日の行を返さないため。
+    取引の薄い銘柄ほど直近日の行が欠け、最多日付が 1〜2 営業日古い日になってしまう。
+    半分未満の日付（誤って紛れ込んだ 1 件だけの日など）は採用しない。
     """
     if fetched_rows:
         from collections import Counter
 
         date_counts = Counter(r["date"] for r in fetched_rows if r.get("date"))
         if date_counts:
-            return date.fromisoformat(max(date_counts, key=date_counts.get))
+            threshold = max(date_counts.values()) * _MIN_DATE_COVERAGE_RATIO
+            return date.fromisoformat(max(d for d, n in date_counts.items() if n >= threshold))
     return latest_price_date_for_market(calendar_date, market)

@@ -8,6 +8,7 @@
 |---------|------|
 | [system_overview_and_strategy.md](system_overview_and_strategy.md) | **システム概要と投資戦略のまとめ** |
 | [jp_price_sources.md](jp_price_sources.md) | 日本株価格データの取得元候補 |
+| [investment_committee_requirements.md](investment_committee_requirements.md) | 投資委員会（マルチエージェント判断支援）の要件定義（Phase 1 実装前） |
 | [../README.md](../README.md) | セットアップ・日常運用・機能一覧 |
 | [../investment_support/SETUP.md](../investment_support/SETUP.md) | セットアップ手順 |
 

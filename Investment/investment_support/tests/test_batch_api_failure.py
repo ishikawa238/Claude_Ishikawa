@@ -154,6 +154,7 @@ def _evening_patches(**overrides) -> list:
         "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),
         "src.news_fetcher.fetch_ticker_news": MagicMock(return_value=[]),
         "src.llm_advisor.get_llm_feedback": MagicMock(return_value=[]),
+        "src.committee.run_committee": MagicMock(return_value=None),
     }
     defaults.update(overrides)
     return [patch(target, mock) for target, mock in defaults.items()]
@@ -195,6 +196,7 @@ def _morning_patches(**overrides) -> list:
         "src.news_fetcher.fetch_market_news": MagicMock(return_value=[]),
         "src.news_fetcher.fetch_ticker_news": MagicMock(return_value=[]),
         "src.llm_advisor.get_llm_feedback": MagicMock(return_value=[]),
+        "src.committee.run_committee": MagicMock(return_value=None),
     }
     defaults.update(overrides)
     return [patch(target, mock) for target, mock in defaults.items()]

@@ -36,6 +36,7 @@
 - ペーパートレードはシグナル当日の終値ではなく、翌営業日の始値で仮想約定し、約定当日は利確・損切り判定を行わない
 - Prompt Builder（`http://127.0.0.1:5100/prompt-builder`）：売却・購入判断などの相談用プロンプトを生成。購入判断テーマでは複数の買い候補をまとめて選択し、比較・優先順位の相談が可能。Screening から `?from=screening&tickers=...` で遷移すると銘柄が自動選択される
 - LLMアドバイザー（任意）：検討候補・保有銘柄のデータに加え、直近の市場ニュースをChatGPT・Claude・Geminiに自動送信し、フィードバックをSlack通知に表示
+- AI投資委員会（任意・既定OFF）：買い候補と売り検討/損切り接近の保有銘柄を、マクロ・ファンダメンタル・テクニカル・リスクの各エージェントが独立に評価 → リスク・マネージャーが強気意見に反論 → ポートフォリオ・マネージャーが BUY/WAIT/SKIP（保有は HOLD/REDUCE/SELL）を判定し、Slack 通知に表示。日次予算ガード・同日キャッシュ・推定コスト記録付き（`config.json` の `committee` セクション。要件は [docs/investment_committee_requirements.md](docs/investment_committee_requirements.md)）
 
 ## セットアップ
 
@@ -98,6 +99,15 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 ```
 
 切り替えは `/settings` 画面または `config.json` の編集で行う。`strategy_mode = "defensive"` のときは挙動が完全に現行互換となるよう実装されている。
+
+### AI投資委員会の有効化（任意）
+
+1. `python -m scripts.init_db` を実行し、委員会用テーブルを作成する（冪等）
+2. `config_template.json` の `committee` セクションを `config.json` にコピーし、`enabled` を `true` にする
+3. 使うプロバイダーの API キーを `llm.<provider>.api_key` に設定する（`llm.enabled` が `false` でも委員会は使える）
+4. `pricing_usd_per_1m` を実際のモデル単価に合わせる（推定コストと日次予算 `daily_budget_jpy` の計算に使う）
+
+PM（`agents.pm`）の API キーが未設定の場合、委員会は開催されず従来どおりの通知になる。
 
 ## 日常の使い方
 
@@ -272,6 +282,9 @@ investment_support/
 │   ├── paper_trading.py      # ペーパートレード（仮想売買記録・日次更新）
 │   ├── notifier.py           # Slack通知生成・送信
 │   ├── llm_advisor.py        # LLMアドバイザー（ChatGPT/Claude/Gemini自動フィードバック）
+│   ├── committee.py          # AI投資委員会（マルチエージェント判定）オーケストレータ
+│   ├── committee_prompts.py  # 委員会のプロンプト・入力整形・出力スキーマ
+│   ├── fundamentals_fetcher.py  # yfinance 財務指標取得（日次キャッシュ）
 │   ├── news_fetcher.py       # ニュース取得（Google News RSS）
 │   └── report_generator.py   # 月次レポート生成（運用統計付き）
 │
@@ -314,6 +327,9 @@ investment_support/
 | `take_profit_targets` | 値動きタイプ別の分割利確・トレーリング管理 |
 | `portfolio_snapshot` | バッチ実行時の総資産スナップショット |
 | `llm_feedback_log` | LLMアドバイザーの応答ログ |
+| `committee_verdict_log` | AI投資委員会の判定ログ（各エージェントの意見・トークン数・推定コスト） |
+| `committee_macro_brief` | 委員会のマクロ概況（日付・バッチごとに 1 件） |
+| `fundamentals_cache` | yfinance 財務指標の日次キャッシュ |
 
 `init_db.py` は冪等（`IF NOT EXISTS` + マイグレーション）。スキーマの詳細は [docs/archive/detailed_design.md](docs/archive/detailed_design.md) セクション2を参照（アーカイブ。実装と一部乖離あり）。
 

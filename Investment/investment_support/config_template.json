@@ -229,5 +229,27 @@
       "temperature": 0.3,
       "timeout_sec": 60
     }
+  },
+
+  "_committee_comment": "committee セクションは任意。投資委員会（マルチエージェント判定）を有効にすると、買い候補と売り検討/損切り接近の保有銘柄を複数エージェントが審議し、判定を Slack 通知に含める。API キーは llm.<provider>.api_key を共用する（llm.enabled が false でも使える）。pricing_usd_per_1m は推定コスト計算用の単価（USD/100万トークン）で、実際の価格に合わせて更新すること。未登録モデルは default 単価で計算する。詳細は docs/investment_committee_requirements.md。",
+  "committee": {
+    "enabled": false,
+    "max_subjects_per_batch": 3,
+    "daily_budget_jpy": 45,
+    "min_analysts": 2,
+    "temperature": 0.2,
+    "usdjpy_for_cost": 150.0,
+    "agents": {
+      "macro":       {"provider": "openai",    "model": "gpt-4.1-mini",      "max_tokens": 600},
+      "fundamental": {"provider": "openai",    "model": "gpt-4.1-mini",      "max_tokens": 600},
+      "technical":   {"provider": "openai",    "model": "gpt-4.1-mini",      "max_tokens": 600},
+      "risk":        {"provider": "openai",    "model": "gpt-4.1-mini",      "max_tokens": 600},
+      "pm":          {"provider": "anthropic", "model": "claude-sonnet-4-5", "max_tokens": 900}
+    },
+    "pricing_usd_per_1m": {
+      "default":           {"input": 3.0, "output": 15.0},
+      "gpt-4.1-mini":      {"input": 0.4, "output": 1.6},
+      "claude-sonnet-4-5": {"input": 3.0, "output": 15.0}
+    }
   }
 }

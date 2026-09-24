@@ -428,6 +428,14 @@ def _run_batch(
         else:
             logger.info("STEP 7.5: LLMアドバイザーをスキップ（手動実行モード）")
 
+        committee = None
+        if not skip_llm:
+            try:
+                from src.committee import run_committee
+                committee = run_committee(entry_sets, holdings, market_env, "evening", news=news)
+            except Exception as e:
+                logger.warning(f"投資委員会をスキップ: {e}")
+
         # ────────────────────────────────────────
         # STEP 8: 夜通知送信
         # ────────────────────────────────────────
@@ -445,7 +453,8 @@ def _run_batch(
             send_evening_report(_TODAY, market_env, entry_sets, holdings, failed_count,
                                 llm_feedback=llm_feedback, near_misses=near_misses,
                                 screening_stats=screening_stats,
-                                price_source_alert=jp_price_alert)
+                                price_source_alert=jp_price_alert,
+                                committee=committee)
         except Exception as e:
             logger.error(f"Slack通知送信失敗: {e}", exc_info=True)
             log_error(_BATCH_TYPE, "send_evening_report", type(e).__name__, str(e))

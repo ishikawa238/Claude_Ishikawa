@@ -149,6 +149,7 @@ def send_morning_report(
     llm_feedback: list[dict] | None = None,
     near_misses: list[dict] | None = None,
     screening_stats: dict | None = None,
+    committee: dict | None = None,
 ) -> bool:
     """
     朝通知を生成して Slack に送信する。
@@ -161,6 +162,7 @@ def send_morning_report(
         llm_feedback:     LLM アドバイザーからのフィードバック（任意）
         near_misses:      惜しかった銘柄（任意）
         screening_stats:  スクリーニング統計（screened, candidates, entry_sets 件数）
+        committee:        投資委員会の判定（run_committee の返り値、任意）
     """
     mode = market_env.get("mode", "caution")
     today_str = target_date.strftime("%Y-%m-%d (%a)")
@@ -256,7 +258,8 @@ def send_morning_report(
         f"SL接近: {len(sl_near)}件 ｜ 強制損切り: {len(forced)}件"
     ))
 
-    # LLM アドバイザー意見
+    # 投資委員会 + LLM アドバイザー意見
+    blocks.extend(_committee_blocks(committee))
     blocks.extend(_llm_feedback_blocks(llm_feedback))
 
     # フッター：データ鮮度 + 詳細レポートリンク
@@ -285,6 +288,7 @@ def send_evening_report(
     near_misses: list[dict] | None = None,
     screening_stats: dict | None = None,
     price_source_alert: str | None = None,
+    committee: dict | None = None,
 ) -> bool:
     """
     夜通知を生成して Slack に送信する。
@@ -299,6 +303,7 @@ def send_evening_report(
         llm_feedback:         LLM アドバイザーからのフィードバック（任意）
         near_misses:          惜しかった銘柄（任意）
         screening_stats:      スクリーニング統計（screened, candidates, entry_sets 件数）
+        committee:            投資委員会の判定（run_committee の返り値、任意）
     """
     mode = market_env.get("mode", "caution")
     today_str = target_date.strftime("%Y-%m-%d (%a)")
@@ -399,7 +404,8 @@ def send_evening_report(
             f"⚠️ データ取得失敗: {failed_tickers_count}件（logs/を確認してください）"
         ))
 
-    # LLM アドバイザー意見
+    # 投資委員会 + LLM アドバイザー意見
+    blocks.extend(_committee_blocks(committee))
     blocks.extend(_llm_feedback_blocks(llm_feedback))
 
     # フッター：データ鮮度 + 詳細レポートリンク
@@ -450,6 +456,64 @@ def _llm_feedback_blocks(feedback: list[dict] | None) -> list[dict]:
 
     return blocks
 
+
+_VERDICT_EMOJI = {
+    "BUY": "🟢", "WAIT": "🟡", "SKIP": "⚪",
+    "HOLD": "🔵", "REDUCE": "🟠", "SELL": "🔴",
+}
+_MACRO_EMOJI = {"bullish": "🌤️ 追い風", "neutral": "☁️ 中立", "bearish": "🌧️ 逆風"}
+_COMMITTEE_ROLE_NAMES = {
+    "macro": "マクロ", "fundamental": "ファンダ", "technical": "テクニカル", "risk": "リスク",
+}
+
+
+def _confidence_bar(confidence: float | None) -> str:
+    if confidence is None:
+        return ""
+    filled = round(confidence * 5)
+    return f"{'■' * filled}{'□' * (5 - filled)} {confidence * 100:.0f}%"
+
+
+def _committee_blocks(committee: dict | None) -> list[dict]:
+    """投資委員会の判定を Slack Block Kit セクションに変換する（最大 3 ブロック）。"""
+    if not committee or not committee.get("verdicts"):
+        return []
+
+    lines = ["🏛️ *AI投資委員会の審議結果*"]
+    macro = committee.get("macro")
+    if macro:
+        lines.append(f"🌏 マクロ: {_MACRO_EMOJI.get(macro.get('stance'), macro.get('stance'))} — {macro.get('summary', '')[:80]}")
+
+    for v in committee["verdicts"]:
+        label = f"*{v['ticker']}{(' ' + v['name']) if v.get('name') else ''}*"
+        kind = "保有" if v["subject_type"] == "holding" else "新規"
+        if v["status"] == "skipped_budget":
+            lines.append(f"\n⏸️ {label}（{kind}）本日の予算上限のため未審議")
+            continue
+        if v["status"] == "failed" or not v.get("verdict"):
+            lines.append(f"\n⚠️ {label}（{kind}）審議不成立 — ルールベースの判定を参照してください")
+            continue
+        emoji = _VERDICT_EMOJI.get(v["verdict"], "❔")
+        lines.append(f"\n{emoji} {label}（{kind}）→ *{v['verdict']}*  {_confidence_bar(v.get('confidence'))}")
+        if v.get("rationale"):
+            lines.append(f"　💡 {v['rationale'][:150]}")
+        if v.get("dissent"):
+            lines.append(f"　🗣️ 少数意見: {v['dissent'][:80]}")
+        if v.get("absent"):
+            names = "、".join(_COMMITTEE_ROLE_NAMES.get(a, a) for a in v["absent"])
+            lines.append(f"　🪑 欠席: {names}")
+
+    body = "\n".join(lines)
+    if len(body) > 2900:
+        body = body[:2900] + "…"
+    return [
+        _divider(),
+        _section(body),
+        _section(
+            f"💰 今回の委員会コスト 約{committee.get('cost_jpy', 0):.1f}円 ｜ "
+            "⚠️ 判定は検討材料であり投資助言ではありません"
+        ),
+    ]
 
 
 def _index_str(name: str, close, ma25) -> str:

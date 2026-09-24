@@ -420,6 +420,55 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_llm_feedback_date ON llm_feedback_log(feedback_date)",
 
     # ----------------------------------------------------------
+    # 投資委員会（マルチエージェント判定）
+    # ----------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS committee_verdict_log (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        verdict_date       DATE    NOT NULL,
+        batch_type         TEXT    NOT NULL,
+        ticker             TEXT    NOT NULL,
+        market             TEXT,
+        subject_type       TEXT    NOT NULL CHECK(subject_type IN ('buy_candidate', 'holding')),
+        verdict            TEXT,
+        confidence         REAL,
+        position_size_adj  TEXT,
+        pm_rationale       TEXT,
+        dissent            TEXT,
+        agents_json        TEXT,
+        prompt_tokens      INTEGER,
+        output_tokens      INTEGER,
+        estimated_cost_jpy REAL    NOT NULL DEFAULT 0,
+        latency_ms         INTEGER,
+        status             TEXT    NOT NULL CHECK(status IN ('full', 'partial', 'skipped_budget', 'failed')),
+        created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_committee_verdict_date ON committee_verdict_log(verdict_date, batch_type)",
+    """
+    CREATE TABLE IF NOT EXISTS committee_macro_brief (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        brief_date         DATE    NOT NULL,
+        batch_type         TEXT    NOT NULL,
+        brief_json         TEXT    NOT NULL,
+        prompt_tokens      INTEGER,
+        output_tokens      INTEGER,
+        estimated_cost_jpy REAL    NOT NULL DEFAULT 0,
+        created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_committee_macro_date_batch ON committee_macro_brief(brief_date, batch_type)",
+    """
+    CREATE TABLE IF NOT EXISTS fundamentals_cache (
+        ticker       TEXT NOT NULL,
+        fetched_date DATE NOT NULL,
+        data_json    TEXT NOT NULL,
+        created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (ticker, fetched_date)
+    )
+    """,
+
+    # ----------------------------------------------------------
     # 利確ターゲット管理
     # ----------------------------------------------------------
     """

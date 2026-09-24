@@ -45,6 +45,7 @@ from src.market_filter import (
     diagnose_screening_empty,
     get_screened_tickers,
     judge_market_environment,
+    mode_for_market,
 )
 from src.shares_outstanding import load_shares_map
 from src.notifier import send_morning_report, send_skip_notification
@@ -58,7 +59,8 @@ _TODAY = date.today()
 _BATCH_TYPE = "morning_all"
 _LOCK_DIR = _PROJECT_ROOT / "data"
 _LOCK_FILE = _LOCK_DIR / "batch_morning_all.lock"
-_BATCH_TIMEOUT_SEC = 30 * 60  # 30分
+# yfinance で米国株約 1.8 万銘柄を取得するだけで約 22 分かかるため、30 分では余裕がない
+_BATCH_TIMEOUT_SEC = 45 * 60  # 45分
 
 
 def _acquire_lock() -> "open | None":
@@ -248,7 +250,10 @@ def _run_batch(
         _progress(3, "市場環境モード確定")
         logger.info("STEP 3: 市場環境モード確定（US 確定 → 統合）")
         market_env = judge_market_environment(_TODAY, market="ALL")
-        mode = market_env["mode"]
+        mode = market_env["mode"]            # 通知ヘッダー用の全体モード
+        us_mode = mode_for_market(market_env, "US")  # US シグナル判定用
+        if us_mode != mode:
+            logger.info(f"市場環境: 全体={mode} / US判定={us_mode}（市場別判定）")
 
         # ────────────────────────────────────────
         # STEP 4: 米国株シグナル検出
@@ -287,7 +292,7 @@ def _run_batch(
                     _BATCH_TYPE, "get_screened_tickers",
                     "ScreeningEmpty", screening_alert[:500],
                 )
-            candidates = detect_and_save_signals(screened, us_price_date, mode)
+            candidates = detect_and_save_signals(screened, us_price_date, us_mode)
             signals_count = len(candidates)
             signal_save_alert = diagnose_signal_save_count(
                 us_price_date, "US", len(screened),
@@ -298,7 +303,7 @@ def _run_batch(
                     _BATCH_TYPE, "detect_and_save_signals",
                     "SignalSaveMismatch", signal_save_alert,
                 )
-            us_entry_sets = save_entry_sets(candidates, mode)
+            us_entry_sets = save_entry_sets(candidates, us_mode)
 
             from src.signal_detector import fetch_near_misses
             near_misses = fetch_near_misses(us_price_date, limit=5)

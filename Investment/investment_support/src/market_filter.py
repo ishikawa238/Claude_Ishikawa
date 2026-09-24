@@ -42,6 +42,24 @@ _ALLOW_UNKNOWN_MARKET_CAP = _as_bool(_SC.get("allow_unknown_market_cap", True))
 # 市場環境判定
 # ============================================================
 
+# 市場ごとの指数と market_environment のカラム対応
+_INDEX_SPECS = {
+    "JP": {"index_code": "N225",  "flag": "jp_above_ma25", "close": "n225_close",  "ma25": "n225_ma25"},
+    "US": {"index_code": "SP500", "flag": "us_above_ma25", "close": "sp500_close", "ma25": "sp500_ma25"},
+}
+
+
+def get_market_filter_config() -> dict:
+    """market_filter セクションの設定を既定値とマージして返す。"""
+    defaults = {
+        # 市場ごとに独立して判定する（JP は日経、US は S&P500 のみを見る）
+        "per_market_mode": True,
+        # 指数データがこの日数より古い場合は判定不能として扱う（0 で無効）
+        "index_max_stale_days": 5,
+    }
+    user = CONFIG.get("market_filter", {}) or {}
+    return {**defaults, **user}
+
 def judge_market_environment(target_date: date, market: str = "ALL") -> dict:
     """
     インデックスデータをもとに市場環境モードを判定して DB に保存する。
@@ -49,13 +67,18 @@ def judge_market_environment(target_date: date, market: str = "ALL") -> dict:
     引数:
         target_date: 判定対象日
         market: "JP" / "US" / "ALL"
-                JP  → jp_above_ma25 のみ判定（夜バッチ用）
-                US  → us_above_ma25 のみ判定（朝バッチ補完用）
-                ALL → 両方判定して mode を確定
+                JP  → jp_above_ma25 を更新（夜バッチ用）
+                US  → us_above_ma25 を更新（朝バッチ補完用）
+                ALL → 両方更新して mode を確定
+
+                更新対象でない側も、値が未確定（None）の場合は直近の指数データで補完する。
+                これがないと、夜バッチ単独実行では us_above_ma25 が常に None になり、
+                全体モードが caution から抜けられない。
 
     返り値: market_environment テーブルの行に相当する辞書
     """
     target_str = target_date.strftime("%Y-%m-%d")
+    max_stale = int(get_market_filter_config()["index_max_stale_days"])
 
     # 既存レコードを取得（夜バッチ→朝バッチで2段階更新するため）
     with get_connection() as conn:
@@ -76,23 +99,11 @@ def judge_market_environment(target_date: date, market: str = "ALL") -> dict:
         "sp500_ma25":     None,
     }
 
-    if market in ("JP", "ALL"):
-        jp_data = _get_index_latest(target_str, "N225")
-        if jp_data:
-            row["n225_close"]    = jp_data["close"]
-            row["n225_ma25"]     = jp_data["ma25"]
-            row["jp_above_ma25"] = 1 if (jp_data["close"] or 0) >= (jp_data["ma25"] or 0) else 0
-        else:
-            logger.warning(f"N225データなし ({target_str}): jp_above_ma25 を None に設定")
-
-    if market in ("US", "ALL"):
-        us_data = _get_index_latest(target_str, "SP500")
-        if us_data:
-            row["sp500_close"]   = us_data["close"]
-            row["sp500_ma25"]    = us_data["ma25"]
-            row["us_above_ma25"] = 1 if (us_data["close"] or 0) >= (us_data["ma25"] or 0) else 0
-        else:
-            logger.warning(f"SP500データなし ({target_str}): us_above_ma25 を None に設定")
+    for side in ("JP", "US"):
+        is_target = market in (side, "ALL")
+        # 更新対象、または未確定なら補完する
+        if is_target or row.get(_INDEX_SPECS[side]["flag"]) is None:
+            _apply_index_state(row, side, target_str, max_stale)
 
     # モード確定
     row["mode"] = _calc_mode(row["jp_above_ma25"], row["us_above_ma25"])
@@ -112,16 +123,58 @@ def judge_market_environment(target_date: date, market: str = "ALL") -> dict:
 
 
 def _get_index_latest(target_str: str, index_code: str) -> Optional[dict]:
-    """指定日以前の最新インデックスデータを取得する。"""
+    """
+    指定日以前で close と ma25 が揃う最新のインデックスデータを取得する。
+
+    ma25 が未計算の行は MA25 との比較ができないため除外する。
+    （除外しないと「終値 >= 0」が成立して常に「MA25 上」と誤判定される）
+    """
     with get_connection() as conn:
         row = fetch_one(
             conn,
-            "SELECT close, ma25 FROM index_snapshot "
-            "WHERE index_code = ? AND date <= ? AND close IS NOT NULL "
+            "SELECT date, close, ma25 FROM index_snapshot "
+            "WHERE index_code = ? AND date <= ? AND close IS NOT NULL AND ma25 IS NOT NULL "
             "ORDER BY date DESC LIMIT 1",
             (index_code, target_str),
         )
     return dict(row) if row else None
+
+
+def _is_stale(data: dict, target_str: str, max_stale_days: int) -> bool:
+    """指数データが target_str から max_stale_days より古いか。日付不明時は False。"""
+    if max_stale_days <= 0:
+        return False
+    data_date = data.get("date")
+    if not data_date:
+        return False
+    try:
+        delta = (date.fromisoformat(target_str) - date.fromisoformat(str(data_date))).days
+    except (TypeError, ValueError):
+        return False
+    return delta > max_stale_days
+
+
+def _apply_index_state(row: dict, side: str, target_str: str, max_stale_days: int) -> None:
+    """指数データから終値・MA25・MA25 上フラグを row に設定する。"""
+    spec = _INDEX_SPECS[side]
+    code = spec["index_code"]
+    data = _get_index_latest(target_str, code)
+
+    if not data:
+        row[spec["flag"]] = None
+        logger.warning(f"{code} の終値/MA25 データなし ({target_str}): {spec['flag']} を None に設定")
+        return
+    if _is_stale(data, target_str, max_stale_days):
+        row[spec["flag"]] = None
+        logger.warning(
+            f"{code} データが古い（{data.get('date')} / 基準 {target_str}、上限 {max_stale_days}日）: "
+            f"{spec['flag']} を None に設定"
+        )
+        return
+
+    row[spec["close"]] = data["close"]
+    row[spec["ma25"]] = data["ma25"]
+    row[spec["flag"]] = 1 if data["close"] >= data["ma25"] else 0
 
 
 def _calc_mode(jp: Optional[int], us: Optional[int]) -> str:
@@ -134,6 +187,27 @@ def _calc_mode(jp: Optional[int], us: Optional[int]) -> str:
     if jp == 0 or us == 0:
         return "caution"
     # 両方 None（データ未取得）→ 安全のため caution
+    return "caution"
+
+
+def mode_for_market(env: dict, market: str) -> str:
+    """
+    市場ごとの環境モードを返す。
+
+    per_market_mode が有効な場合、JP は日経平均、US は S&P500 のみで判定する。
+    他市場の下落で新規買いが止まらないようにするための措置。
+    無効な場合は従来どおり全体モード（両指数の組み合わせ）を返す。
+    データが未確定（None）のときは安全側の caution を返す。
+    """
+    if not get_market_filter_config()["per_market_mode"]:
+        return env.get("mode") or "caution"
+
+    spec = _INDEX_SPECS.get(str(market).upper())
+    if spec is None:
+        return env.get("mode") or "caution"
+    flag = env.get(spec["flag"])
+    if flag == 1:
+        return "normal"
     return "caution"
 
 

@@ -480,9 +480,16 @@ def _committee_blocks(committee: dict | None) -> list[dict]:
         return []
 
     lines = ["🏛️ *AI投資委員会の審議結果*"]
-    macro = committee.get("macro")
-    if macro:
-        lines.append(f"🌏 マクロ: {_MACRO_EMOJI.get(macro.get('stance'), macro.get('stance'))} — {macro.get('summary', '')[:80]}")
+    macro = committee.get("macro") or {}
+    macro_lines = []
+    for key, label in (("jp", "🇯🇵 日本株"), ("us", "🇺🇸 米国株")):
+        m = macro.get(key)
+        if m:
+            stance = _MACRO_EMOJI.get(m.get("stance"), m.get("stance"))
+            macro_lines.append(f"　{label}: {stance} — {m.get('summary', '')[:70]}")
+    if macro_lines:
+        lines.append("🌏 *マクロ環境*")
+        lines.extend(macro_lines)
 
     for v in committee["verdicts"]:
         label = f"*{v['ticker']}{(' ' + v['name']) if v.get('name') else ''}*"

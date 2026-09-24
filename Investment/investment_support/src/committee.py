@@ -193,7 +193,11 @@ def deliberate(
     news: list[dict] | None,
     cfg: dict,
 ) -> dict:
-    """1 銘柄を 2 ラウンドで審議し、判定結果を返す。"""
+    """
+    1 銘柄を 2 ラウンドで審議し、判定結果を返す。
+
+    macro は `{"jp": 意見, "us": 意見}` 形式で、審議対象の市場に対応する側だけを使う。
+    """
     started = time.time()
     item = subject["item"]
     subject_type = subject["subject_type"]
@@ -209,8 +213,10 @@ def deliberate(
     inputs = _build_analyst_inputs(subject_text, item, ticker, market, holdings, news)
 
     # Round 1: 独立意見（互いの出力は渡さない）
-    opinions: dict[str, dict] = {"macro": macro} if macro else {}
-    if not macro:
+    # マクロは審議対象の市場に対応する意見だけを渡す
+    macro_opinion = macro_for_market(macro, market)
+    opinions: dict[str, dict] = {"macro": macro_opinion} if macro_opinion else {}
+    if not macro_opinion:
         absent.append("macro")
     round1 = _ask_parallel(
         {role: (role, inputs[role]) for role in ANALYSTS if agent_cfgs[role]},
@@ -349,12 +355,12 @@ def _get_macro_brief(
     prompt = prompts.build_macro_prompt(
         _format_market_env_rich(market_env or {}), _latest_usdjpy(), prompts.format_news(news, None)
     )
-    brief, usage, err = _ask("macro", prompt, agent_cfg, cfg, _valid_analyst)
+    brief, usage, err = _ask("macro", prompt, agent_cfg, cfg, _valid_macro)
     if brief is None:
         logger.warning(f"投資委員会: マクロ概況の生成に失敗（{err}）")
         return None, usage
 
-    brief = _normalize_opinion(brief)
+    brief = _normalize_macro(brief)
     try:
         with get_connection() as conn:
             upsert(conn, "committee_macro_brief", [{
@@ -434,8 +440,19 @@ def parse_json(text: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+_STANCES = {"bullish", "neutral", "bearish"}
+
+
 def _valid_analyst(obj: dict) -> bool:
-    return str(obj.get("stance", "")).lower() in {"bullish", "neutral", "bearish"}
+    return str(obj.get("stance", "")).lower() in _STANCES
+
+
+def _valid_macro(obj: dict) -> bool:
+    """マクロ概況は日本株・米国株の両方の立場を含むこと。"""
+    return all(
+        isinstance(obj.get(key), dict) and str(obj[key].get("stance", "")).lower() in _STANCES
+        for key in ("jp", "us")
+    )
 
 
 def _valid_rebuttal(obj: dict) -> bool:
@@ -449,6 +466,30 @@ def _valid_response(obj: dict) -> bool:
 def _pm_validator(subject_type: str):
     allowed = _VALID_VERDICTS[subject_type]
     return lambda obj: str(obj.get("verdict", "")).upper() in allowed
+
+
+def _normalize_macro(obj: dict) -> dict:
+    """マクロ概況を {"jp": 意見, "us": 意見} に正規化する。注目点・リスクは両市場で共有。"""
+    shared = {
+        "key_points": list(obj.get("key_points") or [])[:3],
+        "risks": list(obj.get("risks") or [])[:2],
+    }
+    return {
+        key: {
+            "stance": str((obj.get(key) or {}).get("stance", "")).lower(),
+            "confidence": _clamp((obj.get(key) or {}).get("confidence")),
+            "summary": str((obj.get(key) or {}).get("summary", "")),
+            **shared,
+        }
+        for key in ("jp", "us")
+    }
+
+
+def macro_for_market(macro: dict | None, market: str) -> dict | None:
+    """審議対象の市場に対応するマクロ意見を返す。"""
+    if not macro:
+        return None
+    return macro.get("jp" if str(market).upper() == "JP" else "us")
 
 
 def _normalize_opinion(obj: dict) -> dict:

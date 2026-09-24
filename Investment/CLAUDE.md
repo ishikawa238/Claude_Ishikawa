@@ -72,7 +72,7 @@ External APIs → price_history / index_snapshot (SQLite)
 | `yfinance_fetcher.py` | yfinance — JP daily prices + initial 3-year history load (free, unofficial API) |
 | `jquants_fetcher.py` | J-Quants API — JP fundamentals and earnings schedule |
 | `technical_calculator.py` | Computes MA5/25/75/200, EMA25/75, RSI14, ATR14, MACD, volatility, turnover, support/resistance → `technical_snapshot` |
-| `market_filter.py` | Market environment judge (normal/caution/full_caution) + liquidity screening |
+| `market_filter.py` | Market environment judge (overall normal/caution/full_caution + per-market mode via `mode_for_market`) + liquidity screening |
 | `swing_detector.py` | EMA pullback swing condition evaluation (watch/candidate) |
 | `signal_detector.py` | Swing signal detection → `daily_signals` |
 | `entry_calculator.py` | Computes entry price, stop-loss, target, recommended amount → `trade_signal_log` |

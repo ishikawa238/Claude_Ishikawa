@@ -48,6 +48,7 @@ from src.market_filter import (
     diagnose_screening_empty,
     get_screened_tickers,
     judge_market_environment,
+    mode_for_market,
 )
 from src.shares_outstanding import load_shares_map
 from src.notifier import send_evening_report, send_skip_notification
@@ -307,7 +308,10 @@ def _run_batch(
         _progress(3, "市場環境判定")
         logger.info("STEP 3: 市場環境判定")
         market_env = judge_market_environment(index_date, market="JP")
-        mode = market_env["mode"]
+        mode = market_env["mode"]            # 通知ヘッダー用の全体モード
+        jp_mode = mode_for_market(market_env, "JP")  # JP シグナル判定用
+        if jp_mode != mode:
+            logger.info(f"市場環境: 全体={mode} / JP判定={jp_mode}（市場別判定）")
 
         # ────────────────────────────────────────
         # STEP 4-6: スクリーニング → シグナル → エントリーセット
@@ -346,7 +350,7 @@ def _run_batch(
                 )
 
             logger.info("STEP 5: シグナル検出")
-            candidates = detect_and_save_signals(screened, jp_price_date, mode)
+            candidates = detect_and_save_signals(screened, jp_price_date, jp_mode)
             signals_count = len(candidates)
             signal_save_alert = diagnose_signal_save_count(
                 jp_price_date, "JP", len(screened),
@@ -360,7 +364,7 @@ def _run_batch(
 
             _progress(5, "エントリーセット計算")
             logger.info("STEP 6: エントリーセット計算")
-            entry_sets = save_entry_sets(candidates, mode)
+            entry_sets = save_entry_sets(candidates, jp_mode)
 
             from src.signal_detector import fetch_near_misses
             near_misses = fetch_near_misses(jp_price_date, market="JP", limit=5)

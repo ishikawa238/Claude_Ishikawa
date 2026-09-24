@@ -37,7 +37,14 @@ _CONFIG_MOCK = {
 }
 
 with patch("src.config.CONFIG", _CONFIG_MOCK):
-    from src.market_filter import _calc_mode, judge_market_environment, get_current_mode
+    from src import market_filter
+    from src.market_filter import (
+        _calc_mode,
+        _is_stale,
+        get_current_mode,
+        judge_market_environment,
+        mode_for_market,
+    )
     from src.signal_detector import detect_and_save_signals
 
 
@@ -237,6 +244,126 @@ class JudgeMarketEnvironmentTests(unittest.TestCase):
         # upsert に渡された行に mode が含まれていることを確認
         saved_rows = mock_upsert.call_args[0][2]  # upsert(conn, table, rows)
         self.assertIn("mode", saved_rows[0])
+
+
+# ============================================================
+# 市場別モード判定のテスト
+# ============================================================
+
+class ModeForMarketTests(unittest.TestCase):
+    """mode_for_market(): JP は日経、US は S&P500 のみで判定する。"""
+
+    def test_jp_uses_only_nikkei(self):
+        """US が MA25 割れでも、JP が上なら JP は normal"""
+        env = {"mode": "caution", "jp_above_ma25": 1, "us_above_ma25": 0}
+        self.assertEqual(mode_for_market(env, "JP"), "normal")
+        self.assertEqual(mode_for_market(env, "US"), "caution")
+
+    def test_us_uses_only_sp500(self):
+        """JP が MA25 割れでも、US が上なら US は normal"""
+        env = {"mode": "caution", "jp_above_ma25": 0, "us_above_ma25": 1}
+        self.assertEqual(mode_for_market(env, "US"), "normal")
+        self.assertEqual(mode_for_market(env, "JP"), "caution")
+
+    def test_unknown_flag_is_caution(self):
+        """データ未確定（None）は安全側の caution"""
+        env = {"mode": "normal", "jp_above_ma25": None, "us_above_ma25": None}
+        self.assertEqual(mode_for_market(env, "JP"), "caution")
+        self.assertEqual(mode_for_market(env, "US"), "caution")
+
+    def test_disabled_falls_back_to_overall_mode(self):
+        """per_market_mode=false なら従来の全体モードを返す"""
+        env = {"mode": "full_caution", "jp_above_ma25": 1, "us_above_ma25": 0}
+        with patch.object(market_filter, "CONFIG", {**_CONFIG_MOCK,
+                                                   "market_filter": {"per_market_mode": False}}):
+            self.assertEqual(mode_for_market(env, "JP"), "full_caution")
+
+    def test_unknown_market_falls_back_to_overall_mode(self):
+        env = {"mode": "caution", "jp_above_ma25": 1}
+        self.assertEqual(mode_for_market(env, "XX"), "caution")
+
+
+class IndexStalenessTests(unittest.TestCase):
+    """_is_stale(): 指数データの鮮度判定。"""
+
+    def test_fresh_data(self):
+        self.assertFalse(_is_stale({"date": "2026-09-22"}, "2026-09-24", 5))
+
+    def test_stale_data(self):
+        self.assertTrue(_is_stale({"date": "2026-09-10"}, "2026-09-24", 5))
+
+    def test_missing_or_invalid_date_is_not_stale(self):
+        """日付が取れない場合は判定材料がないため古いとみなさない"""
+        self.assertFalse(_is_stale({}, "2026-09-24", 5))
+        self.assertFalse(_is_stale({"date": "不正な日付"}, "2026-09-24", 5))
+
+    def test_zero_disables_check(self):
+        self.assertFalse(_is_stale({"date": "2020-01-01"}, "2026-09-24", 0))
+
+
+class IndexCompletionTests(unittest.TestCase):
+    """更新対象外の市場も未確定なら補完されることを確認する。"""
+
+    @patch("src.market_filter.upsert")
+    @patch("src.market_filter.fetch_one")
+    @patch("src.market_filter.get_connection")
+    def test_jp_batch_completes_us_side(self, mock_conn, mock_fetch_one, mock_upsert):
+        """market="JP" でも us_above_ma25 が未確定なら直近データで補完する"""
+        mock_conn.return_value = _mock_conn()
+        mock_fetch_one.side_effect = [
+            None,                                                        # 既存レコードなし
+            {"date": "2026-09-24", "close": 39000.0, "ma25": 38000.0},   # N225
+            {"date": "2026-09-22", "close": 5200.0,  "ma25": 5100.0},    # SP500（前営業日）
+        ]
+        result = judge_market_environment(date(2026, 9, 24), market="JP")
+        self.assertEqual(result["jp_above_ma25"], 1)
+        self.assertEqual(result["us_above_ma25"], 1, "US 側が補完されていない")
+        self.assertEqual(result["mode"], "normal")
+
+    @patch("src.market_filter.upsert")
+    @patch("src.market_filter.fetch_one")
+    @patch("src.market_filter.get_connection")
+    def test_existing_us_value_is_kept(self, mock_conn, mock_fetch_one, mock_upsert):
+        """既存レコードに US 値があれば補完せず、指数取得は N225 のみ"""
+        mock_conn.return_value = _mock_conn()
+        mock_fetch_one.side_effect = [
+            {"date": "2026-09-24", "mode": "caution", "jp_above_ma25": 0, "us_above_ma25": 0,
+             "n225_close": 1.0, "n225_ma25": 2.0, "sp500_close": 3.0, "sp500_ma25": 4.0},
+            {"date": "2026-09-24", "close": 39000.0, "ma25": 38000.0},   # N225 のみ
+        ]
+        result = judge_market_environment(date(2026, 9, 24), market="JP")
+        self.assertEqual(result["us_above_ma25"], 0)
+        self.assertEqual(mock_fetch_one.call_count, 2)
+
+    @patch("src.market_filter.upsert")
+    @patch("src.market_filter.fetch_one")
+    @patch("src.market_filter.get_connection")
+    def test_stale_index_becomes_unknown(self, mock_conn, mock_fetch_one, mock_upsert):
+        """指数データが古すぎる場合は判定不能（None）にする"""
+        mock_conn.return_value = _mock_conn()
+        mock_fetch_one.side_effect = [
+            None,
+            {"date": "2026-09-24", "close": 39000.0, "ma25": 38000.0},
+            {"date": "2026-08-01", "close": 5200.0,  "ma25": 5100.0},    # 古い
+        ]
+        result = judge_market_environment(date(2026, 9, 24), market="ALL")
+        self.assertEqual(result["jp_above_ma25"], 1)
+        self.assertIsNone(result["us_above_ma25"])
+        self.assertEqual(mode_for_market(result, "JP"), "normal")
+        self.assertEqual(mode_for_market(result, "US"), "caution")
+
+    @patch("src.market_filter.upsert")
+    @patch("src.market_filter.fetch_one")
+    @patch("src.market_filter.get_connection")
+    def test_missing_ma25_row_is_excluded_by_query(self, mock_conn, mock_fetch_one, mock_upsert):
+        """MA25 未計算の行はクエリで除外され、データなし扱いになる"""
+        mock_conn.return_value = _mock_conn()
+        mock_fetch_one.side_effect = [None, None, None]
+        result = judge_market_environment(date(2026, 9, 24), market="ALL")
+        self.assertIsNone(result["jp_above_ma25"])
+        self.assertIsNone(result["us_above_ma25"])
+        sql = mock_fetch_one.call_args_list[1][0][1]
+        self.assertIn("ma25 IS NOT NULL", sql)
 
 
 # ============================================================

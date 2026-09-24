@@ -58,6 +58,15 @@ def _analyst(stance="neutral") -> dict:
     return {"stance": stance, "confidence": 0.6, "key_points": ["p"], "risks": ["r"], "summary": "s"}
 
 
+def _macro_raw(jp="neutral", us="bullish") -> dict:
+    return {
+        "jp": {"stance": jp, "confidence": 0.5, "summary": "日本株の要約"},
+        "us": {"stance": us, "confidence": 0.7, "summary": "米国株の要約"},
+        "key_points": ["共通論点"],
+        "risks": ["共通リスク"],
+    }
+
+
 def _reply(obj) -> dict:
     text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
     return {"text": text, "error": None, "prompt_tokens": 1000, "output_tokens": 100}
@@ -84,6 +93,9 @@ class _FakeLLM:
                 return role
         raise AssertionError("role not found")
 
+    def _macro_reply(self):
+        return _reply(_macro_raw())
+
     def __call__(self, provider, system, prompt, cfg):
         role = self._role(system, prompt)
         self.calls.append(role)
@@ -99,10 +111,13 @@ class _FakeLLM:
             return _reply({"response": "応答", "stance_after": "neutral"})
         if role == "pm":
             return _reply(self.pm)
+        if role == "macro":
+            return self._macro_reply()
         return _reply(_analyst(self.stances.get(role, "neutral")))
 
 
-_MACRO = _analyst("neutral")
+# deliberate に渡す正規化済みマクロ（市場別）
+_MACRO = committee._normalize_macro(_macro_raw())
 _INPUTS = {"fundamental": "f", "technical": "t", "risk": "r"}
 
 
@@ -191,6 +206,37 @@ class DeliberateTests(unittest.TestCase):
         v = self._run(fake, agents={"risk": {"enabled": False}})
         self.assertNotIn("risk", fake.calls)
         self.assertIn("risk", v["absent"])
+
+    def test_macro_opinion_matches_subject_market(self):
+        """JP 銘柄には日本株、US 銘柄には米国株のマクロ意見を渡す"""
+        jp = self._run(_FakeLLM(), subject={"subject_type": "buy_candidate", "item": _entry_set()})
+        self.assertEqual(jp["agents"]["round1"]["macro"]["summary"], "日本株の要約")
+
+        us_item = {**_entry_set(), "market": "US"}
+        us = self._run(_FakeLLM(), subject={"subject_type": "buy_candidate", "item": us_item})
+        self.assertEqual(us["agents"]["round1"]["macro"]["summary"], "米国株の要約")
+
+    def test_macro_absent_when_market_missing(self):
+        """対象市場のマクロ意見がなければ欠席扱いにする"""
+        v = self._run(_FakeLLM(), macro={"us": {"stance": "bullish", "summary": "米国株のみ"}})
+        self.assertIn("macro", v["absent"])
+        self.assertNotIn("macro", v["agents"]["round1"])
+
+    def test_jp_subject_uses_jp_macro(self):
+        """JP 銘柄には日本株のマクロ意見だけを渡す"""
+        v = self._run(_FakeLLM())
+        self.assertEqual(v["agents"]["round1"]["macro"]["summary"], "日本株の要約")
+
+    def test_us_subject_uses_us_macro(self):
+        """US 銘柄には米国株のマクロ意見だけを渡す"""
+        v = self._run(_FakeLLM(), subject={"subject_type": "holding", "item": _holding()})
+        self.assertEqual(v["agents"]["round1"]["macro"]["summary"], "米国株の要約")
+
+    def test_macro_missing_for_market_is_absent(self):
+        """該当市場のマクロ意見がなければ欠席扱いにする"""
+        v = self._run(_FakeLLM(), macro={"jp": None, "us": None})
+        self.assertIn("macro", v["absent"])
+        self.assertNotIn("macro", v["agents"]["round1"])
 
 
 class RunCommitteeTests(unittest.TestCase):
@@ -287,7 +333,48 @@ class HelperTests(unittest.TestCase):
         self.assertAlmostEqual(committee.estimate_cost_jpy("unknown", 1_000_000, 1_000_000, cfg), 1800.0)
 
 
+class MacroTests(unittest.TestCase):
+
+    def test_valid_macro_requires_both_markets(self):
+        self.assertTrue(committee._valid_macro(_macro_raw()))
+        self.assertFalse(committee._valid_macro({"jp": {"stance": "bullish"}}))
+        self.assertFalse(committee._valid_macro({"jp": {"stance": "up"}, "us": {"stance": "bullish"}}))
+        self.assertFalse(committee._valid_macro(_analyst("bullish")))
+
+    def test_normalize_macro_shares_points_and_clamps(self):
+        raw = _macro_raw(jp="BEARISH")
+        raw["jp"]["confidence"] = 2.0
+        macro = committee._normalize_macro(raw)
+        self.assertEqual(macro["jp"]["stance"], "bearish")
+        self.assertEqual(macro["jp"]["confidence"], 1.0)
+        self.assertEqual(macro["jp"]["key_points"], ["共通論点"])
+        self.assertEqual(macro["us"]["key_points"], ["共通論点"])
+
+    def test_macro_for_market(self):
+        macro = committee._normalize_macro(_macro_raw())
+        self.assertEqual(committee.macro_for_market(macro, "JP")["summary"], "日本株の要約")
+        self.assertEqual(committee.macro_for_market(macro, "US")["summary"], "米国株の要約")
+        self.assertIsNone(committee.macro_for_market(None, "JP"))
+
+    def test_macro_prompt_separates_markets(self):
+        text = committee_prompts.build_macro_prompt("## 市場環境\nモード: 警戒", 157.0, "")
+        self.assertIn('"jp"', text)
+        self.assertIn('"us"', text)
+        self.assertIn("日経平均は日本株の評価にのみ", text)
+
+
 class PromptTests(unittest.TestCase):
+
+    def test_pm_system_prompt_forbids_rubber_stamping_rules(self):
+        """PM はルール判定の追認を禁じられている"""
+        text = committee_prompts.system_prompt("pm")
+        self.assertIn("追認", text)
+        self.assertIn("根拠として引用してはならない", text)
+        self.assertIn("REDUCE / SELL / WAIT / SKIP", text)
+
+    def test_macro_system_prompt_separates_markets(self):
+        text = committee_prompts.system_prompt("macro")
+        self.assertIn("一方の指数の動きをもう一方の評価に流用しない", text)
 
     def test_holding_pm_prompt_lists_holding_verdicts(self):
         text = committee_prompts.build_pm_prompt("holding", "subject", {"risk": _analyst()}, None, {}, ["macro"])
@@ -318,7 +405,10 @@ class CommitteeBlocksTests(unittest.TestCase):
 
     def test_blocks_include_verdicts_and_disclaimer(self):
         committee_result = {
-            "macro": {"stance": "bearish", "summary": "金利上昇"},
+            "macro": {
+                "jp": {"stance": "bearish", "summary": "金利上昇"},
+                "us": {"stance": "bullish", "summary": "指数は堅調"},
+            },
             "cost_jpy": 5.2,
             "verdicts": [
                 {"ticker": "7203", "name": "トヨタ", "subject_type": "buy_candidate", "status": "partial",
@@ -336,8 +426,22 @@ class CommitteeBlocksTests(unittest.TestCase):
         self.assertIn("欠席: ファンダ", body)
         self.assertIn("予算上限のため未審議", body)
         self.assertIn("審議不成立", body)
-        self.assertIn("逆風", body)
         self.assertIn("投資助言ではありません", blocks[2]["text"]["text"])
+
+    def test_macro_shown_per_market(self):
+        """マクロは日本株・米国株を分けて表示する"""
+        blocks = notifier._committee_blocks({
+            "macro": {
+                "jp": {"stance": "bearish", "summary": "日経はMA25割れ"},
+                "us": {"stance": "bullish", "summary": "S&P500は上昇基調"},
+            },
+            "cost_jpy": 1.0,
+            "verdicts": [{"ticker": "AAPL", "name": "", "subject_type": "buy_candidate",
+                          "status": "full", "verdict": "BUY", "confidence": 0.5, "rationale": "r"}],
+        })
+        body = blocks[1]["text"]["text"]
+        self.assertIn("日本株: 🌧️ 逆風 — 日経はMA25割れ", body)
+        self.assertIn("米国株: 🌤️ 追い風 — S&P500は上昇基調", body)
 
 
 if __name__ == "__main__":

@@ -37,26 +37,41 @@ _ANALYST_SCHEMA = (
     '"key_points": ["最大3件"], "risks": ["最大2件"], "summary": "200文字以内"}'
 )
 
+_MACRO_SCHEMA = (
+    '{"jp": {"stance": "bullish | neutral | bearish", "confidence": 0.0〜1.0, "summary": "日本株への影響 150文字以内"}, '
+    '"us": {"stance": "bullish | neutral | bearish", "confidence": 0.0〜1.0, "summary": "米国株への影響 150文字以内"}, '
+    '"key_points": ["両市場に共通する注目点 最大3件"], "risks": ["最大2件"]}'
+)
+
 _ROLE_FOCUS = {
-    "macro": "金利・為替・株価指数のトレンド・市場ニュースから、日本株/米国株の買いに対する追い風か逆風かを評価する。",
+    "macro": "金利・為替・株価指数のトレンド・市場ニュースから、日本株と米国株それぞれについて"
+             "買いに対する追い風か逆風かを個別に評価する。"
+             "日本株と米国株は別の市場であり、一方の指数の動きをもう一方の評価に流用しないこと。",
     "fundamental": "財務指標（PER/PBR/ROE/成長率/利益率/負債）から企業価値と割安・割高を評価する。",
     "technical": "移動平均・RSI・出来高・52週高値との距離などから、売買タイミングとして妥当かを評価する。",
     "risk": "ボラティリティ・損切り幅・VaR・Beta・決算接近・ポートフォリオ集中度から、下振れリスクを評価する。"
             "楽観的な見方には懐疑的な立場を取ること。",
 }
 
+# PM がルール判定を追認するだけにならないようにするための指示
+_PM_RULES = (
+    "各メンバーの意見・反論・応答を読み、最終判定を下す。"
+    "多数決ではなく論拠の強さで判断し、採用しなかった少数意見を必ず dissent に残すこと。"
+    "判定は委員会自身の結論である。提示されたルール判定は前提情報にすぎず、"
+    "それを追認したり、判定の根拠として引用してはならない。"
+    "rationale には各メンバーが挙げた具体的な数値と論拠だけを書くこと。"
+    "慎重・弱気な論拠が優勢な場合は、ルール判定がホールドや買いであっても "
+    "REDUCE / SELL / WAIT / SKIP を選ぶこと。"
+    "強制ルール（損切りライン到達・新規買い停止）のみは委員会の判定で覆せないが、"
+    "それに該当しない限り委員会の判断を優先すること。"
+)
+
 
 def system_prompt(role: str) -> str:
     """エージェントのシステムプロンプトを返す。"""
     base = f"あなたは運用会社の投資委員会に所属する{ROLE_NAMES[role]}です。"
     if role == "pm":
-        return (
-            base
-            + "各メンバーの意見・反論・応答を読み、最終判定を下す。多数決ではなく論拠の強さで判断し、"
-            "採用しなかった少数意見を必ず dissent に残すこと。"
-            "損切りや売買停止などのルールベース判定は委員会の判定より優先される前提で判断すること。"
-            + _COMMON_RULES
-        )
+        return base + _PM_RULES + _COMMON_RULES
     return base + _ROLE_FOCUS[role] + _COMMON_RULES
 
 
@@ -205,8 +220,13 @@ def build_macro_prompt(market_env_text: str, usdjpy: float | None, market_news: 
     parts = [market_env_text, f"## 為替\nUSD/JPY: {_fmt(usdjpy)}"]
     if market_news:
         parts.append(market_news)
-    parts.append("本日の株式市場全体（日本株・米国株）への影響を評価してください。")
-    parts.append(_json_instruction(_ANALYST_SCHEMA))
+    parts.append(
+        "日本株と米国株のそれぞれについて、本日の市場環境が新規の買いにとって"
+        "追い風か逆風かを個別に評価してください。"
+        "日経平均は日本株の評価にのみ、S&P500 は米国株の評価にのみ使うこと。"
+        "一方の指数しかデータがない場合、もう一方は「データなし」として中立寄りに評価すること。"
+    )
+    parts.append(_json_instruction(_MACRO_SCHEMA))
     return "\n\n".join(parts)
 
 

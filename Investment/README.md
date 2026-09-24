@@ -223,6 +223,9 @@ Slack通知 + Webダッシュボード（/report）
 
 `watch` は上昇トレンド継続中の監視銘柄、`candidate` は買い検討候補（全条件一致）。警戒モード時は `candidate` を `watch` に降格し新規買い候補は通知しない。JP市場は `markets.jp.enabled` で有効化（保有監視のため夜バッチは継続推奨）。
 
+**ボラティリティ上限**: 全条件一致でも `ATR14 ÷ 株価` が `signal.candidate_max_atr_pct`（既定 6.0%）を超える銘柄は `candidate` にせず `watch` に落とす。
+**通知の優先順位**: 候補はボラティリティ（`ATR14 ÷ 株価`）が小さい順に並べ、上位から通知する。相対強度・出来高比の降順は、順位が上がるほど成績が悪化する逆相関だったため使わない。根拠は [docs/signal_expectancy_analysis.md](docs/signal_expectancy_analysis.md)。
+
 ### 市場環境モード
 
 シグナル検出には**対象市場の指数だけ**を使う（既定。`market_filter.per_market_mode`）。
@@ -383,6 +386,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 | [docs/README.md](docs/README.md) | ドキュメント一覧 |
 | [investment_support/SETUP.md](investment_support/SETUP.md) | セットアップ手順（スクリーンショット付き） |
 | [docs/jp_price_sources.md](docs/jp_price_sources.md) | 日本株価格データの取得元候補 |
+| [docs/signal_expectancy_analysis.md](docs/signal_expectancy_analysis.md) | シグナル期待値の調査（選抜ロジックの逆相関と対策） |
 | [docs/archive/](docs/archive/) | 旧戦略・設計書・計画・分析（アーカイブ） |
 | [CLAUDE.md](CLAUDE.md) | Claude Code 向けガイド |
 
@@ -407,7 +411,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 - JPX銘柄一覧Excelのエンコーディング問題により、JP銘柄名・セクター名が文字化けする場合がある（銘柄コードでの照合には影響なし）
 - J-Quants APIキー未設定の場合、JP財務データ・決算アラートは機能しない
 - Screening List の日付は `daily_signals` の最新日。流動性フィルタが 0 件だと更新されない（`allow_unknown_market_cap` が OFF かつ時価総額未登録のとき等）。Slack に警告が出る
-- 通知へ渡す候補数は `signal.max_entry_sets_per_batch` で指定する。全パターン合算のスコア上位N件で、旧キー `max_candidates_per_pattern` も後方互換として読み込む
+- 通知へ渡す候補数は `signal.max_entry_sets_per_batch` で指定する。全パターン合算でボラティリティの小さい順に上位N件を採り、旧キー `max_candidates_per_pattern` も後方互換として読み込む
 - スクリーニング件数と `daily_signals` 保存件数が一致しない場合、バッチは `partial_failure` として記録する
 - 同種バッチの `running` 状態が3時間を超えて残っている場合、次回バッチ開始時に `failed` として回収する
 - US の発行済株式数は月次バッチで EODHD から段階的に補完（`screening.us_shares_refresh_max_per_monthly`）。JP は J-Quants 月次更新

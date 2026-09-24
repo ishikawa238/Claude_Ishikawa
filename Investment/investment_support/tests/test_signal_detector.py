@@ -175,6 +175,102 @@ class SwingIntegrationTests(unittest.TestCase):
         self.assertEqual(row["label"], "watch")
 
 
+def _swing_ticker(ticker: str, close: float, atr14: float, **extra) -> dict:
+    """スイング3条件をすべて満たすテスト用銘柄。"""
+    tk = {
+        "ticker": ticker, "market": "US", "name": ticker,
+        "close": close, "ema25": close * 1.2, "ema75": close * 1.1,
+        "rsi14": 32.0, "atr14": atr14,
+        "volume": 1e6, "vol_20d_avg": 8e5, "support_level": close * 0.9,
+        "macd_diff": 0.2, "macd_dea": 0.1, "macd_hist": 0.1,
+        "macd_diff_prev": -0.1, "macd_dea_prev": 0.0, "macd_hist_prev": -0.1,
+        "est_turnover": 2e7, "est_market_cap": 5e9,
+    }
+    tk.update(extra)
+    return tk
+
+
+class CandidateVolatilityFilterTests(unittest.TestCase):
+    """高ボラティリティ銘柄を候補から外すフィルタのテスト。"""
+
+    def _mock_conn(self):
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=MagicMock())
+        cm.__exit__ = MagicMock(return_value=False)
+        return cm
+
+    def setUp(self):
+        self._patchers = [
+            patch("src.signal_detector.is_breakout_enabled", return_value=False),
+            patch("src.signal_detector.fetch_all", return_value=[]),
+            patch("src.signal_detector.upsert"),
+            patch("src.signal_detector.get_connection", return_value=self._mock_conn()),
+        ]
+        self.mocks = [p.start() for p in self._patchers]
+        self.mock_upsert = self.mocks[2]
+
+    def tearDown(self):
+        for p in self._patchers:
+            p.stop()
+
+    def _saved_rows(self) -> list[dict]:
+        return self.mock_upsert.call_args_list[0][0][2]
+
+    def test_high_volatility_candidate_is_demoted_to_watch(self):
+        """ATR÷株価 が上限超の銘柄は candidate にせず watch に落とす"""
+        # ATR 2.5 / 株価 25 = 10%
+        with patch.dict("src.signal_detector._SIG", {"candidate_max_atr_pct": 6.0}):
+            result = detect_and_save_signals(
+                [_swing_ticker("VOLA", 25.0, 2.5)], date(2026, 4, 22), "normal",
+            )
+        self.assertEqual(result, [])
+        self.assertEqual(self._saved_rows()[0]["label"], "watch")
+
+    def test_volatility_at_limit_is_kept(self):
+        """上限ちょうど（6.0%）は候補に残す"""
+        with patch.dict("src.signal_detector._SIG", {"candidate_max_atr_pct": 6.0}):
+            result = detect_and_save_signals(
+                [_swing_ticker("EDGE", 25.0, 1.5)], date(2026, 4, 22), "normal",
+            )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["label"], "candidate")
+
+    def test_filter_disabled_with_zero(self):
+        """0 を設定するとフィルタが無効になる"""
+        with patch.dict("src.signal_detector._SIG", {"candidate_max_atr_pct": 0}):
+            result = detect_and_save_signals(
+                [_swing_ticker("VOLA", 25.0, 2.5)], date(2026, 4, 22), "normal",
+            )
+        self.assertEqual(len(result), 1)
+
+    def test_candidates_are_ranked_by_ascending_volatility(self):
+        """通知順は rs_score 降順ではなくボラティリティ昇順になる"""
+        tickers = [
+            _swing_ticker("HIGHRS", 100.0, 5.0, rs_score=99),   # ATR 5%
+            _swing_ticker("CALM",   100.0, 2.0, rs_score=10),   # ATR 2%
+            _swing_ticker("MID",    100.0, 4.0, rs_score=50),   # ATR 4%
+        ]
+        with patch.dict("src.signal_detector._SIG", {"candidate_max_atr_pct": 6.0}):
+            result = detect_and_save_signals(tickers, date(2026, 4, 22), "normal")
+
+        self.assertEqual(result[0]["ticker"], "CALM")
+        ranks = {r["ticker"]: r["rs_rank"] for r in self._saved_rows()}
+        self.assertEqual([ranks["CALM"], ranks["MID"], ranks["HIGHRS"]], [1, 2, 3])
+
+    def test_missing_atr_is_ranked_last_but_not_dropped(self):
+        """ATR が取れない銘柄は除外せず、順位だけ後ろに回す"""
+        tickers = [
+            _swing_ticker("NOATR", 100.0, None),
+            _swing_ticker("CALM", 100.0, 2.0),
+        ]
+        with patch.dict("src.signal_detector._SIG", {"candidate_max_atr_pct": 6.0}):
+            result = detect_and_save_signals(tickers, date(2026, 4, 22), "normal")
+
+        self.assertEqual(result[0]["ticker"], "CALM")
+        ranks = {r["ticker"]: r["rs_rank"] for r in self._saved_rows()}
+        self.assertEqual(ranks["NOATR"], 2)
+
+
 class SignalDetectorConfigCompatibilityTests(unittest.TestCase):
     """通知上限の新旧設定キー互換を確認する。"""
 

@@ -108,7 +108,9 @@
     "index_max_stale_days": 5
   },
 
+  "_signal_comment": "candidate_max_atr_pct は候補に許容するボラティリティ（ATR14 ÷ 株価、%）の上限。これを超える銘柄は candidate にせず watch に落とす。実績では ATR 比 6% 超の候補が 20営業日後に平均 -12%〜-22%（上昇率 20%/12%）と大きく負け越したため既定 6.0。0 で無効。",
   "signal": {
+    "candidate_max_atr_pct": 6.0,
     "pattern_a_rsi_min": 50,
     "pattern_a_rsi_max": 70,
     "pattern_a_volume_ratio_min": 1.2,

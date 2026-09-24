@@ -105,6 +105,8 @@ Slack通知 + Webダッシュボード（127.0.0.1:5100）
 
 - **watch（監視）**: EMA25 > EMA75 — 上昇トレンド継続中
 - **candidate（検討候補）**: watch条件 + ダイナミックRSI + MACD反転またはゴールデンクロス確認
+- **ボラティリティ上限**: 全条件一致でも `ATR14 ÷ 株価` が `signal.candidate_max_atr_pct`（既定 6.0%）超なら watch に降格
+- **通知の優先順位**: ボラティリティが小さい順。根拠は [signal_expectancy_analysis.md](signal_expectancy_analysis.md)
 
 ### お気に入り毎時監視
 
@@ -160,7 +162,8 @@ Slack 通知のヘッダー表示とレポート統計に使われ、シグナ�
 | 項目 | 計算方法 |
 |------|---------|
 | エントリー価格 | 当日終値（翌日寄付想定） |
-| 損切りライン | サポート下（優先）または ATR14 × 2 |
+| 損切りライン | サポート下（優先）または ATR14 × 2。サポート基準の幅が上限超なら ATR 基準に切替 |
+| 損切り幅フィルタ | 1% 未満 / `signal.stop_loss_warning_max_pct`（既定 15%）超は見送り |
 | 利確目安（新規候補） | リスクリワード 2:1（参考表示） |
 | 推奨投入額 | `総資金 × 2% ÷ 損切り幅(%)` を基本に、`総資金 ÷ 有効保有枠` を上限 |
 
@@ -261,5 +264,6 @@ Slack 通知のヘッダー表示とレポート統計に使われ、シグナ�
 |-------------|------|
 | [README.md](../README.md) | セットアップ・日常運用・ディレクトリ構成 |
 | [jp_price_sources.md](jp_price_sources.md) | 日本株価格データの取得元候補 |
+| [signal_expectancy_analysis.md](signal_expectancy_analysis.md) | シグナル期待値の調査（選抜ロジックの逆相関と対策） |
 | [investment_support/SETUP.md](../investment_support/SETUP.md) | セットアップ手順 |
 | [archive/](archive/) | 旧戦略・設計書・計画・分析（参考用） |

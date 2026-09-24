@@ -48,6 +48,26 @@ def _breakout_max_candidates() -> int:
     return max(int(get_breakout_config().get("max_candidates_per_batch", 1)), 0)
 
 
+def _candidate_max_atr_pct() -> float:
+    """候補に許容する ATR÷株価 の上限（%）。0 以下で無効。"""
+    return float(_SIG.get("candidate_max_atr_pct", 6.0))
+
+
+def _atr_pct(row: dict) -> Optional[float]:
+    """ATR14 を株価に対する割合（%）で返す。算出できなければ None。"""
+    atr = row.get("atr14")
+    close = row.get("close")
+    if not atr or not close or float(close) <= 0:
+        return None
+    return float(atr) / float(close) * 100
+
+
+def _volatility_sort_key(row: dict) -> tuple:
+    """ボラティリティが小さい順。算出できない行は後ろに回す。"""
+    pct = _atr_pct(row)
+    return (pct is None, pct if pct is not None else 0.0, row.get("ticker") or "")
+
+
 def _enabled_strategies(market: str) -> list[tuple[str, bool]]:
     """(strategy_name, is_swing) のリスト。"""
     strategies: list[tuple[str, bool]] = [
@@ -70,6 +90,8 @@ def _evaluate_strategy(
     candidates: list[dict] = []
     all_rows: list[dict] = []
     insufficient = 0
+    max_atr_pct = _candidate_max_atr_pct()
+    too_volatile = 0
 
     for tk in screened_tickers:
         if is_swing:
@@ -87,6 +109,13 @@ def _evaluate_strategy(
         if market_mode in ("caution", "full_caution") and row["label"] == "candidate":
             row["label"] = "watch"
 
+        # 高ボラティリティ銘柄は損切り幅を管理できず、実績でも大きく負け越すため候補から外す
+        if row["label"] == "candidate" and max_atr_pct > 0:
+            pct = _atr_pct(row)
+            if pct is not None and pct > max_atr_pct:
+                row["label"] = "watch"
+                too_volatile += 1
+
         all_rows.append(row)
         if row["label"] == "candidate":
             row["_notify_extras"] = {
@@ -95,13 +124,14 @@ def _evaluate_strategy(
             }
             candidates.append(row)
 
-    if is_swing:
-        candidates.sort(
-            key=lambda x: (-(x.get("rs_score") or 0), x.get("rsi14") or 999),
-        )
-    else:
-        candidates.sort(
-            key=lambda x: (-(x.get("vol_ratio") or 0), -(x.get("rs_score") or 0)),
+    # ボラティリティが小さい順。相対強度・出来高比の降順は、実績で順位が上がるほど
+    # 成績が悪化する逆相関だったため使わない（docs/signal_expectancy_analysis.md）。
+    candidates.sort(key=_volatility_sort_key)
+
+    if too_volatile:
+        logger.info(
+            f"高ボラティリティのため候補から除外: {strategy_name} {too_volatile} 件"
+            f"（ATR÷株価 > {max_atr_pct:g}%）"
         )
 
     for rank, c in enumerate(candidates, start=1):

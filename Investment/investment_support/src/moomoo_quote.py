@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterator
 
+from shared.net import is_port_open
 from src.logger import get_logger
 from src.technical_calculator import calculate_snapshot
 
@@ -129,6 +130,9 @@ class MoomooQuoteClient:
     """OpenQuoteContext を使い回して kline / snapshot を取得する。"""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 11111) -> None:
+        # SDK は OpenD 未起動だと接続を無期限に再試行して戻らないため、先に確認する
+        if not is_port_open(host, port):
+            raise ConnectionError(f"moomoo OpenD に接続できません ({host}:{port})")
         ensure_sdk_path()
         from moomoo import OpenQuoteContext
 

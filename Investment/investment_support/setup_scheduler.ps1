@@ -112,6 +112,42 @@ $action = New-ScheduledTaskAction `
 Set-ScheduledTask -TaskName $monthlyTaskName -Action $action | Out-Null
 Write-Host "Registered: $monthlyTaskName" -ForegroundColor Green
 
+# moomoo OpenD keeper - at logon + every hour at :10 (20 min before the 07:30 / 20:30 batches)
+# The GUI edition of OpenD needs the interactive desktop, so this task runs only while the user is logged on.
+$openDTaskName = "Investment_OpenD"
+if (Get-ScheduledTask -TaskName $openDTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $openDTaskName -Confirm:$false
+    Write-Host "Removed existing task: $openDTaskName"
+}
+$openDAction = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ProjectDir\scripts\ensure_opend.ps1`"" `
+    -WorkingDirectory $ProjectDir
+$openDHourly = New-ScheduledTaskTrigger -Daily -At "00:10"
+$openDHourly.Repetition = (New-ScheduledTaskTrigger -Once -At "00:10" `
+    -RepetitionInterval (New-TimeSpan -Hours 1) `
+    -RepetitionDuration (New-TimeSpan -Hours 23 -Minutes 59)).Repetition
+$openDLogon = New-ScheduledTaskTrigger -AtLogOn -User ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+$openDSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew
+$openDPrincipal = New-ScheduledTaskPrincipal `
+    -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+    -LogonType Interactive `
+    -RunLevel Limited
+Register-ScheduledTask `
+    -TaskName    $openDTaskName `
+    -Description "Investment Support - Keep moomoo OpenD running (at logon + hourly at :10)" `
+    -Action      $openDAction `
+    -Trigger     @($openDLogon, $openDHourly) `
+    -Settings    $openDSettings `
+    -Principal   $openDPrincipal `
+    -Force | Out-Null
+Write-Host "Registered: $openDTaskName" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  All tasks registered successfully." -ForegroundColor Cyan
@@ -119,6 +155,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Schedule summary:"
 Write-Host "  At logon     ->  Investment_Dashboard (127.0.0.1:5100)"
+Write-Host "  Logon+hourly ->  Investment_OpenD (starts moomoo OpenD if port 11111 is closed)"
 Write-Host "  Daily 07:30  ->  Investment_MorningBatch_ALL"
 Write-Host "  Daily 20:30  ->  Investment_EveningBatch_JP"
 Write-Host "  Hourly       ->  Investment_WatchlistHourly (market-hours gate inside batch)"

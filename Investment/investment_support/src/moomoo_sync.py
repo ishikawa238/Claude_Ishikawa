@@ -28,6 +28,7 @@ _CSV_HEADER = ["ticker", "name", "market", "entry_price", "entry_date",
 # moomoo code → market マッピング
 _MARKET_PREFIX = {"JP": "JP", "US": "US", "HK": "HK", "SH": "JP", "SZ": "JP"}
 
+from shared.net import is_port_open
 from src.config import CONFIG
 from src.data_store import fetch_all, fetch_one, get_connection, insert_one
 from src.logger import get_logger
@@ -41,6 +42,19 @@ def _get_moomoo_cfg() -> dict | None:
     if not cfg:
         return None
     return cfg
+
+
+def _opend_reachable(host: str, port: int) -> bool:
+    """
+    OpenD のポートに接続できるかを確認する。
+
+    moomoo SDK は OpenD が起動していないと接続を無期限に再試行して処理が戻らず、
+    バッチ全体がタイムアウトする。SDK を呼ぶ前にここで弾く。
+    """
+    if is_port_open(host, port):
+        return True
+    logger.warning(f"moomoo OpenD に接続できません ({host}:{port})。起動していないためスキップします")
+    return False
 
 
 def _fetch_positions(host: str, port: int) -> list[dict]:
@@ -142,6 +156,8 @@ def fetch_account_cash() -> dict[str, float]:
 
     host = cfg.get("host", "127.0.0.1")
     port = int(cfg.get("port", 11111))
+    if not _opend_reachable(host, port):
+        return result
 
     sdk_path = str(_MOOMOO_SDK)
     if sdk_path not in sys.path:
@@ -252,6 +268,9 @@ def sync_from_moomoo(dry_run: bool = False) -> tuple[int, int]:
 
     host = cfg.get("host", "127.0.0.1")
     port = int(cfg.get("port", 11111))
+
+    if not _opend_reachable(host, port):
+        return 0, 0
 
     logger.info(f"moomoo OpenD に接続中... ({host}:{port})")
     positions = _fetch_positions(host, port)
@@ -442,6 +461,9 @@ def sync_trade_results() -> int:
 
     host = cfg.get("host", "127.0.0.1")
     port = int(cfg.get("port", 11111))
+
+    if not _opend_reachable(host, port):
+        return 0
 
     logger.info("moomoo 約定履歴を取得中...")
     deals = _fetch_deal_history(host, port)

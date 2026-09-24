@@ -11,9 +11,11 @@ from __future__ import annotations
 import csv
 import sys
 import time
+from collections import deque
 from datetime import date, datetime
 from pathlib import Path
 
+from shared.net import is_port_open
 from src.config import CONFIG
 from src.data_store import fetch_all, get_connection
 from src.logger import get_logger
@@ -28,8 +30,21 @@ _CSV_FIELDS = ["ticker", "market", "moomoo_code", "added_at", "last_candidate_da
 _MARKET_PREFIX = {"JP": "JP", "US": "US"}
 _DEFAULT_GROUP = "システム候補"
 _DEFAULT_MIN_DAYS = 7
+# modify_user_security は「30 秒に 10 回まで」。追加・削除で共通のカウントになる
 _API_BATCH_SIZE = 10
-_API_BATCH_PAUSE_SEC = 3.1
+_API_WINDOW_SEC = 31.0
+_modify_call_times: deque[float] = deque()
+
+
+def _wait_for_modify_slot() -> None:
+    """直近 _API_WINDOW_SEC 秒の呼び出しが上限に達していれば、枠が空くまで待つ。"""
+    now = time.monotonic()
+    while _modify_call_times and now - _modify_call_times[0] >= _API_WINDOW_SEC:
+        _modify_call_times.popleft()
+    if len(_modify_call_times) >= _API_BATCH_SIZE:
+        time.sleep(_API_WINDOW_SEC - (now - _modify_call_times[0]))
+        _modify_call_times.popleft()
+    _modify_call_times.append(time.monotonic())
 
 # moomoo OpenAPI の modify_user_security は Moomoo JP 口座で日本株に未対応。
 # （JP.7974 等でも "not supported for SGX and OSE futures" が返る。US 株は動作確認済み）
@@ -121,6 +136,11 @@ def fetch_watchlist_tickers(
     host = moomoo_cfg.get("host", "127.0.0.1")
     port = int(moomoo_cfg.get("port", 11111))
     allowed = {m.upper() for m in (markets or mon_cfg.get("markets") or ["US"])}
+
+    # SDK は OpenD 未起動だと接続を無期限に再試行して戻らないため、先に確認する
+    if not is_port_open(host, port):
+        logger.warning(f"moomoo OpenD に接続できません ({host}:{port})。お気に入り取得をスキップします")
+        return []
 
     group_name = _resolve_group_name(mon_cfg, host, port)
     if not group_name:
@@ -362,14 +382,13 @@ def _modify_codes(
     failed: list[tuple[str, str]] = []
     ctx = OpenQuoteContext(host=host, port=port)
     try:
-        for i, code in enumerate(codes):
+        for code in codes:
+            _wait_for_modify_slot()
             ret, msg = ctx.modify_user_security(group_name, op, [code])
             if ret == RET_OK:
                 succeeded.append(code)
             else:
                 failed.append((code, str(msg)))
-            if (i + 1) % _API_BATCH_SIZE == 0 and i + 1 < len(codes):
-                time.sleep(_API_BATCH_PAUSE_SEC)
         return succeeded, failed
     finally:
         ctx.close()
@@ -435,6 +454,10 @@ def sync_watchlist(market: str, target_date: date) -> dict:
             "skipped": True,
             "error": "market_not_supported",
         }
+
+    if not is_port_open(host, port):
+        logger.warning(f"moomoo OpenD に接続できません ({host}:{port})。お気に入り同期をスキップします")
+        return {"added": 0, "updated": 0, "removed": 0, "skipped": True, "error": "opend_unreachable"}
 
     candidates = fetch_candidate_tickers(market_u, target_date)
     tracked = load_tracked_rows()
@@ -520,24 +543,16 @@ def sync_watchlist(market: str, target_date: date) -> dict:
         if fail_codes:
             for code, msg in fail_codes:
                 logger.warning(f"moomoo お気に入り削除失敗: {code} ({msg})")
-        if ok_codes:
-            removed = len(ok_codes)
-            ok_set = set(ok_codes)
-            for row in plan["remove"]:
-                if row["moomoo_code"] in ok_set:
-                    logger.info(f"  [お気に入り削除] {row['moomoo_code']}")
-            # 削除に失敗した銘柄は CSV に残す
-            fail_keys = {
-                _row_key(r["ticker"], r["market"])
-                for r in plan["remove"]
-                if r["moomoo_code"] not in ok_set
-            }
-            if fail_keys:
-                plan["next_rows"].extend([
-                    r for r in plan["remove"]
-                    if _row_key(r["ticker"], r["market"]) in fail_keys
-                ])
-        elif plan["remove"] and not added:
+        ok_set = set(ok_codes)
+        removed = len(ok_codes)
+        for row in plan["remove"]:
+            if row["moomoo_code"] in ok_set:
+                logger.info(f"  [お気に入り削除] {row['moomoo_code']}")
+        # 削除に失敗した銘柄は CSV に残し、次回再試行する（全件失敗でも追加が成功していれば保存に進むため）
+        plan["next_rows"].extend(
+            r for r in plan["remove"] if r["moomoo_code"] not in ok_set
+        )
+        if not ok_codes and not added:
             return {
                 "added": added,
                 "updated": len(plan["update"]),

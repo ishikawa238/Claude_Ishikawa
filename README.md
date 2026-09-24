@@ -13,7 +13,7 @@
 | `EnglishDaily/` | 英語学習習慣化システム。曜日別カリキュラムを毎朝 Slack に配信し、連続学習日数（ストリーク）を管理する。 |
 | `MorningPlaylist/` | 英語ポッドキャスト自動再生システム。Spotify API で最新エピソードをプレイリストに入れ替え、Spotify Connect で Echo に再生開始する。 |
 | `watchdog/` | 横断監視スクリプト。全システムの SQLite DB を巡回し、バッチ未実行や致命的エラーを検知して Slack に通知する。 |
-| `shared/` | 共通モジュール（config, db, slack, logger）。各システムから `pip install -e "../../[slack]"` で利用する。 |
+| `shared/` | 共通モジュール（config, db, slack, logger, net）。各システムから `pip install -e "../../[slack]"` で利用する。 |
 | `claude-study/` | Claude Code の練習用プロジェクト。CLI 電卓と CSV 集計ツール。 |
 
 ## Slack 通知スケジュール
@@ -74,6 +74,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | Investment_MorningBatch_ALL | 毎日 07:30 |
 | Investment_EveningBatch_JP | 毎日 18:30 |
 | Investment_MonthlyBatch | 毎月 1日 08:00 |
+| Investment_OpenD | ログオン時 + 毎時 10分（ログオン中のみ。moomoo OpenD が落ちていれば起動） |
 | MorningEnglishPlaylistUpdate | config.json で指定した時刻 |
 | FreelanceScout_MorningBatch | 毎日 07:00 |
 | AiNewsDigest_MorningBatch | 毎日 07:00 |

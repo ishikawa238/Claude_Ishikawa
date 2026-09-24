@@ -57,12 +57,16 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 
 | サービス | 用途 | config.json のキー | 費用 |
 |---------|------|-------------------|------|
-| EODHD | 日次価格データ（US）・インデックス | `eodhd.api_key` | $19.99/月 |
+| EODHD（任意） | 日次価格データ（US）・インデックス | `eodhd.api_key` | $19.99/月 |
 | Slack Incoming Webhook | 通知送信 | `slack.webhook_url` | 無料 |
 | J-Quants（任意） | JP財務データ・決算予定 | `jquants.api_key` | 無料プランあり |
 | OpenAI（任意） | LLMアドバイザー（ChatGPT） | `llm.openai.api_key` | 従量制（月額約$0.15） |
 | Anthropic（任意） | LLMアドバイザー（Claude） | `llm.anthropic.api_key` | 従量制（月額約$1.50） |
 | Google Gemini（任意） | LLMアドバイザー（Gemini） | `llm.gemini.api_key` | 無料枠あり（月額約$0.05） |
+
+EODHD は `eodhd.enabled: false` で無効にできる。無効時は価格・指数とも yfinance で取得する
+（2026-06 以降、データ契約がなく全リクエストが HTTP 401 だったため、現在の運用は無効）。
+yfinance だけの場合、米国株の価格取得に約20分かかる。
 
 ### 目標・停止ルールの主要設定
 
@@ -152,6 +156,17 @@ python -m scripts.cleanup_duplicate_trade_signals  # 通知ログ重複の確認
 
 `investment_support/holdings.csv` を直接編集する。moomoo OpenD が起動中の場合はバッチ実行時に保有銘柄が自動同期される（任意・未接続でも動作する）。
 
+### moomoo OpenD の自動起動
+
+タスク `Investment_OpenD`（`setup_scheduler.ps1` で登録）が、ログオン時と毎時10分に
+`scripts/ensure_opend.ps1` を実行する。API ポート 11111 が閉じていれば
+`%APPDATA%\moomoo_OpenD\moomoo_OpenD.exe` を最小化で起動し、ポートが開くまで最大2分待つ。
+朝バッチ（07:30）・夜バッチ（20:30）の20分前に必ず確認が入る。
+
+- GUI 版 OpenD は画面のあるセッションでしか動かないため、**Windows にログオンしている間だけ**動作する（ロック中は可）
+- **OpenD のログイン画面で「自動ログイン」を有効にしておく**こと。無効だと起動してもログイン待ちで止まり、ポートが開かない
+- 起動した・起動できなかった記録は `logs/opend_YYYYMMDD.log` に残る（ポートが開いていて何もしなかった回は記録しない）
+
 ```csv
 ticker,name,market,entry_price,entry_date,quantity,stop_loss_price,memo
 7203,トヨタ自動車,JP,3200,2025-01-15,10,,
@@ -174,6 +189,7 @@ moomoo OpenD が起動中の場合、バッチ実行時に約定履歴（過去9
 Performanceページの「+ トレード結果を記録」ボタンからフォーム入力で記録できる。ティッカーを入力すると対応するシグナルが自動検索される。シグナルがない銘柄も記録可能。
 
 - moomoo OpenD 未接続時は自動同期がスキップされる（ダッシュボードからの手動記録は常に利用可能）
+  - SDK を呼ぶ前に OpenD のポートへ接続できるかを3秒で確認する。SDK は OpenD 未起動だと接続を無期限に再試行するため、これがないとバッチがタイムアウトする
 - moomoo の約定履歴は過去90日分のみ取得可能
 
 ## アーキテクチャ
@@ -205,11 +221,20 @@ Slack通知 + Webダッシュボード（/report）
 
 ### 市場環境モード
 
-| モード | 条件 | 新規買いシグナル |
-|-------|------|----------------|
-| 通常（normal） | 日経平均 ≥ MA25 かつ S&P500 ≥ MA25 | 発信する |
-| 警戒（caution） | いずれか一方が MA25 未満 | 停止 |
-| 全面警戒（full_caution） | 両方が MA25 未満 | 停止 |
+シグナル検出には**対象市場の指数だけ**を使う（既定。`market_filter.per_market_mode`）。
+
+| 対象 | 判定に使う指数 | 発信する | 停止する |
+|------|--------------|---------|---------|
+| 日本株 | 日経平均のみ | 日経平均 ≥ MA25 | 日経平均 < MA25、または判定不能 |
+| 米国株 | S&P500 のみ | S&P500 ≥ MA25 | S&P500 < MA25、または判定不能 |
+
+判定不能（警戒扱い）になるのは、指数の MA25 が未計算の場合と、使えるデータが
+`market_filter.index_max_stale_days`（既定 5 日）より古い場合。当日データがなければ
+鮮度の範囲内で直近営業日の値を使う。
+
+`market_environment.mode` には両指数を組み合わせた全体モード（normal / caution /
+full_caution）を保存し、通知ヘッダーとレポート統計に使う。`per_market_mode: false` で
+従来どおり全体モードによるシグナル制御に戻せる。
 
 保有銘柄の損切り判定は、市場環境に関わらず常に実行される。
 

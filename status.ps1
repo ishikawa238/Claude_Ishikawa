@@ -14,6 +14,7 @@ $tasks = @(
     @{ Name = "Investment_MorningBatch_ALL";     Group = "Investment" },
     @{ Name = "Investment_EveningBatch_JP";      Group = "Investment" },
     @{ Name = "Investment_MonthlyBatch";         Group = "Investment" },
+    @{ Name = "Investment_OpenD";                Group = "Investment" },
     @{ Name = "MorningEnglishPlaylistUpdate";    Group = "MorningPlaylist" },
     @{ Name = "FreelanceScout_MorningBatch";     Group = "FreelanceScout" },
     @{ Name = "AiNewsDigest_MorningBatch";       Group = "AiNewsDigest" },
@@ -110,6 +111,28 @@ foreach ($srv in $servers) {
     }
     catch {
         Write-Host ("  {0,-40} {1}" -f $srv.Label, "[NG] not responding") -ForegroundColor Red
+    }
+}
+
+# HTTP を話さない常駐プロセスは TCP ポートの開閉だけ確認する
+$ports = @(
+    @{ Label = "moomoo OpenD (API)"; HostName = "127.0.0.1"; Port = 11111 }
+)
+
+foreach ($p in $ports) {
+    $client = New-Object Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect($p.HostName, $p.Port, $null, $null)
+        $open = $async.AsyncWaitHandle.WaitOne(2000) -and $client.Connected
+    } catch {
+        $open = $false
+    } finally {
+        $client.Close()
+    }
+    if ($open) {
+        Write-Host ("  {0,-40} {1}" -f $p.Label, "[OK] port $($p.Port) open") -ForegroundColor Green
+    } else {
+        Write-Host ("  {0,-40} {1}" -f $p.Label, "[NG] port $($p.Port) closed") -ForegroundColor Red
     }
 }
 

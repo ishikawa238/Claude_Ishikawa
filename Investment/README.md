@@ -112,6 +112,9 @@ yfinance だけの場合、米国株の価格取得に約20分かかる。
 4. `pricing_usd_per_1m` を実際のモデル単価に合わせる（推定コストと日次予算 `daily_budget_jpy` の計算に使う）
 
 PM（`agents.pm`）の API キーが未設定の場合、委員会は開催されず従来どおりの通知になる。
+委員会はタスクスケジューラ経由の定時実行でのみ開催される（ダッシュボードや `run_manual` からの手動実行は LLM 呼び出しをスキップ）。
+
+判定の事後検証は `python -m scripts.committee_review` で行う。判定後 5 / 20 営業日のリターン・勝率・方向正解率・損切り/利確の先着を判定別に集計し、同期間の全エントリーセットをベースラインとして並べる（`--since`、`--horizons`、`--detail` で調整）。
 
 ## 日常の使い方
 
@@ -145,6 +148,7 @@ python -m scripts.add_trade_result      # トレード結果の手動記録
 python -m scripts.fetch_historical      # 履歴データの再取得（冪等）
 python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30  # バックテスト
 python -m scripts.update_paper_trades --summary  # ペーパートレードのサマリー表示
+python -m scripts.committee_review      # 投資委員会の判定を事後の値動きで検証
 python -m scripts.cleanup_duplicate_trade_signals  # 通知ログ重複の確認（dry-run）
 ```
 
@@ -310,6 +314,7 @@ investment_support/
 │   ├── llm_advisor.py        # LLMアドバイザー（ChatGPT/Claude/Gemini自動フィードバック）
 │   ├── committee.py          # AI投資委員会（マルチエージェント判定）オーケストレータ
 │   ├── committee_prompts.py  # 委員会のプロンプト・入力整形・出力スキーマ
+│   ├── committee_review.py   # 委員会判定の事後検証（N営業日リターン・ベースライン比較）
 │   ├── fundamentals_fetcher.py  # yfinance 財務指標取得（日次キャッシュ）
 │   ├── news_fetcher.py       # ニュース取得（Google News RSS）
 │   └── report_generator.py   # 月次レポート生成（運用統計付き）
@@ -324,6 +329,7 @@ investment_support/
 │   ├── order_server.py       # Webダッシュボード（Flask, 127.0.0.1:5100）
 │   ├── backtest_signals.py   # バックテスト実行CLI
 │   ├── update_paper_trades.py # ペーパートレード更新・サマリー表示
+│   ├── committee_review.py   # 委員会判定の事後検証CLI
 │   ├── add_trade_result.py   # トレード結果の手動記録
 │   └── sync_holdings_from_moomoo.py  # moomoo手動同期
 │

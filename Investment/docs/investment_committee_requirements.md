@@ -26,7 +26,7 @@
 
 | KPI | 目標 | 計測方法 |
 |-----|------|---------|
-| 判断品質 | 委員会 GO 銘柄のペーパートレード期待値 ＞ 全シグナルの期待値 | `paper_trades` を委員会判定でグルーピングし、3 か月（約 60 営業日）で比較 |
+| 判断品質 | 委員会 GO 銘柄の期待値 ＞ 全シグナルの期待値 | `scripts.committee_review` で判定別と全エントリーセットを 3 か月（約 60 営業日）比較（7.2 参照） |
 | 運用費 | LLM API 費 **1,000 円/月以下** | `committee_verdict_log` の推定コスト合計 |
 | 稼働率 | 委員会開催率 90% 以上、エージェント欠席率 10% 以下 | `committee_verdict_log.status` |
 
@@ -195,8 +195,15 @@ PM: 全材料から JSON 判定
 
 ### 7.2 既存テーブルへの追加
 
-- `paper_trades` に `committee_verdict` / `committee_confidence` カラムを追加（`init_db.py` の `MIGRATION_STATEMENTS` に冪等に追加）。
-- `update_paper_trades --summary` に委員会判定別の期待値・勝率・件数の内訳を追加する。これが KPI 1 の計測手段になる。
+- ~~`paper_trades` に `committee_verdict` / `committee_confidence` カラムを追加~~ → **方式変更（2026-09-24）**
+- KPI 1 の計測は `python -m scripts.committee_review`（`src/committee_review.py`）で行う。
+  `committee_verdict_log` の判定ごとに `price_history` から判定後 5 / 20 営業日のリターン・方向正解率・損切り/利確の先着を集計し、
+  同期間の全エントリーセット（`trade_signal_log`）をベースラインとして比較する。スキーマ変更は不要。
+  - 変更理由: `paper_mode` は既定 OFF で `paper_trades` が 0 件、かつ保有上限・同一銘柄 1 ポジション制約でサンプルが偏るため。
+    WAIT / SKIP（見送り）判定の正否もペーパートレードでは測れない。
+  - `price_history` は株式分割未調整のため、前日比 0.4 倍未満 / 2.5 倍超の日を含む期間は「分割疑い」として除外する。
+  - 導入時点のベースライン（2026-06-01〜09-24 の全エントリーセット 100 件）: 5 日後平均 −3.8%（上昇 28%）、
+    20 日後平均 −12.6%（上昇 24%）、利確先着 8 件 / 損切り先着 38 件。委員会の有無以前にシグナル自体の期待値がマイナス。
 
 ---
 

@@ -147,6 +147,15 @@
     "us_shares_refresh_interval_sec": 0.25
   },
 
+  "_universe_prefilter_comment": "価格取得の事前フィルタ。US は universe_master に約1.8万銘柄あり yfinance の全件取得だけで約22分かかるが、直近3か月に売買代金 us_min_turnover を一度でも超えた銘柄は3,500件程度しかない。min_turnover_ratio は screening.*_min_turnover に対する倍率で、この割合を下回る銘柄を日次の取得対象から外す。価格履歴が無い銘柄と保有中の銘柄は常に取得する。full_refresh_weekday（月=0…土=5、-1で無効）の日は全銘柄を取得して売買代金の実績を更新する。enabled=false で無効。",
+  "universe_prefilter": {
+    "enabled": true,
+    "markets": ["US"],
+    "lookback_days": 90,
+    "min_turnover_ratio": 0.25,
+    "full_refresh_weekday": 5
+  },
+
   "schedule": {
     "evening_jp_target_time": "20:30",
     "morning_all_target_time": "07:30"

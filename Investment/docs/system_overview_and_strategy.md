@@ -51,7 +51,7 @@ Slack通知 + Webダッシュボード（127.0.0.1:5100）
 |------|--------|------|
 | ログオン時 | `order_server` | Webダッシュボード起動 |
 | 毎日 20:30 | `batch_evening_jp` | JP株価取得 → テクニカル → シグナル → Slack夜通知 |
-| 毎日 07:30 | `batch_morning_all` | US株価取得 → JP+US統合 → Slack朝通知 |
+| 毎日 07:30 | `batch_morning_all` | US株価取得（平日は低流動性を事前除外、土曜は全銘柄） → JP+US統合 → Slack朝通知 |
 | 毎時 | `batch_watchlist_hourly` | moomooお気に入りスイング監視 + 保有損切り/利確アラート |
 | 毎月1日 08:00 | `batch_monthly` | 銘柄マスタ更新 + 月次レポート |
 

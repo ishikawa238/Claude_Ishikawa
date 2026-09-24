@@ -66,7 +66,9 @@ python -m scripts.fetch_historical      # 過去3年分の価格データ取得�
 
 EODHD は `eodhd.enabled: false` で無効にできる。無効時は価格・指数とも yfinance で取得する
 （2026-06 以降、データ契約がなく全リクエストが HTTP 401 だったため、現在の運用は無効）。
-yfinance だけの場合、米国株の価格取得に約20分かかる。
+yfinance だけの場合、米国株の全件取得に約20分かかる。日次は `universe_prefilter` で
+流動性が明らかに足りない銘柄を外し、平日は約4,000〜5,000件（目安6分）に絞る。
+土曜の朝バッチは全銘柄を取り直し、売買代金の実績を更新する。
 
 ### 目標・停止ルールの主要設定
 
@@ -298,6 +300,7 @@ investment_support/
 │   ├── data_store.py         # SQLite操作・バックアップ
 │   ├── technical_calculator.py  # テクニカル指標計算
 │   ├── market_filter.py      # 市場環境判定・流動性フィルタ
+│   ├── universe_prefilter.py # 価格取得対象の事前フィルタ（US 低流動性を除外）
 │   ├── swing_detector.py     # EMA押し目スイング条件評価
 │   ├── exit_simple.py        # シンプル利確（時間減衰 + 延長保有）
 │   ├── signal_detector.py    # シグナル検出・daily_signals 保存

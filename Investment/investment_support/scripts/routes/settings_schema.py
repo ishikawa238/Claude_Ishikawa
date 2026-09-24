@@ -147,6 +147,17 @@ EDITABLE_SETTINGS: list[dict] = [
     {"section": "screening", "key": "us_shares_refresh_max_per_monthly", "label": "US株式数 月次更新上限",
      "type": "int", "default": 200, "min": 0, "max": 5000, "step": 50,
      "help": "月次バッチで EODHD から取得する US 発行済株式数の上限", "group": "screening"},
+    # --- 価格取得の事前フィルタ ---
+    {"section": "universe_prefilter", "key": "enabled", "label": "US価格取得の事前フィルタ",
+     "type": "bool", "default": True, "min": None, "max": None, "step": None,
+     "help": "直近の売買代金が低い銘柄を日次の価格取得から外し、朝バッチを短縮する", "group": "universe_prefilter"},
+    {"section": "universe_prefilter", "key": "min_turnover_ratio", "label": "取得対象の売買代金倍率",
+     "type": "float", "default": 0.25, "min": 0.0, "max": 1.0, "step": 0.05,
+     "help": "screening.us_min_turnover に対する倍率。この割合未満は取得しない（0で履歴のある全銘柄を対象）",
+     "group": "universe_prefilter"},
+    {"section": "universe_prefilter", "key": "lookback_days", "label": "売買代金の参照日数",
+     "type": "int", "default": 90, "min": 14, "max": 365, "step": 7,
+     "help": "この期間の最大売買代金で判定する", "group": "universe_prefilter"},
     # --- ペーパーモード ---
     {"section": "paper_mode", "key": "enabled", "label": "ペーパーモード",
      "type": "bool", "default": False, "min": None, "max": None, "step": None,
@@ -165,6 +176,7 @@ GROUP_LABELS = {
     "entry": "エントリー計算",
     "exit_simple": "保有銘柄の出口",
     "screening": "流動性スクリーニング",
+    "universe_prefilter": "価格取得の事前フィルタ",
     "paper_mode": "ペーパーモード",
 }
 
@@ -177,5 +189,6 @@ GROUP_ORDER = [
     "entry",
     "exit_simple",
     "screening",
+    "universe_prefilter",
     "paper_mode",
 ]

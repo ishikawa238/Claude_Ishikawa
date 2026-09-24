@@ -53,13 +53,14 @@ from src.signal_detector import diagnose_signal_save_count, detect_and_save_sign
 from src.technical_calculator import (
     calculate_and_save_index_mas, calculate_and_save_snapshots,
 )
+from src.universe_prefilter import select_fetch_tickers
 
 logger = get_logger(__name__)
 _TODAY = date.today()
 _BATCH_TYPE = "morning_all"
 _LOCK_DIR = _PROJECT_ROOT / "data"
 _LOCK_FILE = _LOCK_DIR / "batch_morning_all.lock"
-# yfinance で米国株約 1.8 万銘柄を取得するだけで約 22 分かかるため、30 分では余裕がない
+# 平日は事前フィルタで数千件に絞るが、土曜の全銘柄取得は約 22 分かかるため 45 分を維持する
 _BATCH_TIMEOUT_SEC = 45 * 60  # 45分
 
 
@@ -204,6 +205,9 @@ def _run_batch(
                 "WHERE market='US' AND is_active=1 AND is_excluded=0",
             )
         tickers_with_market = [(r["ticker"], "US") for r in us_tickers]
+        # 流動性が明らかに足りない銘柄を取得対象から外す（yfinance の取得時間対策）。
+        # 土曜は全銘柄取得日。朝バッチは日曜・月曜をスキップするため、土曜は実行される。
+        tickers_with_market = select_fetch_tickers(tickers_with_market, "US", _TODAY)
         logger.info(f"対象銘柄: US {len(tickers_with_market)} 件")
 
         # 価格データ取得（EODHD Bulk: 1リクエストで US 全銘柄の最新取引日データを取得）

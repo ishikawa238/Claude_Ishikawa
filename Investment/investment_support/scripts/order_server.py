@@ -550,6 +550,36 @@ def report():
 
 
 # ============================================================
+# ルーティング: /committee  (投資委員会の議事録)
+# ============================================================
+
+@app.route("/committee")
+def committee_page():
+    """投資委員会の判定一覧と議事録全文。"""
+    from src.committee_view import latest_verdict_date, list_verdict_dates, load_day
+
+    dates = list_verdict_dates(60)
+    selected = request.args.get("date") or latest_verdict_date()
+    if selected and selected not in dates and dates:
+        # 手入力で存在しない日付を指定された場合は最新へ
+        selected = dates[0]
+    day = load_day(selected) if selected else {"date": None, "macros": [], "verdicts": [], "cost_jpy": 0.0}
+    buy_count = sum(1 for v in day["verdicts"] if v.get("verdict") in ("BUY", "ADD"))
+    cautious_count = sum(
+        1 for v in day["verdicts"] if v.get("verdict") in ("WAIT", "SKIP", "SELL", "REDUCE")
+    )
+    return render_template(
+        "committee.html",
+        active_page="committee",
+        dates=dates,
+        selected_date=selected,
+        day=day,
+        buy_count=buy_count,
+        cautious_count=cautious_count,
+    )
+
+
+# ============================================================
 # ルーティング: /stock/<ticker>  (Phase 2 個別銘柄)
 # ============================================================
 

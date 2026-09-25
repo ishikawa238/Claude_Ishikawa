@@ -219,7 +219,9 @@ PM: 全材料から JSON 判定
 ### 8.2 ダッシュボード
 
 - 新規ページ `/committee`（`order_server.py` に追加）: 日付ごとの判定一覧、行を展開すると各エージェントの意見・反論・応答・PM 根拠を表示
-- `/report` の該当銘柄に判定バッジを表示（Phase 2）
+- API: `GET /api/committee/verdicts?date=YYYY-MM-DD`（一覧+全文）、`GET /api/committee/verdicts/<id>`（単件）
+- Slack の委員会ブロックから議事録ページへリンク
+- `/report` の各銘柄に判定バッジを表示（未実装）
 
 ---
 
@@ -243,7 +245,7 @@ PM: 全材料から JSON 判定
 | フェーズ | 内容 | 完了条件 |
 |---------|------|---------|
 | Phase 1 | オーケストレータ、5 エージェント、`committee_verdict_log`、予算ガード、Slack サマリー、yfinance 財務キャッシュ、単体テスト | `committee.enabled=true` で朝・夜バッチが通り、判定がログと Slack に出る |
-| Phase 2 | `/committee` ページ、`paper_trades` への判定タグ付け、`--summary` の判定別内訳 | KPI 1 が計測できる |
+| Phase 2 | `/committee` ページ（議事録全文）、API、Slack からのリンク。`paper_trades` への判定タグ付けと `--summary` の判定別内訳は一部未着手 | `/committee` で判定の議論を確認できる |
 | Phase 3（3 か月後） | KPI 評価。継続/停止/拡張（オンデマンド実行、FRED 等マクロ指標、LangGraph 移行）を判断 | 評価レポート |
 
 ---

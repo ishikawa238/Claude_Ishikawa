@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}投資委員会 — Investment Dashboard{% endblock %}
+
+{% block head_extra %}
+<style>
+  .committee-verdict-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+  }
+  .verdict-BUY, .verdict-ADD, .verdict-HOLD { background: #DCFCE7; color: #166534; }
+  .verdict-WAIT, .verdict-SKIP, .verdict-REDUCE { background: #FEF3C7; color: #92400E; }
+  .verdict-SELL { background: #FEE2E2; color: #991B1B; }
+  .verdict-none { background: var(--bg-card-hover); color: var(--text-muted); }
+
+  .stance-pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .stance-bullish { background: #DCFCE7; color: #166534; }
+  .stance-neutral { background: #E2E8F0; color: #334155; }
+  .stance-bearish { background: #FEE2E2; color: #991B1B; }
+  .stance-absent { background: #F1F5F9; color: #64748B; }
+
+  .committee-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    margin-bottom: 1rem;
+    overflow: hidden;
+  }
+  .committee-card > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: center;
+  }
+  .committee-card > summary::-webkit-details-marker { display: none; }
+  .committee-card > summary:hover { background: var(--bg-card-hover); }
+  .committee-card[open] > summary { border-bottom: 1px solid var(--border-color); }
+  .committee-card .body { padding: 1rem 1.25rem 1.25rem; }
+
+  .agent-block {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.75rem;
+    background: var(--bg-card-hover);
+  }
+  .agent-block h3 {
+    font-size: 0.95rem;
+    margin: 0 0 0.4rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+  }
+  .agent-block ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+  .agent-block li { margin-bottom: 0.15rem; font-size: 0.9rem; }
+  .mute { color: var(--text-muted); font-size: 0.85rem; }
+  .section-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin: 1.1rem 0 0.55rem;
+  }
+  .disclaimer {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+    margin-top: 1.5rem;
+  }
+  [data-theme="dark"] .verdict-BUY,
+  [data-theme="dark"] .verdict-ADD,
+  [data-theme="dark"] .verdict-HOLD { background: #14532D; color: #BBF7D0; }
+  [data-theme="dark"] .verdict-WAIT,
+  [data-theme="dark"] .verdict-SKIP,
+  [data-theme="dark"] .verdict-REDUCE { background: #78350F; color: #FDE68A; }
+  [data-theme="dark"] .verdict-SELL { background: #7F1D1D; color: #FECACA; }
+  [data-theme="dark"] .stance-bullish { background: #14532D; color: #BBF7D0; }
+  [data-theme="dark"] .stance-neutral { background: #334155; color: #E2E8F0; }
+  [data-theme="dark"] .stance-bearish { background: #7F1D1D; color: #FECACA; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-3 pb-5">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h1 class="h4 mb-1">AI投資委員会</h1>
+      <p class="mute mb-0">各エージェントの意見・反論・PM判定の議事録</p>
+    </div>
+    <form method="get" action="/committee" class="d-flex align-items-center gap-2">
+      <label class="mute mb-0" for="date">日付</label>
+      <select class="form-select form-select-sm" id="date" name="date" onchange="this.form.submit()" style="width:auto">
+        {% if not dates %}
+          <option value="">判定なし</option>
+        {% endif %}
+        {% for d in dates %}
+          <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {% if not selected_date %}
+    <div class="committee-card">
+      <div class="body">
+        <p class="mb-0">まだ委員会の判定がありません。<code>committee.enabled=true</code> で朝・夜バッチを実行するとここに表示されます。</p>
+      </div>
+    </div>
+  {% else %}
+    <div class="row g-3 mb-4">
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label">審議件数</div>
+          <div class="value">{{ day.verdicts|length }}</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label">当日コスト</div>
+          <div class="value">¥{{ '%.1f'|format(day.cost_jpy) }}</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label">BUY/ADD</div>
+          <div class="value">{{ buy_count }}</div>
+        </div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="summary-card">
+          <div class="label">WAIT/SKIP/SELL</div>
+          <div class="value">{{ cautious_count }}</div>
+        </div>
+      </div>
+    </div>
+
+    {% if day.macros %}
+      <h2 class="h6 mb-2">マクロ概況</h2>
+      {% for m in day.macros %}
+        <div class="committee-card">
+          <div class="body">
+            <div class="d-flex justify-content-between flex-wrap gap-2 mb-2">
+              <strong>{{ m.batch_label }}</strong>
+              <span class="mute">コスト ¥{{ '%.2f'|format(m.cost_jpy) }}</span>
+            </div>
+            <div class="row g-3">
+              {% for key, label in [('jp', '日本株'), ('us', '米国株')] %}
+                {% set part = m[key] %}
+                <div class="col-md-6">
+                  <div class="agent-block mb-0">
+                    <h3>
+                      {{ label }}
+                      {% if part %}
+                        <span class="stance-pill stance-{{ part.stance or 'absent' }}">{{ part.stance_label }}</span>
+                        {% if part.confidence is not none %}
+                          <span class="mute">確信度 {{ '%.0f'|format(part.confidence * 100) }}%</span>
+                        {% endif %}
+                      {% else %}
+                        <span class="stance-pill stance-absent">データなし</span>
+                      {% endif %}
+                    </h3>
+                    {% if part %}
+                      <p class="mb-1">{{ part.summary }}</p>
+                      {% if part.key_points %}
+                        <div class="mute">ポイント</div>
+                        <ul>{% for p in part.key_points %}<li>{{ p }}</li>{% endfor %}</ul>
+                      {% endif %}
+                      {% if part.risks %}
+                        <div class="mute mt-1">リスク</div>
+                        <ul>{% for p in part.risks %}<li>{{ p }}</li>{% endfor %}</ul>
+                      {% endif %}
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    {% endif %}
+
+    <h2 class="h6 mb-2 mt-4">判定一覧</h2>
+    {% if not day.verdicts %}
+      <div class="committee-card"><div class="body">この日の判定はありません。</div></div>
+    {% endif %}
+
+    {% for v in day.verdicts %}
+      <details class="committee-card" {% if loop.first %}open{% endif %} id="v{{ v.id }}">
+        <summary>
+          <span class="committee-verdict-badge verdict-{{ v.verdict or 'none' }}">{{ v.verdict or v.status }}</span>
+          <strong>{{ v.ticker }}</strong>
+          <span class="mute">{{ v.market }} · {{ v.subject_label }} · {{ v.batch_label }}</span>
+          {% if v.confidence is not none %}
+            <span class="mute">確信度 {{ '%.0f'|format(v.confidence * 100) }}%</span>
+          {% endif %}
+          {% if v.position_size_adj %}
+            <span class="mute">サイズ {{ v.position_size_adj }}</span>
+          {% endif %}
+          <span class="mute ms-auto">¥{{ '%.2f'|format(v.cost_jpy) }} · {{ v.latency_ms }}ms</span>
+        </summary>
+        <div class="body">
+          {% if v.rationale %}
+            <div class="agent-block">
+              <h3>PM 判定根拠</h3>
+              <p class="mb-0">{{ v.rationale }}</p>
+            </div>
+          {% endif %}
+          {% if v.dissent %}
+            <div class="agent-block">
+              <h3>少数意見</h3>
+              <p class="mb-0">{{ v.dissent }}</p>
+            </div>
+          {% endif %}
+          {% if v.absent %}
+            <p class="mute">欠席: {% for a in v.absent %}{{ a.role_name }}{% if not loop.last %}、{% endif %}{% endfor %}</p>
+          {% endif %}
+          {% if v.errors %}
+            <div class="agent-block">
+              <h3>エラー</h3>
+              <ul class="mb-0">{% for k, msg in v.errors.items() %}<li><code>{{ k }}</code>: {{ msg }}</li>{% endfor %}</ul>
+            </div>
+          {% endif %}
+
+          <div class="section-title">Round 1 — 独立意見</div>
+          {% for op in v.round1 %}
+            <div class="agent-block">
+              <h3>
+                {{ op.role_name }}
+                <span class="stance-pill stance-{{ op.stance or 'absent' }}">{{ op.stance_label }}</span>
+                {% if op.confidence is not none and not op.absent %}
+                  <span class="mute">確信度 {{ '%.0f'|format(op.confidence * 100) }}%</span>
+                {% endif %}
+              </h3>
+              {% if not op.absent %}
+                <p class="mb-1">{{ op.summary }}</p>
+                {% if op.key_points %}
+                  <div class="mute">ポイント</div>
+                  <ul>{% for p in op.key_points %}<li>{{ p }}</li>{% endfor %}</ul>
+                {% endif %}
+                {% if op.risks %}
+                  <div class="mute mt-1">リスク</div>
+                  <ul>{% for p in op.risks %}<li>{{ p }}</li>{% endfor %}</ul>
+                {% endif %}
+              {% else %}
+                <p class="mute mb-0">このラウンドは欠席しました。</p>
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="mute">Round 1 の記録がありません。</p>
+          {% endfor %}
+
+          {% if v.rebuttal %}
+            <div class="section-title">Round 2 — リスク・マネージャーの反論</div>
+            {% for r in v.rebuttal %}
+              <div class="agent-block">
+                <h3>{{ r.target_name }} への反論</h3>
+                <p class="mb-0">{{ r.point }}</p>
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {% if v.responses %}
+            <div class="section-title">Round 2 — 応答</div>
+            {% for r in v.responses %}
+              <div class="agent-block">
+                <h3>
+                  {{ r.role_name }}
+                  {% if r.stance_after %}
+                    <span class="stance-pill stance-{{ r.stance_after }}">修正後: {{ r.stance_after_label }}</span>
+                  {% endif %}
+                </h3>
+                <p class="mb-0">{{ r.response }}</p>
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          <div class="mute mt-3">
+            トークン 入力 {{ v.prompt_tokens }} / 出力 {{ v.output_tokens }}
+            {% if v.created_at %} · 記録 {{ v.created_at }}{% endif %}
+            · ID {{ v.id }}
+          </div>
+        </div>
+      </details>
+    {% endfor %}
+  {% endif %}
+
+  <p class="disclaimer">
+    判定は検討材料であり、投資助言ではありません。最終的な売買判断はご自身の責任で行ってください。
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>if (window.lucide) lucide.createIcons();</script>
+{% endblock %}

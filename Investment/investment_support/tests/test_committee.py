@@ -427,6 +427,8 @@ class CommitteeBlocksTests(unittest.TestCase):
         self.assertIn("予算上限のため未審議", body)
         self.assertIn("審議不成立", body)
         self.assertIn("投資助言ではありません", blocks[2]["text"]["text"])
+        self.assertIn("議事録をダッシュボードで見る", blocks[2]["text"]["text"])
+        self.assertIn("/committee", blocks[2]["text"]["text"])
 
     def test_macro_shown_per_market(self):
         """マクロは日本株・米国株を分けて表示する"""

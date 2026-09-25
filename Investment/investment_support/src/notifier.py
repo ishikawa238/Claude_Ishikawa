@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 _WEBHOOK_URL = CONFIG["slack"]["webhook_url"]
 _SIG = CONFIG["signal"]
 _REPORT_URL = "http://127.0.0.1:5100/report"
+_COMMITTEE_URL = "http://127.0.0.1:5100/committee"
 
 # モード → 絵文字
 _MODE_EMOJI = {
@@ -518,6 +519,7 @@ def _committee_blocks(committee: dict | None) -> list[dict]:
         _section(body),
         _section(
             f"💰 今回の委員会コスト 約{committee.get('cost_jpy', 0):.1f}円 ｜ "
+            f"<{_COMMITTEE_URL}|議事録をダッシュボードで見る> ｜ "
             "⚠️ 判定は検討材料であり投資助言ではありません"
         ),
     ]

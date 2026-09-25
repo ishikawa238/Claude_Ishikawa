@@ -83,7 +83,8 @@ External APIs → price_history / index_snapshot (SQLite)
 | `llm_advisor.py` | Sends stock data + news to OpenAI/Anthropic/Gemini APIs and returns feedback for Slack notifications (config: `llm` section) |
 | `committee.py` | Investment committee orchestrator — macro brief (once per batch) → Round 1 independent analysts (fundamental/technical/risk) → Round 2 risk rebuttal + responses → PM JSON verdict; daily budget guard, same-day cache, cost logging → `committee_verdict_log` (config: `committee` section, disabled by default; API keys shared with `llm`) |
 | `committee_prompts.py` | Committee system prompts, input formatting, and JSON output schemas (`SCHEMA_VERSION`) |
-| `fundamentals_fetcher.py` | yfinance `Ticker.info` fundamentals (PER/PBR/ROE/growth/margins) with daily cache → `fundamentals_cache` |
+| `committee_review.py` | Post-hoc evaluation of committee verdicts vs forward returns (`scripts.committee_review`) |
+| `committee_view.py` | Formats `committee_verdict_log` / macro briefs for the `/committee` dashboard page |
 | `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
 | `portfolio_snapshot.py` | Computes and persists total assets (holdings value + moomoo cash) per batch run → `portfolio_snapshot` |
 | `report_generator.py` | Monthly Slack report |
@@ -94,7 +95,7 @@ External APIs → price_history / index_snapshot (SQLite)
 - `batch_evening_jp.py` — JP price fetch → technicals → market env → signals → entry sets → holdings check → portfolio snapshot → LLM advisor → investment committee → Slack → DB backup
 - `batch_morning_all.py` — US price fetch → technicals → market env → US signals → merge JP signals from prior evening → holdings check → portfolio snapshot → LLM advisor → investment committee → Slack
 - `batch_monthly.py` — Universe master refresh + J-Quants fundamentals + monthly Slack report
-- `order_server.py` — Flask server that serves the daily report page (`/report`), rules page (`/rules`), settings page (`/settings`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. Additional API endpoints: `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
+- `order_server.py` — Flask server that serves the daily report page (`/report`), committee minutes (`/committee`), rules page (`/rules`), settings page (`/settings`). Uses Jinja2 templates (`templates/`) and static files (`static/css/`, `static/js/`). Settings page allows editing capital/signal/screening/paper_mode values in `config.json` via `GET/POST /api/settings`. Additional API endpoints: `/api/committee/verdicts`, `/api/portfolio-risk` (portfolio-level VaR/Beta/Sharpe), `/api/earnings-calendar` (30-day earnings timeline for holdings), `/api/system-health` (batch status, error count, data freshness).
 
 ### Database (`data/investment.db`)
 

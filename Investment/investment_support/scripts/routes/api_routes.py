@@ -945,6 +945,30 @@ def _set_config_value(target: dict, section: str, key: str, value) -> None:
     obj[key] = value
 
 
+@api_bp.route("/api/committee/verdicts")
+def api_committee_verdicts():
+    """指定日の委員会判定一覧（議事録全文付き）。date 未指定なら最新日。"""
+    from src.committee_view import latest_verdict_date, list_verdict_dates, load_day
+
+    selected = request.args.get("date") or latest_verdict_date()
+    if not selected:
+        return jsonify({"date": None, "dates": [], "macros": [], "verdicts": [], "cost_jpy": 0.0})
+    day = load_day(selected)
+    day["dates"] = list_verdict_dates(60)
+    return jsonify(day)
+
+
+@api_bp.route("/api/committee/verdicts/<int:verdict_id>")
+def api_committee_verdict_detail(verdict_id: int):
+    """単一判定の議事録詳細。"""
+    from src.committee_view import load_verdict
+
+    detail = load_verdict(verdict_id)
+    if not detail:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify(detail)
+
+
 @api_bp.route("/api/settings", methods=["GET"])
 def api_settings_get():
     """現在の設定値を返す"""

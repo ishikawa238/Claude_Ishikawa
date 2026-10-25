@@ -214,9 +214,12 @@ def evaluate_exit(
     resistance_level: Optional[float] = None,
     stop_loss_price: Optional[float] = None,
     persist_state: bool = True,
+    state: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     シンプル出口ルールを評価する。
+
+    state を渡すと DB の exit_simple_state の代わりにその延長状態を使う（バックテスト用）。
 
     返り値（発火時）:
         label, reasons, sell_qty, effective_target_pct, effective_target_price,
@@ -227,7 +230,8 @@ def evaluate_exit(
 
     cfg = get_exit_simple_config()
     qty = max(int(float(quantity or 1)), 1)
-    state = get_state(ticker) if persist_state else {}
+    if state is None:
+        state = get_state(ticker) if persist_state else {}
     extend_active = bool(state.get("extend_active"))
 
     if resistance_level is None and snap:

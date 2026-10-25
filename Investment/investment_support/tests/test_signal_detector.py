@@ -37,6 +37,7 @@ with patch("src.config.CONFIG", _CONFIG_MOCK):
         _max_entry_sets_per_batch,
         diagnose_signal_save_count,
         detect_and_save_signals,
+        select_notify_candidates,
     )
 
 
@@ -423,6 +424,30 @@ class DailySignalsPruneTests(unittest.TestCase):
             self.assertIsNone(
                 diagnose_signal_save_count(date(2026, 6, 22), "JP", 1),
             )
+
+
+class SelectNotifyCandidatesTests(unittest.TestCase):
+    """通知枠: スイングは「全体枠 - ブレイクアウト枠」、ブレイクアウトは専用枠だけ。"""
+
+    def _select(self, swing, breakout, total, breakout_cap):
+        with patch("src.signal_detector._max_entry_sets_per_batch", return_value=total), \
+                patch("src.signal_detector._breakout_max_candidates", return_value=breakout_cap):
+            return select_notify_candidates(swing, breakout)
+
+    def test_swing_and_breakout_caps(self):
+        swing = [{"ticker": f"S{i}"} for i in range(5)]
+        breakout = [{"ticker": f"B{i}"} for i in range(3)]
+        picked = [r["ticker"] for r in self._select(swing, breakout, 3, 1)]
+        self.assertEqual(picked, ["S0", "S1", "B0"])
+
+    def test_breakout_slot_disabled(self):
+        picked = self._select([{"ticker": "S0"}], [{"ticker": "B0"}], 3, 0)
+        self.assertEqual([r["ticker"] for r in picked], ["S0"])
+
+    def test_swing_keeps_at_least_one_slot(self):
+        swing = [{"ticker": "S0"}, {"ticker": "S1"}]
+        picked = self._select(swing, [{"ticker": "B0"}, {"ticker": "B1"}], 2, 2)
+        self.assertEqual([r["ticker"] for r in picked], ["S0", "B0", "B1"])
 
 
 if __name__ == "__main__":

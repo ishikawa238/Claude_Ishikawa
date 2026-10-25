@@ -164,6 +164,16 @@ class TestEvaluateExit(unittest.TestCase):
     def test_target_price_calc(self):
         self.assertEqual(target_price(1000.0, 20.0), 1200.0)
 
+    @patch("src.exit_simple.get_state")
+    def test_explicit_state_is_used_instead_of_db(self, mock_get_state):
+        snap = {"ema25": 90, "ema75": 100, "ma25": 95, "rsi14": 50}
+        result = evaluate_exit(
+            "TEST", 1000.0, 1250.0, 25.0, 3, 20, snap,
+            stop_loss_price=920.0, persist_state=False, state={"extend_active": True},
+        )
+        self.assertEqual(result["label"], "tp_extend_exit")
+        mock_get_state.assert_not_called()
+
 
 class TestExitSimpleState(unittest.TestCase):
     def setUp(self):

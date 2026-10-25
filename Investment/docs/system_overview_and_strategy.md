@@ -250,7 +250,7 @@ Slack 通知のヘッダー表示とレポート統計に使われ、シグナ�
 推奨される運用開始手順:
 
 1. `paper_mode.enabled = true` で最低1か月ペーパートレード
-2. `backtest_signals` で過去シグナルの期待値を確認
+2. `backtest_rules` で現行ルールの過去成績を確認（価格履歴からシグナルを再計算する。詳細は `investment_support/src/rule_backtest/README.md`）
 3. `/rules` で投資ルールを理解
 4. Slack通知のテスト送信を確認
 5. 実資金投入前に `total_capital_jpy` / `total_capital_usd` を実際の運用資金に合わせる

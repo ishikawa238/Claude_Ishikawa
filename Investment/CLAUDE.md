@@ -34,6 +34,7 @@ python -m scripts.batch_morning_all     # daily 07:30 — US stocks + morning re
 python -m scripts.batch_monthly         # first business day of month
 python -m scripts.fetch_historical      # re-run to backfill missing data (idempotent)
 python -m scripts.add_trade_result      # manually record trade outcome
+python -m scripts.backtest_rules        # backtest the current rules from price_history (JP+US combined by default)
 
 # Report server (for Slack report links)
 python -m scripts.order_server          # starts Flask on 127.0.0.1:5100
@@ -88,6 +89,7 @@ External APIs → price_history / index_snapshot (SQLite)
 | `news_fetcher.py` | Fetches market and ticker-specific news from Google News RSS for LLM prompt enrichment |
 | `portfolio_snapshot.py` | Computes and persists total assets (holdings value + moomoo cash) per batch run → `portfolio_snapshot` |
 | `report_generator.py` | Monthly Slack report |
+| `rule_backtest/` | Backtest of the current rules: recomputes indicators/signals from `price_history` (read-only) and simulates fills, stops, `exit_simple`, slots and pause rules by calling the production functions (`scripts.backtest_rules`). See its README |
 | `logger.py` | Logging setup — use `get_logger(__name__)` in every module; outputs to console + `logs/batch_YYYYMMDD.log` |
 
 ### Batch Scripts (`scripts/`)

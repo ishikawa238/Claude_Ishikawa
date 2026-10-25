@@ -239,6 +239,20 @@ def _price_band(market: str) -> tuple[float, float | None]:
     return min_p, float(max_p) if max_p is not None else None
 
 
+def screening_thresholds(market: str) -> dict:
+    """流動性フィルタの閾値を返す。max_price が None のときは上限なし。"""
+    min_price, max_price = _price_band(market)
+    is_jp = market == "JP"
+    return {
+        "min_price": min_price,
+        "max_price": max_price,
+        "min_turnover": _JP_MIN_TURNOVER if is_jp else _US_MIN_TURNOVER,
+        "min_market_cap": _JP_MIN_MARKET_CAP if is_jp else _US_MIN_MARKET_CAP,
+        "allow_unknown_market_cap": _ALLOW_UNKNOWN_MARKET_CAP,
+        "min_active_days": _MIN_ACTIVE_DAYS,
+    }
+
+
 def _liquidity_filter_sql(market: str) -> tuple[str, str]:
     """流動性フィルタ用 SELECT 文と時価総額条件句を返す。"""
     market_cap_condition = (

@@ -97,7 +97,10 @@ def _evaluate_strategy(
         if is_swing:
             if any(tk.get(f) is None for f in ("ema25", "ema75", "rsi14")):
                 insufficient += 1
-            row = evaluate_swing(tk, target_str, strategy=strategy_name)
+            row = evaluate_swing(
+                tk, target_str, strategy=strategy_name,
+                rsi_history=tk.get("rsi_history"),
+            )
         else:
             if any(tk.get(f) is None for f in ("close", "high_60d_prior", "volume")):
                 insufficient += 1
@@ -143,6 +146,19 @@ def _evaluate_strategy(
     return candidates, all_rows, insufficient
 
 
+def select_notify_candidates(
+    swing_candidates: list[dict],
+    breakout_candidates: list[dict],
+) -> list[dict]:
+    """通知枠に収まる候補を返す（スイング優先、ブレイクアウトは専用枠のみ）。"""
+    swing_cap = max(_max_entry_sets_per_batch() - _breakout_max_candidates(), 1)
+    breakout_cap = _breakout_max_candidates()
+    selected = list(swing_candidates[:swing_cap])
+    if breakout_cap > 0:
+        selected.extend(breakout_candidates[:breakout_cap])
+    return selected
+
+
 def detect_and_save_signals(
     screened_tickers: list[dict],
     target_date: date,
@@ -176,11 +192,9 @@ def detect_and_save_signals(
         else:
             breakout_candidates = cands
 
-    swing_cap = max(_max_entry_sets_per_batch() - _breakout_max_candidates(), 1)
-    breakout_cap = _breakout_max_candidates()
-    notify_candidates.extend(swing_candidates[:swing_cap])
-    if breakout_cap > 0:
-        notify_candidates.extend(breakout_candidates[:breakout_cap])
+    notify_candidates.extend(
+        select_notify_candidates(swing_candidates, breakout_candidates)
+    )
 
     chunk = 500
     with get_connection() as conn:

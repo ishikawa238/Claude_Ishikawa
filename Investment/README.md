@@ -149,7 +149,8 @@ python -m scripts.batch_monthly         # 銘柄マスタ更新 + 月次レポ�
 python -m scripts.order_server          # Webダッシュボード起動（127.0.0.1:5100）
 python -m scripts.add_trade_result      # トレード結果の手動記録
 python -m scripts.fetch_historical      # 履歴データの再取得（冪等）
-python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30  # バックテスト
+python -m scripts.backtest_rules --capital-jpy 100000 --capital-usd 1000  # 現行ルールのバックテスト（日米合算・価格履歴から再計算）
+python -m scripts.backtest_signals --start 2024-01-01 --end 2026-04-30  # 旧: 保存済みシグナルの期待値
 python -m scripts.update_paper_trades --summary  # ペーパートレードのサマリー表示
 python -m scripts.committee_review      # 投資委員会の判定を事後の値動きで検証
 python -m scripts.cleanup_duplicate_trade_signals  # 通知ログ重複の確認（dry-run）
@@ -315,7 +316,8 @@ investment_support/
 │   ├── risk.py               # リスク指標（VaR, Beta, Sharpe Ratio）
 │   ├── risk_control.py       # 月間損失・連続損失による新規買い停止ルール
 │   ├── portfolio_snapshot.py # バッチ実行時の総資産スナップショット
-│   ├── backtester.py         # バックテスト（過去シグナルの期待値検証）
+│   ├── backtester.py         # 旧バックテスト（保存済みシグナルの期待値検証）
+│   ├── rule_backtest/        # 現行ルールのバックテスト（価格履歴から日次シミュレーション）
 │   ├── paper_trading.py      # ペーパートレード（仮想売買記録・日次更新）
 │   ├── notifier.py           # Slack通知生成・送信
 │   ├── llm_advisor.py        # LLMアドバイザー（ChatGPT/Claude/Gemini自動フィードバック）
@@ -335,14 +337,15 @@ investment_support/
 │   ├── batch_watchlist_hourly.py  # お気に入り毎時監視
 │   ├── batch_monthly.py      # 月次バッチ
 │   ├── order_server.py       # Webダッシュボード（Flask, 127.0.0.1:5100）
-│   ├── backtest_signals.py   # バックテスト実行CLI
+│   ├── backtest_rules.py     # 現行ルールのバックテスト実行CLI
+│   ├── backtest_signals.py   # 旧バックテスト実行CLI
 │   ├── update_paper_trades.py # ペーパートレード更新・サマリー表示
 │   ├── committee_review.py   # 委員会判定の事後検証CLI
 │   ├── add_trade_result.py   # トレード結果の手動記録
 │   └── sync_holdings_from_moomoo.py  # moomoo手動同期
 │
 ├── tests/                    # unittest
-├── data/                     # SQLite DB + バックアップ
+├── data/                     # SQLite DB + バックアップ + バックテスト結果（data/backtest/）
 └── logs/                     # 日次ログ
 ```
 
@@ -413,7 +416,7 @@ python -m unittest tests.test_notifier      # 個別テスト
 - [ ] `data/backup/` にDBバックアップが作成されている
 - [ ] `config.json` に `"paper_mode": {"enabled": true}` を設定し、最低1か月はペーパートレードで検証する
 - [ ] ペーパートレード結果（`python -m scripts.update_paper_trades --summary`）で期待値がプラスであることを確認
-- [ ] `python -m scripts.backtest_signals --start 2024-01-01 --end YYYY-MM-DD` で過去シグナルの期待値を確認
+- [ ] `python -m scripts.backtest_rules` で現行ルールの過去成績（日米合算）を確認（詳細は [src/rule_backtest/README.md](investment_support/src/rule_backtest/README.md)）
 
 ## 既知の制約
 

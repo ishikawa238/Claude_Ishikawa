@@ -37,6 +37,9 @@ env/
 # バッチ実行ロック（実行時生成）
 Investment/investment_support/data/*.lock
 
+# バックテスト結果（scripts.backtest_rules の出力）
+Investment/investment_support/data/backtest/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -29,7 +29,7 @@ _CONFIG_MOCK = {
 }
 
 with patch("src.config.CONFIG", _CONFIG_MOCK):
-    from src.entry_calculator import calc_entry_set, save_entry_sets
+    from src.entry_calculator import calc_entry_set, calc_recommended_amount, save_entry_sets
 
 
 class ConfigPatchMixin:
@@ -193,6 +193,35 @@ class CalcEntrySetHoldingsCapacityTests(ConfigPatchMixin, unittest.TestCase):
         result = calc_entry_set(sig, open_holdings_count=2)
         self.assertFalse(result["_warn_at_capacity"])
         self.assertEqual(result["_remaining_slots"], 1)
+
+
+class CalcRecommendedAmountTests(unittest.TestCase):
+    """推奨投入額の式（バックテストも同じ関数を使う）。"""
+
+    def test_risk_based_amount(self):
+        # 200,000 × 2% ÷ 8% = 50,000（上限 200,000 ÷ 3 ≈ 66,667 未満）
+        self.assertAlmostEqual(calc_recommended_amount(200_000, 8.0, 0.02, 3), 50_000)
+
+    def test_capped_by_per_position_limit(self):
+        self.assertAlmostEqual(calc_recommended_amount(200_000, 2.0, 0.02, 3), 200_000 / 3)
+
+    def test_zero_stop_returns_none(self):
+        self.assertIsNone(calc_recommended_amount(200_000, 0.0, 0.02, 3))
+
+
+class CalcEntrySetEarningsCheckTests(ConfigPatchMixin, unittest.TestCase):
+    """check_earnings=False のとき決算日の DB 参照をしない（バックテスト用）。"""
+
+    @patch("src.entry_calculator._check_earnings_near", return_value="決算が近い")
+    def test_earnings_check_can_be_skipped(self, mock_earnings):
+        result = calc_entry_set(_make_signal(), check_earnings=False)
+        mock_earnings.assert_not_called()
+        self.assertNotEqual(result, {})
+
+    @patch("src.entry_calculator._check_earnings_near", return_value=None)
+    def test_earnings_check_runs_by_default(self, mock_earnings):
+        calc_entry_set(_make_signal())
+        mock_earnings.assert_called_once()
 
 
 class SaveEntrySetsIdempotencyTests(unittest.TestCase):

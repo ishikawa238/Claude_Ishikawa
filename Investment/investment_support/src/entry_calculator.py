@@ -28,11 +28,17 @@ _RANK_PRIORITY = {"S": 5, "A": 4, "B": 3, "C": 2, "Watch": 1}
 # エントリーセット計算
 # ============================================================
 
-def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
+def calc_entry_set(
+    signal: dict,
+    open_holdings_count: int = 0,
+    *,
+    check_earnings: bool = True,
+) -> dict:
     """
     シグナル1件のエントリーセットを計算して返す。
 
     引数: daily_signals の1行（候補銘柄の情報を含む辞書）
+          check_earnings=False で決算近接の警告（DB 参照）を省く（バックテスト用）
     返り値: trade_signal_log への INSERT 用辞書
     """
     close   = float(signal.get("close") or 0)
@@ -85,20 +91,13 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
 
     # 推奨投入額
     capital = settings["capital_jpy"] if market == "JP" else settings["capital_usd"]
-    if stop_loss_pct > 0:
-        recommended_amount = capital * settings["risk_pct"] / (stop_loss_pct / 100)
-    else:
-        recommended_amount = None
-
-    # --- 投入額の上限制御 ---
+    recommended_amount = calc_recommended_amount(
+        capital, stop_loss_pct, settings["risk_pct"], settings["max_holdings"],
+    )
     warn_too_small = False
-    if recommended_amount is not None:
-        recommended_amount = min(recommended_amount, capital)
-        max_per_position = capital / settings["max_holdings"]
-        recommended_amount = min(recommended_amount, max_per_position)
 
     # --- 決算近接チェック ---
-    warn_earnings = _check_earnings_near(ticker, signal["date"])
+    warn_earnings = _check_earnings_near(ticker, signal["date"]) if check_earnings else None
 
     # 充足条件リスト（通知の理由文生成に使用）
     conditions_met = _build_conditions_met(signal, pattern)
@@ -139,6 +138,24 @@ def calc_entry_set(signal: dict, open_holdings_count: int = 0) -> dict:
         "_ma200":    signal.get("ma200"),
     }
     return result
+
+
+def calc_recommended_amount(
+    capital: float,
+    stop_loss_pct: float,
+    risk_pct: float,
+    max_holdings: int,
+) -> float | None:
+    """
+    推奨投入額 = 総資金 × リスク率 ÷ 損切り幅。総資金と「総資金 ÷ 保有上限」を上限にする。
+
+    risk_pct は割合（0.02 = 2%）、stop_loss_pct は %（5.0 = 5%）。
+    """
+    if stop_loss_pct <= 0:
+        return None
+    amount = capital * risk_pct / (stop_loss_pct / 100)
+    amount = min(amount, capital)
+    return min(amount, capital / max(int(max_holdings), 1))
 
 
 def save_entry_sets(candidates: list[dict], market_mode: str) -> list[dict]:

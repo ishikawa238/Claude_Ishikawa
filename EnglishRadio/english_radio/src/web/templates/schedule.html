@@ -1,24 +1,26 @@
 {% extends "base.html" %}
 {% block title %}時間割{% endblock %}
 {% block content %}
-<h1>⏰ 時間割</h1>
-<div class="card">
-  <p class="muted">開始時刻になると PC が自動で起動（スリープ解除）して、終了時刻までの長さぶんのリストを流します。</p>
+<h1>時間割</h1>
+<p class="muted">開始時刻になると PC がスリープから起きて、終了時刻までの長さぶんのリストを流します。</p>
+
+<section class="section">
   <div id="sched-list"></div>
-  <div class="actions">
+  <div class="form-row">
     <button class="btn" id="add-sched">➕ 時間帯を追加</button>
     <button class="btn primary" id="save-sched">💾 保存して予約に反映</button>
   </div>
-  <div id="detail"></div>
-</div>
-<div class="card">
-  <h2>いまの予約（タスクスケジューラ）</h2>
+  <div id="detail-log" style="margin-top:12px"></div>
+</section>
+
+<section class="section panel">
+  <h2>いまの予約</h2>
   {% if task.exists %}
-    <p>次回: <b>{{ task.next_run or '—' }}</b> ・ 状態: {{ task.state }}</p>
+    <p>次回 <b>{{ task.next_run or '—' }}</b> ・ 状態 {{ task.state }}</p>
   {% else %}
-    <p>⚠️ まだ予約されていません。最初の1回だけ、管理者 PowerShell で <code>setup_scheduler.ps1</code> を実行してください。</p>
+    <p class="muted">⚠️ まだ予約されていません。最初の1回だけ、管理者 PowerShell で <code>setup_scheduler.ps1</code> を実行してください。</p>
   {% endif %}
-</div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -31,19 +33,27 @@ function lengthText(s) {
   const d = toMin(s.end) - toMin(s.start);
   return d > 0 ? `${d}分` : "⚠️ 終了を開始より後に";
 }
+function slotStyle(s) {
+  const start = toMin(s.start), end = Math.max(toMin(s.end), start);
+  return `left:${start / 14.4}%;width:${(end - start) / 14.4}%`;
+}
 
 function renderSchedules() {
   const box = document.getElementById("sched-list");
   box.innerHTML = schedules.map((s, i) => `
-    <div class="sched-row">
-      <input type="text" data-i="${i}" data-k="label" value="${escapeHtml(s.label)}" placeholder="名前（例: Morning English）" aria-label="名前">
-      <label>開始 <input type="time" data-i="${i}" data-k="start" value="${escapeHtml(s.start)}"></label>
-      <label>終了 <input type="time" data-i="${i}" data-k="end" value="${escapeHtml(s.end)}"></label>
-      <select data-i="${i}" data-k="days" aria-label="曜日">
-        ${Object.entries(DAYS).map(([k, v]) => `<option value="${k}" ${s.days === k || (!s.days && k === "daily") ? "selected" : ""}>${v}</option>`).join("")}
-      </select>
-      <span class="muted">${lengthText(s)}</span>
-      <button class="btn small danger" data-del="${i}">削除</button>
+    <div class="sched-card">
+      <div class="sched-fields">
+        <input type="text" data-i="${i}" data-k="label" value="${escapeHtml(s.label)}" placeholder="名前（例: Morning English）" aria-label="名前">
+        <label class="faint">開始 <input type="time" data-i="${i}" data-k="start" value="${escapeHtml(s.start)}"></label>
+        <label class="faint">終了 <input type="time" data-i="${i}" data-k="end" value="${escapeHtml(s.end)}"></label>
+        <select data-i="${i}" data-k="days" aria-label="曜日">
+          ${Object.entries(DAYS).map(([k, v]) => `<option value="${k}" ${(s.days || "daily") === k ? "selected" : ""}>${v}</option>`).join("")}
+        </select>
+        <button class="btn small danger" data-del="${i}">削除</button>
+      </div>
+      <div class="timeline" aria-hidden="true"><div class="slot" style="${slotStyle(s)}"></div></div>
+      <div class="timeline-labels"><span>0時</span><span>6時</span><span>12時</span><span>18時</span><span>24時</span></div>
+      <div class="faint" data-len="${i}" style="margin-top:6px">長さ: ${lengthText(s)}</div>
     </div>`).join("") || '<p class="muted">時間帯がありません。</p>';
 }
 
@@ -51,7 +61,11 @@ document.getElementById("sched-list").addEventListener("input", (ev) => {
   const { i, k } = ev.target.dataset;
   if (i === undefined) return;
   schedules[i][k] = ev.target.value;
-  if (k === "start" || k === "end") ev.target.closest(".sched-row").querySelector(".muted").textContent = lengthText(schedules[i]);
+  if (k === "start" || k === "end") {
+    const card = ev.target.closest(".sched-card");
+    card.querySelector(".slot").setAttribute("style", slotStyle(schedules[i]));
+    card.querySelector("[data-len]").textContent = `長さ: ${lengthText(schedules[i])}`;
+  }
 });
 document.getElementById("sched-list").addEventListener("click", (ev) => {
   if (ev.target.dataset.del !== undefined) { schedules.splice(ev.target.dataset.del, 1); renderSchedules(); }
@@ -64,7 +78,7 @@ document.getElementById("save-sched").addEventListener("click", async (ev) => {
   const data = await api("PUT", "/api/schedules", { schedules });
   ev.target.disabled = false;
   toast(data.message, !data.ok);
-  document.getElementById("detail").innerHTML = data.detail ? `<div class="log">${escapeHtml(data.detail)}</div>` : "";
+  document.getElementById("detail-log").innerHTML = data.detail ? `<div class="log">${escapeHtml(data.detail)}</div>` : "";
   if (data.ok) setTimeout(() => location.reload(), 1500);
 });
 

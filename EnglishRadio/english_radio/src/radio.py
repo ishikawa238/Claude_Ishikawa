@@ -12,12 +12,13 @@ from shared.batch import finish_batch_log, mark_stale_running_batches, start_bat
 from shared.config import get_config
 from shared.db import get_connection
 from shared.logger import get_logger
-from src import feeds, library, notifier, paths, player, store
+from src import artwork, feeds, library, notifier, paths, player, store
 from src.schedules import active_schedule, duration_minutes
 from src.selector import build_queue
 
 BATCH_TYPE = "morning"
 TODAY_M3U = "today.m3u"
+ART_BATCH = 20  # 1回の実行で埋めるエピソード画像の最大数
 
 
 class AlreadyRunningError(RuntimeError):
@@ -69,7 +70,7 @@ def _start_log() -> int:
 def _collect(radio_cfg: dict, dry_run: bool) -> tuple[list[dict], list[dict]]:
     """(新着エントリ, ライブラリ全体) を返す。dry_run ではダウンロードしない。"""
     limit = int(radio_cfg.get("episodes_per_feed", 3))
-    episodes = feeds.fetch_all(radio_cfg.get("feeds", []), limit)
+    episodes, show_images = feeds.fetch_all(radio_cfg.get("feeds", []), limit)
     with get_connection(paths.db_path()) as conn:
         if dry_run:
             unknown = [e for e in episodes if e.guid not in store.known_guids(conn)]
@@ -77,8 +78,29 @@ def _collect(radio_cfg: dict, dry_run: bool) -> tuple[list[dict], list[dict]]:
             new_entries = []
         else:
             new_entries = library.download_new(conn, episodes, paths.library_dir())
+    if not dry_run:
+        refresh_artwork(show_images)
     with get_connection(paths.db_path()) as conn:
         return new_entries, store.list_episodes(conn)
+
+
+def refresh_artwork(show_images: dict[str, str], limit: int = ART_BATCH) -> None:
+    """番組画像とエピソード画像をキャッシュする。失敗しても再生には影響させない。"""
+    try:
+        with get_connection(paths.db_path()) as conn:
+            for name, url in show_images.items():
+                current = store.get_show(conn, name)
+                if current and current["image_url"] == url and current["art_file"]:
+                    continue
+                art_file = artwork.cache_image(url)
+                color = artwork.dominant_color(artwork.art_dir() / art_file) if art_file else None
+                store.upsert_show(conn, name, url, art_file, color)
+            for entry in store.episodes_missing_art(conn, limit):
+                art_file = artwork.cache_image(entry["image_url"])
+                if art_file:
+                    store.set_episode_art(conn, entry["guid"], entry["image_url"], art_file)
+    except Exception as e:
+        _logger().warning(f"アートワークの更新に失敗しました（再生は続けます）: {e}")
 
 
 def _play_and_record(queue, result: RunResult, options: RunOptions, vlc_path: str | None) -> None:

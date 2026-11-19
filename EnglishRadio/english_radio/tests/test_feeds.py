@@ -8,8 +8,11 @@ SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
 <channel>
   <title>Sample Show</title>
+  <itunes:image href="https://example.com/show.jpg"/>
   <item>
     <title>Old episode</title>
+    <description><![CDATA[<p>Hello &amp; <b>welcome</b></p>
+<p>to   the show.</p>]]></description>
     <guid>ep-1</guid>
     <pubDate>Mon, 17 Nov 2026 07:00:00 GMT</pubDate>
     <itunes:duration>12:30</itunes:duration>
@@ -20,6 +23,7 @@ SAMPLE_RSS = """<?xml version="1.0" encoding="UTF-8"?>
     <guid>ep-2</guid>
     <pubDate>Wed, 19 Nov 2026 07:00:00 GMT</pubDate>
     <itunes:duration>1:02:03</itunes:duration>
+    <itunes:image href="https://example.com/ep2.jpg"/>
     <enclosure url="https://example.com/2.mp3" type="audio/mpeg" length="1"/>
   </item>
   <item>
@@ -55,6 +59,24 @@ class ParseFeedTest(unittest.TestCase):
         self.assertEqual(eps[0].duration_sec, 3723)
         self.assertEqual(eps[0].published, "2026-11-19 07:00:00")
 
+    def test_episode_image_falls_back_to_show_image(self):
+        _, eps = feeds.parse_feed(SAMPLE_RSS, "My Show", limit=5)
+        self.assertEqual(eps[0].image_url, "https://example.com/ep2.jpg")
+        self.assertEqual(eps[1].image_url, "https://example.com/show.jpg")
+
+    def test_summary_is_plain_text(self):
+        _, eps = feeds.parse_feed(SAMPLE_RSS, "My Show", limit=5)
+        self.assertEqual(eps[1].summary, "Hello & welcome to the show.")
+
+    def test_clean_summary_truncates(self):
+        text = feeds.clean_summary("a" * 500)
+        self.assertEqual(len(text), feeds.SUMMARY_MAX_LEN)
+        self.assertTrue(text.endswith("…"))
+
+    def test_feed_result_has_show_image(self):
+        result = feeds.parse_feed_result(SAMPLE_RSS, "My Show", limit=5)
+        self.assertEqual(result.image_url, "https://example.com/show.jpg")
+
     def test_limit(self):
         _, eps = feeds.parse_feed(SAMPLE_RSS, "My Show", limit=1)
         self.assertEqual(len(eps), 1)
@@ -86,9 +108,10 @@ class FetchAllTest(TempEnvTestCase):
             return SAMPLE_RSS.encode()
 
         with mock.patch.object(feeds, "download_feed", side_effect=fake_download):
-            eps = feeds.fetch_all(feed_list, limit=3)
+            eps, images = feeds.fetch_all(feed_list, limit=3)
         self.assertEqual({e.show for e in eps}, {"Good"})
         self.assertEqual(len(eps), 2)
+        self.assertEqual(images, {"Good": "https://example.com/show.jpg"})
 
 
 if __name__ == "__main__":

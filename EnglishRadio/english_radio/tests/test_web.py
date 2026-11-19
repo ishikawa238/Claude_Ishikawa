@@ -38,6 +38,42 @@ class WebTest(TempEnvTestCase):
             with self.subTest(url=url):
                 self.assertEqual(self.get(url).status_code, 200)
 
+    def test_art_route_serves_only_hashed_names(self):
+        from src import artwork
+
+        artwork.art_dir().mkdir(parents=True, exist_ok=True)
+        name = "a" * 40 + ".jpg"
+        (artwork.art_dir() / name).write_bytes(b"\xff\xd8jpeg")
+        res = self.get(f"/art/{name}")
+        self.assertEqual(res.status_code, 200)
+        res.close()  # 送信ファイルを閉じる（Windows で一時フォルダを消せるように）
+        for bad in ["/art/..%2Fconfig.json", "/art/abc.jpg", "/art/" + "A" * 40 + ".jpg", "/art/" + "a" * 40 + ".png"]:
+            with self.subTest(bad=bad):
+                self.assertEqual(self.get(bad).status_code, 404)
+
+    def test_pages_use_artwork_and_placeholder(self):
+        art = "b" * 40 + ".jpg"
+        ep = self.add_episode_file("a", show="Show A", duration=600)
+        self.add_episode_file("b", show="No Art", duration=600)
+        with self.conn() as conn:
+            store.upsert_show(conn, "Show A", "https://x/a.jpg", art, "#123456")
+            store.save_history(conn, [(ep, "new")], schedule_label="M", target_minutes=30, trigger="schedule")
+        html = self.get("/library").get_data(as_text=True)
+        self.assertIn(f"/art/{art}", html)
+        self.assertIn("art ph", html)  # 画像のない番組はプレースホルダ
+        home = self.get("/").get_data(as_text=True)
+        self.assertIn("--hero: #123456", home)
+
+    def test_mosaic_items_unique_or_single(self):
+        a = {"show": "A", "art_file": "1" * 40 + ".jpg"}
+        b = {"show": "B", "art_file": "2" * 40 + ".jpg"}
+        c = {"show": "C", "art_file": "3" * 40 + ".jpg"}
+        d = {"show": "D", "art_file": "4" * 40 + ".jpg"}
+        with self.app.test_request_context(base_url="http://127.0.0.1:5210"):
+            self.assertEqual(len(web_app.mosaic_items([a, a, b, c, d])), 4)
+            self.assertEqual(web_app.mosaic_items([a, a, b]), [a])
+            self.assertEqual(web_app.mosaic_items([]), [])
+
     def test_foreign_host_rejected(self):
         res = self.client.get("/", base_url="http://evil.example:5210")
         self.assertEqual(res.status_code, 403)

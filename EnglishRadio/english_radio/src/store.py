@@ -28,10 +28,21 @@ SCHEMA = [
         size_bytes    INTEGER DEFAULT 0,
         downloaded_at TEXT,
         last_played   TEXT,
-        play_count    INTEGER NOT NULL DEFAULT 0
+        play_count    INTEGER NOT NULL DEFAULT 0,
+        image_url     TEXT,
+        art_file      TEXT,
+        summary       TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_episodes_show ON episodes(show)",
+    """
+    CREATE TABLE IF NOT EXISTS shows (
+        name      TEXT PRIMARY KEY,
+        image_url TEXT,
+        art_file  TEXT,
+        color     TEXT
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS play_history (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,9 +92,28 @@ SCHEMA = [
 ]
 
 
+# 後から追加した列（古い DB には ALTER TABLE で足す）
+_ADDED_COLUMNS = {"episodes": {"image_url": "TEXT", "art_file": "TEXT", "summary": "TEXT"}}
+
+# エピソードに番組のアートワークと代表色を付けて返すための共通 SELECT
+_EPISODE_SELECT = (
+    "SELECT e.*, s.art_file AS show_art, s.color AS show_color"
+    " FROM episodes e LEFT JOIN shows s ON s.name = e.show"
+)
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     for sql in SCHEMA:
         conn.execute(sql)
+    _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, col_type in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {col_type}")
 
 
 # ---------------------------------------------------------------------------
@@ -105,27 +135,74 @@ def add_episode(conn: sqlite3.Connection, entry: dict) -> None:
         "duration_sec": entry.get("duration_sec"),
         "size_bytes": entry.get("size_bytes", 0),
         "downloaded_at": entry.get("downloaded_at") or now_str(),
+        "image_url": entry.get("image_url") or None,
+        "art_file": entry.get("art_file") or None,
+        "summary": entry.get("summary") or None,
     }
     insert_one(conn, "episodes", row)
 
 
+def set_episode_art(conn: sqlite3.Connection, guid: str, image_url: str, art_file: str | None,
+                    summary: str | None = None) -> None:
+    """アートワークと紹介文を後から埋める（summary は空のときだけ上書き）。"""
+    conn.execute(
+        "UPDATE episodes SET image_url = ?, art_file = ?,"
+        " summary = COALESCE(NULLIF(summary, ''), ?) WHERE guid = ?",
+        (image_url, art_file, summary, guid),
+    )
+
+
+def episodes_missing_art(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    rows = fetch_all(
+        conn,
+        "SELECT * FROM episodes WHERE image_url IS NOT NULL AND image_url != ''"
+        " AND (art_file IS NULL OR art_file = '') LIMIT ?",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# shows（番組のアートワークと代表色）
+# ---------------------------------------------------------------------------
+
+def upsert_show(conn: sqlite3.Connection, name: str, image_url: str, art_file: str | None,
+                color: str | None) -> None:
+    conn.execute(
+        "INSERT INTO shows (name, image_url, art_file, color) VALUES (?,?,?,?)"
+        " ON CONFLICT(name) DO UPDATE SET image_url = excluded.image_url,"
+        " art_file = COALESCE(excluded.art_file, shows.art_file),"
+        " color = COALESCE(excluded.color, shows.color)",
+        (name, image_url, art_file, color),
+    )
+
+
+def get_show(conn: sqlite3.Connection, name: str) -> dict | None:
+    row = fetch_one(conn, "SELECT * FROM shows WHERE name = ?", (name,))
+    return dict(row) if row else None
+
+
+def list_shows(conn: sqlite3.Connection) -> dict[str, dict]:
+    return {r["name"]: dict(r) for r in fetch_all(conn, "SELECT * FROM shows")}
+
+
 def get_episode(conn: sqlite3.Connection, guid: str) -> dict | None:
-    row = fetch_one(conn, "SELECT * FROM episodes WHERE guid = ?", (guid,))
+    row = fetch_one(conn, f"{_EPISODE_SELECT} WHERE e.guid = ?", (guid,))
     return dict(row) if row else None
 
 
 def list_episodes(
     conn: sqlite3.Connection, show: str | None = None, query: str | None = None
 ) -> list[dict]:
-    sql = "SELECT * FROM episodes WHERE 1=1"
+    sql = f"{_EPISODE_SELECT} WHERE 1=1"
     params: list = []
     if show:
-        sql += " AND show = ?"
+        sql += " AND e.show = ?"
         params.append(show)
     if query:
-        sql += " AND title LIKE ?"
+        sql += " AND e.title LIKE ?"
         params.append(f"%{query}%")
-    sql += " ORDER BY published DESC"
+    sql += " ORDER BY e.published DESC"
     return [dict(r) for r in fetch_all(conn, sql, tuple(params))]
 
 
@@ -146,8 +223,11 @@ def library_stats(conn: sqlite3.Connection) -> dict:
     )
     by_show = fetch_all(
         conn,
-        "SELECT show, COUNT(*) AS cnt, COALESCE(SUM(duration_sec),0) AS dur"
-        " FROM episodes GROUP BY show ORDER BY cnt DESC",
+        "SELECT e.show, COUNT(*) AS cnt, COALESCE(SUM(e.duration_sec),0) AS dur,"
+        " SUM(CASE WHEN e.play_count = 0 THEN 1 ELSE 0 END) AS unplayed,"
+        " s.art_file AS show_art, s.color AS show_color"
+        " FROM episodes e LEFT JOIN shows s ON s.name = e.show"
+        " GROUP BY e.show ORDER BY cnt DESC",
     )
     return {
         "count": total["cnt"],
@@ -209,11 +289,33 @@ def get_history(conn: sqlite3.Connection, history_id: int) -> dict | None:
         return None
     items = fetch_all(
         conn,
-        "SELECT i.position, i.source, e.* FROM play_history_items i"
-        " JOIN episodes e ON e.guid = i.guid WHERE i.history_id = ? ORDER BY i.position",
+        "SELECT i.position, i.source, e.*, s.art_file AS show_art, s.color AS show_color"
+        " FROM play_history_items i JOIN episodes e ON e.guid = i.guid"
+        " LEFT JOIN shows s ON s.name = e.show WHERE i.history_id = ? ORDER BY i.position",
         (history_id,),
     )
     return {**dict(head), "items": [dict(r) for r in items]}
+
+
+def history_artworks(conn: sqlite3.Connection, history_ids: list[int], per_history: int = 4) -> dict[int, list[dict]]:
+    """各履歴の先頭数本のアートワーク情報（モザイク表示用）を返す。"""
+    if not history_ids:
+        return {}
+    marks = ",".join("?" * len(history_ids))
+    rows = fetch_all(
+        conn,
+        "SELECT i.history_id, e.show, e.art_file, s.art_file AS show_art, s.color AS show_color"
+        " FROM play_history_items i JOIN episodes e ON e.guid = i.guid"
+        f" LEFT JOIN shows s ON s.name = e.show WHERE i.history_id IN ({marks})"
+        " ORDER BY i.history_id, i.position",
+        tuple(history_ids),
+    )
+    result: dict[int, list[dict]] = {}
+    for row in rows:
+        items = result.setdefault(row["history_id"], [])
+        if len(items) < per_history:
+            items.append(dict(row))
+    return result
 
 
 def get_latest_history(conn: sqlite3.Connection) -> dict | None:

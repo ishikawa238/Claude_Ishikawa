@@ -10,12 +10,12 @@ EnglishRadio Web 管理画面（Flask）。
 import threading
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_from_directory, url_for
 
 from shared.config import get_config
 from shared.db import get_connection
 from shared.logger import get_logger
-from src import config_store, feeds, paths, player, scheduler_info, status, store
+from src import artwork, config_store, feeds, paths, player, scheduler_info, status, store
 from src.radio import AlreadyRunningError, RunOptions, ensure_db, run
 from src.schedules import DAYS_OPTIONS, duration_minutes, validate_schedules
 
@@ -56,6 +56,45 @@ def fmt_dt(text) -> str:
         return "—"
     text = str(text)
     return f"{text[5:7]}/{text[8:10]} {text[11:16]}".strip()
+
+
+_PLACEHOLDER_COLORS = ["#5b4bdb", "#d9468a", "#1f9e89", "#e0782f", "#3f7fd9", "#8a4fd0"]
+
+
+def art_url(entry: dict | None) -> str:
+    """エピソード画像 → 番組画像 の順にローカル URL を返す。無ければ空文字（プレースホルダ表示）。"""
+    if not entry:
+        return ""
+    name = entry.get("art_file") or entry.get("show_art")
+    return url_for("art", name=name) if name else ""
+
+
+def art_color(entry: dict | None) -> str:
+    """番組の代表色。無ければ番組名から決まる色を返す（プレースホルダ用）。"""
+    if not entry:
+        return artwork.FALLBACK_COLOR
+    if entry.get("show_color"):
+        return entry["show_color"]
+    show = entry.get("show") or entry.get("name") or "?"
+    return _PLACEHOLDER_COLORS[sum(map(ord, show)) % len(_PLACEHOLDER_COLORS)]
+
+
+def mosaic_items(items: list[dict] | None, limit: int = 4) -> list[dict]:
+    """表紙用に、アートワークが重複しないよう先頭から最大4件を選ぶ。4件そろわなければ1件だけ返す。"""
+    picked: list[dict] = []
+    seen: set[str] = set()
+    for item in items or []:
+        key = art_url(item) or item.get("show", "")
+        if key not in seen:
+            seen.add(key)
+            picked.append(item)
+        if len(picked) == limit:
+            return picked
+    return picked[:1]
+
+
+def initial(text: str | None) -> str:
+    return (text or "?").strip()[:1].upper() or "?"
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +142,10 @@ def _error(message: str, code: int = 400):
 def create_app(config_path: Path) -> Flask:
     app = Flask(__name__)
     app.config["RADIO_CONFIG_PATH"] = Path(config_path)
-    app.jinja_env.filters.update(minutes=fmt_minutes, size=fmt_size, dt=fmt_dt)
+    app.jinja_env.filters.update(
+        minutes=fmt_minutes, size=fmt_size, dt=fmt_dt, art_url=art_url, art_color=art_color, initial=initial,
+        mosaic_items=mosaic_items,
+    )
     ensure_db()
 
     @app.before_request
@@ -140,8 +182,9 @@ def _register_pages(app: Flask) -> None:
         with get_connection(paths.db_path()) as conn:
             rows = store.list_history(conn, HISTORY_PAGE_SIZE, (page - 1) * HISTORY_PAGE_SIZE)
             total = store.count_history(conn)
+            arts = store.history_artworks(conn, [r["id"] for r in rows])
         pages = max(1, -(-total // HISTORY_PAGE_SIZE))
-        return render_template("history.html", rows=rows, page=page, pages=pages)
+        return render_template("history.html", rows=rows, arts=arts, page=page, pages=pages)
 
     @app.route("/history/<int:history_id>")
     def history_detail(history_id: int):
@@ -162,7 +205,13 @@ def _register_pages(app: Flask) -> None:
 
     @app.route("/feeds")
     def feeds_page():
-        return render_template("feeds.html", radio=get_config().get("radio", {}))
+        with get_connection(paths.db_path()) as conn:
+            shows = store.list_shows(conn)
+        show_art = {
+            name: {"url": art_url({"show_art": s["art_file"]}), "color": s["color"] or ""}
+            for name, s in shows.items()
+        }
+        return render_template("feeds.html", radio=get_config().get("radio", {}), show_art=show_art)
 
     @app.route("/schedule")
     def schedule_page():
@@ -176,6 +225,13 @@ def _register_pages(app: Flask) -> None:
 def _register_api(app: Flask) -> None:
     def cfg_path() -> Path:
         return app.config["RADIO_CONFIG_PATH"]
+
+    @app.route("/art/<name>")
+    def art(name: str):
+        if not artwork.ART_NAME_RE.match(name):
+            abort(404)
+        resp = send_from_directory(artwork.art_dir(), name, max_age=86400)
+        return resp
 
     @app.route("/health")
     def health():
@@ -245,14 +301,17 @@ def _register_api(app: Flask) -> None:
     def api_feeds_preview():
         url = str((request.get_json(silent=True) or {}).get("url", "")).strip()
         try:
-            title, episodes = feeds.parse_feed(feeds.download_feed(url), "", 3)
+            result = feeds.parse_feed_result(feeds.download_feed(url), "", 3)
         except Exception as e:
             return _error(f"RSS を読み込めませんでした: {e}")
+        title, episodes = result.title, result.episodes
+        art_file = artwork.cache_image(result.image_url) if result.image_url else None
         if not episodes:
             return _error("音声エピソードが見つかりませんでした（ポッドキャストの RSS か確認してください）")
         return jsonify({
             "ok": True,
             "title": title,
+            "image": art_url({"art_file": art_file}),
             "episodes": [{"title": e.title, "published": e.published, "minutes": fmt_minutes(e.duration_sec)} for e in episodes],
         })
 

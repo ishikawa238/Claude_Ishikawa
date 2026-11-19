@@ -8,7 +8,7 @@ from tests.helpers import TempEnvTestCase
 class RunTest(TempEnvTestCase):
     def _patch(self, new_entries):
         return [
-            mock.patch.object(radio.feeds, "fetch_all", return_value=[]),
+            mock.patch.object(radio.feeds, "fetch_all", return_value=([], {})),
             mock.patch.object(radio.library, "download_new", return_value=new_entries),
             mock.patch.object(radio.player, "play", return_value="vlc.exe"),
             mock.patch.object(radio.notifier, "send_success"),

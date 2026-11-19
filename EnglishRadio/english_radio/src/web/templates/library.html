@@ -1,36 +1,34 @@
 {% extends "base.html" %}
+{% from "_macros.html" import artwork, ecard %}
 {% block title %}ライブラリ{% endblock %}
 {% block content %}
-<h1>📚 ライブラリ</h1>
-<p class="muted">これまでにダウンロードしたエピソード {{ stats.count }}本（{{ stats.duration_sec | minutes }} / {{ stats.size_bytes | size }}）。削除せずに貯めていき、新着が少ない日はここからシャッフルで流れます。</p>
-<div class="card">
-  <form class="form-row" method="get">
-    <select name="show" onchange="this.form.submit()">
-      <option value="">すべての番組</option>
-      {% for s in stats.by_show %}
-        <option value="{{ s.show }}" {{ 'selected' if s.show == show }}>{{ s.show }}（{{ s.cnt }}）</option>
-      {% endfor %}
-    </select>
-    <input type="text" name="q" value="{{ q }}" placeholder="タイトルで検索">
-    <button class="btn" type="submit">🔍 検索</button>
-    {% if show or q %}<a class="btn" href="{{ url_for('library_page') }}">クリア</a>{% endif %}
-  </form>
-  <div class="table-wrap">
-  <table>
-    <tr><th>番組 / タイトル</th><th>配信日</th><th>長さ</th><th>再生</th><th>最後に聞いた日</th><th></th></tr>
-    {% for e in episodes %}
-    <tr>
-      <td><div class="muted">{{ e.show }}</div>{{ e.title }}</td>
-      <td>{{ (e.published or '')[:10] }}</td>
-      <td>{{ e.duration_sec | minutes }}</td>
-      <td>{% if e.play_count %}{{ e.play_count }}回{% else %}<span class="badge new">未再生</span>{% endif %}</td>
-      <td>{{ e.last_played | dt }}</td>
-      <td><button class="btn small" data-post="/api/play/episode" data-body='{{ {"guid": e.guid} | tojson }}'>▶</button></td>
-    </tr>
-    {% else %}
-    <tr><td colspan="6" class="muted">該当するエピソードがありません</td></tr>
+<h1>ライブラリ</h1>
+<p class="muted">これまでに集めた {{ stats.count }}本（{{ stats.duration_sec | minutes }} / {{ stats.size_bytes | size }}）。新着が少ない日はここからシャッフルで流れます。</p>
+
+<section class="section">
+  <div class="shelf">
+    <a class="ecard show-tile {{ 'active' if not show }}" href="{{ url_for('library_page', q=q or None) }}">
+      <div class="art-wrap"><div class="art ph" style="background:linear-gradient(135deg,#1ed98a,#0f3d2a)">ALL</div></div>
+      <div class="ttl">すべて</div><div class="sub">{{ stats.count }}本</div>
+    </a>
+    {% for s in stats.by_show %}
+    <a class="ecard show-tile {{ 'active' if s.show == show }}" href="{{ url_for('library_page', show=s.show, q=q or None) }}">
+      <div class="art-wrap">{{ artwork(s) }}</div>
+      <div class="ttl">{{ s.show }}</div><div class="sub">{{ s.cnt }}本</div>
+    </a>
     {% endfor %}
-  </table>
   </div>
-</div>
+</section>
+
+<form class="form-row section" method="get" style="margin-top:20px">
+  {% if show %}<input type="hidden" name="show" value="{{ show }}">{% endif %}
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="🔍 タイトルで検索" aria-label="タイトルで検索">
+  {% if show or q %}<a class="btn small" href="{{ url_for('library_page') }}">クリア</a>{% endif %}
+</form>
+
+<section class="section" style="margin-top:20px">
+  {% if episodes %}
+  <div class="grid-cards">{% for e in episodes %}{{ ecard(e) }}{% endfor %}</div>
+  {% else %}<p class="muted">該当するエピソードがありません</p>{% endif %}
+</section>
 {% endblock %}

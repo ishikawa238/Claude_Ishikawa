@@ -1,13 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ h.played_at | dt }} のリスト{% endblock %}
 {% block content %}
-<p><a href="{{ url_for('history') }}">← 過去のリスト</a></p>
-<h1>🗓 {{ h.played_at | dt }} のリスト</h1>
-<div class="card">
-  <div class="muted">{{ h.schedule_label }} ・ {{ h['items'] | length }}本 ・ {{ h.total_sec | minutes }}</div>
-  {% with items = h['items'] %}{% include "_episodes.html" %}{% endwith %}
-  <div class="actions">
-    <button class="btn primary" data-post="/api/play/history/{{ h.id }}">▶ この日のリストをもう一度再生</button>
-  </div>
-</div>
+<p><a class="faint" href="{{ url_for('history') }}">← 過去のリスト</a></p>
+{% set eyebrow = h.played_at[:10] ~ ' のリスト' %}
+{% set play_url = '/api/play/history/' ~ h.id %}
+{% set extra = '' %}
+{% include "_playlist.html" %}
 {% endblock %}

@@ -1,0 +1,59 @@
+{# 共通部品: アートワーク・エピソード行・カード・モザイク #}
+
+{% macro artwork(e, cls='') -%}
+  {%- set url = e | art_url -%}
+  {%- if url -%}
+    <img class="art {{ cls }}" src="{{ url }}" alt="" loading="lazy">
+  {%- else -%}
+    <div class="art ph {{ cls }}" style="background: linear-gradient(135deg, {{ e | art_color }}, #1b1b22)" aria-hidden="true">{{ (e.show or e.name) | initial }}</div>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro play_body(guid) -%}
+  data-post="/api/play/episode" data-body='{{ {"guid": guid} | tojson }}'
+{%- endmacro %}
+
+{% macro source_badge(source) -%}
+  {%- if source == 'new' %}<span class="badge new">NEW</span>
+  {%- elif source == 'shuffle' %}<span class="badge shuffle">シャッフル</span>{% endif -%}
+{%- endmacro %}
+
+{# プレイリストの1行 #}
+{% macro track(e, i) %}
+<div class="track">
+  <div class="num">{{ i }}</div>
+  {{ artwork(e, 'art-sm') }}
+  <div style="min-width:0">
+    <div class="ttl">{{ e.title }}</div>
+    <div class="sub">{{ source_badge(e.source) }} {{ e.show }}</div>
+  </div>
+  <div class="dur">{{ e.duration_sec | minutes }}</div>
+  <button class="play-mini" {{ play_body(e.guid) }} aria-label="{{ e.title }} を再生">▶</button>
+</div>
+{% endmacro %}
+
+{# 正方形アートワーク付きカード（クリックで詳細） #}
+{% macro ecard(e, show_source=false) %}
+<div class="ecard" tabindex="0" data-detail='{{ {"title": e.title, "show": e.show, "summary": e.summary or "", "published": (e.published or "")[:10], "minutes": e.duration_sec | minutes, "plays": e.play_count, "guid": e.guid, "art": e | art_url, "color": e | art_color} | tojson }}'>
+  <div class="art-wrap">
+    {{ artwork(e) }}
+    {% if show_source %}<div class="corner">{{ source_badge(e.source) }}</div>{% endif %}
+    {% if not show_source and not e.play_count %}<div class="corner"><span class="badge new">未再生</span></div>{% endif %}
+    <button class="play-fab hover-play" style="width:46px;height:46px;font-size:17px" {{ play_body(e.guid) }} aria-label="{{ e.title }} を再生">▶</button>
+  </div>
+  <div class="ttl">{{ e.title }}</div>
+  <div class="sub">{{ e.show }} ・ {{ e.duration_sec | minutes }}</div>
+</div>
+{% endmacro %}
+
+{# 先頭4本のアートワークを 2×2 で並べた表紙（4種類そろわなければ1枚） #}
+{% macro mosaic(items) %}
+  {%- set picked = items | mosaic_items -%}
+  {%- if picked | length == 4 -%}
+    <div class="mosaic">{% for x in picked %}{{ artwork(x) }}{% endfor %}</div>
+  {%- elif picked -%}
+    <div class="mosaic single">{{ artwork(picked[0]) }}</div>
+  {%- else -%}
+    <div class="mosaic single"><div class="art ph" style="background: linear-gradient(135deg, #1ed98a, #1b1b22)">📻</div></div>
+  {%- endif -%}
+{% endmacro %}

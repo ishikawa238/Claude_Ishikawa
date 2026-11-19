@@ -1,25 +1,20 @@
 {% extends "base.html" %}
 {% block title %}今日のリスト{% endblock %}
 {% block content %}
-<h1>🎧 今日のリスト</h1>
-<div class="card">
-  {% if h %}
-    <div class="form-row" style="justify-content:space-between">
-      <div>
-        <b>{{ h.schedule_label }}</b>
-        <span class="muted">{{ h.played_at | dt }} 作成 ・ {{ h['items'] | length }}本 ・ {{ h.total_sec | minutes }}</span>
-      </div>
-      <span class="badge {{ h.status }}">{{ '再生済み' if h.status == 'played' else '準備のみ' }}</span>
+{% if h %}
+  {% set eyebrow = '今日のリスト' %}
+  {% set play_url = '/api/play/today' %}
+  {% set extra %}<button class="btn" data-post="/api/run" {{ 'disabled' if running }} data-confirm="新着を取りに行って、新しいリストで再生します。よろしいですか？">🔄 新着を取って流す</button>{% if running %}<span class="faint">🔵 いま準備中です。数分後に再読み込みしてください。</span>{% endif %}{% endset %}
+  {% include "_playlist.html" %}
+{% else %}
+  <section class="list-head">
+    <div class="mosaic single" style="width:200px"><div class="art ph" style="background:linear-gradient(135deg,#1ed98a,#1b1b22)">📻</div></div>
+    <div>
+      <div class="eyebrow">今日のリスト</div>
+      <h1>まだリストがありません</h1>
+      <p class="muted">「新着を取って流す」を押すと、最初のリストを作ります。</p>
+      <button class="btn primary" data-post="/api/run" {{ 'disabled' if running }}>🔄 新着を取って流す</button>
     </div>
-    {% with items = h['items'] %}{% include "_episodes.html" %}{% endwith %}
-  {% else %}
-    <p>まだリストがありません。下の「新着を取って流す」を押すと、最初のリストを作ります。</p>
-  {% endif %}
-  <div class="actions">
-    {% if h %}<button class="btn primary" data-post="/api/play/today">▶ このリストを再生</button>{% endif %}
-    <button class="btn" data-post="/api/run" {{ 'disabled' if running }}
-            data-confirm="新着を取りに行って、新しいリストで再生します。よろしいですか？">🔄 新着を取って流す</button>
-  </div>
-  {% if running %}<p class="muted">🔵 いま準備中です。数分後に再読み込みしてください。</p>{% endif %}
-</div>
+  </section>
+{% endif %}
 {% endblock %}

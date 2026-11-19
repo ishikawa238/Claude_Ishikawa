@@ -1,0 +1,19 @@
+{# プレイリスト画面（today / history_detail 共通）。h: 履歴、eyebrow / play_url / extra を渡す #}
+{% from "_macros.html" import mosaic, track %}
+{% set items = h['items'] %}
+<section class="list-head" style="--hero: {{ items[0] | art_color if items else '#2c2c38' }}">
+  {{ mosaic(items) }}
+  <div style="min-width:0">
+    <div class="eyebrow">{{ eyebrow }}</div>
+    <h1>{{ h.schedule_label }}</h1>
+    <div class="muted">{{ h.played_at | dt }} ・ {{ items | length }}本 ・ {{ h.total_sec | minutes }}
+      {% if h.status == 'queued' %} ・ <span class="badge queued">準備のみ</span>{% endif %}</div>
+  </div>
+</section>
+<div class="list-actions">
+  <button class="play-fab" data-post="{{ play_url }}" aria-label="このリストを再生">▶</button>
+  {{ extra | safe if extra }}
+</div>
+<div class="tracklist">
+  {% for e in items %}{{ track(e, loop.index) }}{% endfor %}
+</div>

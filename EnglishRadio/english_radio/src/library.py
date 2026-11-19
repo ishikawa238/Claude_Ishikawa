@@ -51,7 +51,9 @@ def episode_path(library_dir: Path, ep: Episode) -> Path:
     return path
 
 
-def download_file(url: str, dest: Path, session: requests.Session | None = None) -> int:
+def download_file(
+    url: str, dest: Path, session: requests.Session | None = None, max_bytes: int = MAX_DOWNLOAD_BYTES
+) -> int:
     """url を dest に保存し、バイト数を返す。途中で失敗したら .part を消す。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
@@ -67,7 +69,7 @@ def download_file(url: str, dest: Path, session: requests.Session | None = None)
                     if chunk:
                         f.write(chunk)
                         size += len(chunk)
-                        if size > MAX_DOWNLOAD_BYTES:
+                        if size > max_bytes:
                             raise IOError("ファイルが大きすぎるため中止しました")
         if size == 0:
             raise IOError("ダウンロードしたファイルが空です")
@@ -128,6 +130,8 @@ def download_new(
             "published": ep.published,
             "duration_sec": ep.duration_sec or read_duration(dest),
             "size_bytes": size,
+            "image_url": ep.image_url,
+            "summary": ep.summary,
         }
         store.add_episode(conn, entry)
         known.add(ep.guid)

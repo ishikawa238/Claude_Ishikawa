@@ -1,29 +1,27 @@
 {% extends "base.html" %}
+{% from "_macros.html" import mosaic %}
 {% block title %}過去のリスト{% endblock %}
 {% block content %}
-<h1>🗓 過去のリスト</h1>
-<div class="card">
-  {% if rows %}
-  <div class="table-wrap">
-  <table>
-    <tr><th>日時</th><th>内容</th><th>本数</th><th>長さ</th><th>きっかけ</th><th></th></tr>
-    {% for r in rows %}
-    <tr>
-      <td><a href="{{ url_for('history_detail', history_id=r.id) }}">{{ r.played_at | dt }}</a></td>
-      <td>{{ r.schedule_label }}</td>
-      <td>{{ r.item_count }}本</td>
-      <td>{{ r.total_sec | minutes }}</td>
-      <td class="muted">{{ {'schedule':'⏰ 自動','web':'🖱 画面から','manual':'⌨ 手動'}.get(r.trigger, r.trigger) }}</td>
-      <td><button class="btn small" data-post="/api/play/history/{{ r.id }}">▶ もう一度</button></td>
-    </tr>
-    {% endfor %}
-  </table>
+<h1>過去のリスト</h1>
+<p class="muted">これまでに流したリスト。好きな日をもう一度流せます。</p>
+{% if rows %}
+<div class="grid-cards section" style="margin-top:20px">
+  {% for r in rows %}
+  <div class="hist-card">
+    <a href="{{ url_for('history_detail', history_id=r.id) }}">{{ mosaic(arts.get(r.id, [])) }}</a>
+    <a href="{{ url_for('history_detail', history_id=r.id) }}" class="date">{{ r.played_at | dt }}</a>
+    <div class="faint" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.schedule_label }}</div>
+    <div class="row">
+      <span class="faint">{{ r.item_count }}本 ・ {{ r.total_sec | minutes }} ・ {{ {'schedule':'⏰','web':'🖱','manual':'⌨'}.get(r.trigger, '') }}</span>
+      <button class="play-mini" data-post="/api/play/history/{{ r.id }}" aria-label="{{ r.played_at | dt }} のリストを再生">▶</button>
+    </div>
   </div>
-  <div class="pager">
-    {% if page > 1 %}<a class="btn small" href="?page={{ page - 1 }}">← 新しい</a>{% endif %}
-    <span class="muted">{{ page }} / {{ pages }}</span>
-    {% if page < pages %}<a class="btn small" href="?page={{ page + 1 }}">古い →</a>{% endif %}
-  </div>
-  {% else %}<p class="muted">まだ履歴がありません。</p>{% endif %}
+  {% endfor %}
 </div>
+<div class="pager">
+  {% if page > 1 %}<a class="btn small" href="?page={{ page - 1 }}">← 新しい</a>{% endif %}
+  <span class="faint">{{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a class="btn small" href="?page={{ page + 1 }}">古い →</a>{% endif %}
+</div>
+{% else %}<p class="muted section">まだ履歴がありません。</p>{% endif %}
 {% endblock %}

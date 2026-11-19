@@ -2,28 +2,55 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f0f12">
   <title>{% block title %}英語ラジオ{% endblock %} | EnglishRadio</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700;800&family=Noto+Sans+JP:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<header>
-  <div class="header-inner">
-    <a class="brand" href="{{ url_for('dashboard') }}">📻 英語ラジオ</a>
-    <nav>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">📻</span>英語ラジオ</a>
+    <nav class="nav">
       {% set items = [
-        ('dashboard', '🏠 状況'), ('today', '🎧 今日のリスト'), ('history', '🗓 過去のリスト'),
-        ('library_page', '📚 ライブラリ'), ('feeds_page', '🎙 番組'), ('schedule_page', '⏰ 時間割')] %}
-      {% for ep, label in items %}
-        <a href="{{ url_for(ep) }}" class="{{ 'active' if nav == ep or (ep == 'history' and nav == 'history_detail') }}">{{ label }}</a>
+        ('dashboard', '🏠', 'ホーム'), ('today', '🎧', '今日'), ('history', '🗓', '過去'),
+        ('library', '📚', 'ライブラリ'), ('feeds_page', '🎙', '番組'), ('schedule_page', '⏰', '時間割')] %}
+      {% for ep, ico, label in items %}
+        {% set target = 'library_page' if ep == 'library' else ep %}
+        {% set active = nav == target or (ep == 'history' and nav == 'history_detail') %}
+        <a href="{{ url_for(target) }}" class="{{ 'active' if active }}" {{ 'aria-current=page' if active }}><span class="ico">{{ ico }}</span><span>{{ label }}</span></a>
       {% endfor %}
     </nav>
+    <div class="sidebar-foot">毎朝の英語ポッドキャスト</div>
+  </aside>
+  <main>
+    <div class="page">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+
+<dialog id="detail">
+  <div class="dlg-head">
+    <div id="dlg-art"></div>
+    <div style="min-width:0">
+      <div class="eyebrow" id="dlg-show"></div>
+      <h2 id="dlg-title" style="margin:6px 0"></h2>
+      <div class="faint" id="dlg-meta"></div>
+    </div>
   </div>
-</header>
-<main>
-  {% block content %}{% endblock %}
-</main>
+  <div class="dlg-body">
+    <p id="dlg-summary"></p>
+    <div class="form-row">
+      <button class="btn primary" id="dlg-play">▶ 再生する</button>
+      <button class="btn" onclick="this.closest('dialog').close()">閉じる</button>
+    </div>
+  </div>
+</dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% block scripts %}{% endblock %}

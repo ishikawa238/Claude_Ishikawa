@@ -47,6 +47,9 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 # Web 管理画面を手動で起動
 .\venv\Scripts\python.exe scripts\web_server.py
+
+# 既存エピソードにアートワークと紹介文を付ける（アートワーク対応前の mp3 向け。何度実行しても安全）
+.\venv\Scripts\python.exe scripts\backfill_artwork.py
 ```
 
 ## テスト
@@ -87,6 +90,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | `library/<番組>/<配信日>_<タイトル>.mp3` | ダウンロードした mp3（削除しない） |
 | `data/english_radio.db` | エピソード・再生履歴・実行ログ（watchdog が監視） |
 | `data/today.m3u` | 今朝のリスト（VLC で開くとそのまま再生できる） |
+| `data/artwork/<sha1>.jpg` | 番組・エピソードのアートワーク（RSS の画像を 600px に縮小してキャッシュ） |
 | `logs/batch_YYYYMMDD.log` | 実行ログ |
 
 ## トラブルシューティング

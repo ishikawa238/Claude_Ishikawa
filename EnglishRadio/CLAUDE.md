@@ -25,8 +25,10 @@ scripts/morning_radio.py → src/radio.run()
   player.write_m3u/play()  data/today.m3u を VLC (--play-and-exit) で再生
   store.save_history()     play_history / play_history_items、episodes.last_played
   notifier.send_*()        Slack（shared/slack.py）
+  radio.refresh_artwork()  番組画像・エピソード画像を artwork.cache_image() で 600px JPEG にキャッシュ（失敗しても再生は続行）
 scripts/web_server.py → src/web/app.create_app()
-  pages: / today history history/<id> library feeds schedule
+  pages: / today history history/<id> library feeds schedule（templates/_macros.html の artwork/track/ecard/mosaic を共通利用）
+  art:   /art/<sha1>.jpg（名前は正規表現で検証して data/artwork/ から配信）
   api:   /api/run, /api/play/*, /api/feeds(+preview), /api/schedules, /api/status
 ```
 

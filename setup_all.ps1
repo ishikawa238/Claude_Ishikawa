@@ -14,7 +14,8 @@ $RepoRoot = $PSScriptRoot
 # ---------------------------------------------------------------------------
 $schedulerScripts = @(
     @{ Label = "Investment";      Path = "Investment\investment_support\setup_scheduler.ps1" },
-    @{ Label = "MorningPlaylist"; Path = "MorningPlaylist\morning_playlist\setup_scheduler.ps1" },
+    # MorningPlaylist は Spotify 認証切れのため停止（EnglishRadio に移行）
+    @{ Label = "EnglishRadio";    Path = "EnglishRadio\english_radio\setup_scheduler.ps1" },
     @{ Label = "FreelanceScout";  Path = "FreelanceScout\freelance_scout\setup_scheduler.ps1" },
     @{ Label = "AiNewsDigest";    Path = "AiNewsDigest\ai_news_digest\setup_scheduler.ps1" },
     @{ Label = "EnglishDaily";    Path = "EnglishDaily\english_daily\setup_scheduler.ps1" },

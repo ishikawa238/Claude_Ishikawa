@@ -11,7 +11,8 @@
 | `PaperWatch/` | 新着論文監視システム。arXiv RSS から指定カテゴリの論文を取得し、キーワードスコアリングで関連度の高い論文を Slack に通知する。 |
 | `FreelanceScout/` | フリーランス案件自動収集システム。CrowdWorks・Coconala から IT/AI 系案件をスクレイプし、キーワードフィルタ後に Slack 通知する。 |
 | `EnglishDaily/` | 英語学習習慣化システム。曜日別カリキュラムを毎朝 Slack に配信し、連続学習日数（ストリーク）を管理する。 |
-| `MorningPlaylist/` | 英語ポッドキャスト自動再生システム。Spotify API で最新エピソードをプレイリストに入れ替え、Spotify Connect で Echo に再生開始する。 |
+| `EnglishRadio/` | 毎朝の英語ラジオ。ポッドキャスト RSS から mp3 を取得・蓄積し、新着優先＋シャッフルで VLC 再生する。Web 管理画面（http://127.0.0.1:5210/）付き。 |
+| `MorningPlaylist/` | 【停止中】旧・英語ポッドキャスト自動再生（Spotify API）。認証切れが自動化できないため EnglishRadio に移行。 |
 | `watchdog/` | 横断監視スクリプト。全システムの SQLite DB を巡回し、バッチ未実行や致命的エラーを検知して Slack に通知する。 |
 | `shared/` | 共通モジュール（config, db, slack, logger, net）。各システムから `pip install -e "../../[slack]"` で利用する。`logger` は環境変数 `SHARED_LOG_DIR` でログ出力先を上書きできる（テスト用）。 |
 | `claude-study/` | Claude Code の練習用プロジェクト。CLI 電卓と CSV 集計ツール。 |
@@ -26,7 +27,7 @@
 | 毎日 18:30 | Investment | 日本株のテクニカル分析・売買シグナル検知結果（夕方レポート） |
 | 毎月 1日 08:00 | Investment | 月次レポート（銘柄マスタ更新 + ファンダメンタルズ取得） |
 | 毎日 07:00 | PaperWatch | arXiv 新着論文のキーワードマッチレポート |
-| 毎日 07:00 | MorningPlaylist | 英語ポッドキャストプレイリスト自動更新 & Echo 再生 |
+| 毎日 07:00 | EnglishRadio | 英語ポッドキャストを取得して VLC で再生（時間割は Web 画面で変更可） |
 | 毎日 07:00 | EnglishDaily | 曜日別英語学習カリキュラム + ストリーク通知 |
 | 毎日 17:30 / 19:30 / 21:30 / 23:30 | EnglishDaily | 未完了タスクのリマインド通知 |
 | 随時（異常時のみ） | watchdog | バッチ未実行・致命的エラーの検知アラート |
@@ -75,7 +76,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | Investment_EveningBatch_JP | 毎日 18:30 |
 | Investment_MonthlyBatch | 毎月 1日 08:00 |
 | Investment_OpenD | ログオン時 + 毎時 10分（ログオン中のみ。moomoo OpenD が落ちていれば起動） |
-| MorningEnglishPlaylistUpdate | config.json で指定した時刻 |
+| EnglishRadio_MorningPlay | config.json の radio.schedules の時刻（Web 画面で変更可） |
+| EnglishRadio_WebServer | ログオン時（Web 管理画面 http://127.0.0.1:5210/） |
 | FreelanceScout_MorningBatch | 毎日 07:00 |
 | AiNewsDigest_MorningBatch | 毎日 07:00 |
 | EnglishDaily_MorningBatch | 毎日 07:00 |

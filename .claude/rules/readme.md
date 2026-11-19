@@ -10,6 +10,9 @@ paths:
   - "EnglishDaily/CLAUDE.md"
   - "EnglishDaily/README.md"
   - "MorningPlaylist/README.md"
+  - "EnglishRadio/CLAUDE.md"
+  - "EnglishRadio/README.md"
+  - "EnglishRadio/english_radio/README.md"
 ---
 
 # Documentation Update Rules

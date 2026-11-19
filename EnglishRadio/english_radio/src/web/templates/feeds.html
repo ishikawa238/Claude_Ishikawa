@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}番組{% endblock %}
+{% block content %}
+<h1>🎙 番組</h1>
+<div class="card">
+  <h2>登録している番組</h2>
+  <p class="muted">チェックを外すと、その番組はお休みになります（これまでのエピソードはライブラリに残ります）。</p>
+  <div id="feed-list"></div>
+  <div class="form-row" style="margin-top:12px">
+    <label>1番組あたり、毎回チェックする最新エピソード数
+      <input type="number" id="per-feed" min="1" max="10" value="{{ radio.episodes_per_feed or 3 }}" style="width:70px">
+    </label>
+  </div>
+  <div class="actions"><button class="btn primary" id="save-feeds">💾 保存する</button></div>
+</div>
+
+<div class="card">
+  <h2>➕ 番組を追加</h2>
+  <p class="muted">ポッドキャストの RSS の URL を貼り付けて「確認」を押してください。番組名と最新エピソードが表示されたら追加できます。<br>
+    RSS の URL は <a href="https://podcasts.apple.com/" target="_blank" rel="noopener">Apple Podcasts</a> の番組ページや、番組の公式サイトで見つかります。</p>
+  <div class="form-row">
+    <input type="url" id="new-url" placeholder="https://example.com/podcast.rss" style="flex:1;min-width:240px">
+    <button class="btn" id="preview-btn">🔍 確認</button>
+  </div>
+  <div id="preview"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let feedList = {{ (radio.feeds or []) | tojson }};
+
+function renderFeeds() {
+  const box = document.getElementById("feed-list");
+  if (!feedList.length) { box.innerHTML = '<p class="muted">番組がありません。下から追加してください。</p>'; return; }
+  box.innerHTML = feedList.map((f, i) => `
+    <div class="episode">
+      <input type="checkbox" data-i="${i}" class="feed-on" ${f.enabled !== false ? "checked" : ""} aria-label="有効">
+      <div class="body">
+        <div class="ttl">${escapeHtml(f.name)}</div>
+        <div class="muted" style="overflow-wrap:anywhere">${escapeHtml(f.url)}</div>
+      </div>
+      <button class="btn small danger feed-del" data-i="${i}">削除</button>
+    </div>`).join("");
+}
+
+document.getElementById("feed-list").addEventListener("click", (ev) => {
+  const i = ev.target.dataset.i;
+  if (ev.target.classList.contains("feed-on")) feedList[i].enabled = ev.target.checked;
+  if (ev.target.classList.contains("feed-del") && confirm(`「${feedList[i].name}」を削除しますか？（保存するまで確定しません）`)) {
+    feedList.splice(i, 1); renderFeeds();
+  }
+});
+
+document.getElementById("save-feeds").addEventListener("click", async () => {
+  const data = await api("PUT", "/api/feeds", {
+    feeds: feedList, episodes_per_feed: document.getElementById("per-feed").value,
+  });
+  toast(data.message, !data.ok);
+});
+
+document.getElementById("preview-btn").addEventListener("click", async (ev) => {
+  const url = document.getElementById("new-url").value.trim();
+  const box = document.getElementById("preview");
+  if (!url) { toast("URL を入力してください", true); return; }
+  ev.target.disabled = true;
+  box.innerHTML = '<p class="muted">読み込み中…</p>';
+  const data = await api("POST", "/api/feeds/preview", { url });
+  ev.target.disabled = false;
+  if (!data.ok) { box.innerHTML = ""; toast(data.message, true); return; }
+  box.innerHTML = `
+    <div class="card" style="background:var(--bg)">
+      <div class="form-row"><label>番組名 <input type="text" id="new-name" value="${escapeHtml(data.title)}" style="min-width:240px"></label></div>
+      <div class="muted">最新エピソード:</div>
+      <ul>${data.episodes.map(e => `<li>${escapeHtml(e.title)} <span class="muted">(${escapeHtml(e.minutes)} ・ ${escapeHtml((e.published || "").slice(0, 10))})</span></li>`).join("")}</ul>
+      <button class="btn primary" id="add-btn">➕ この番組を追加して保存</button>
+    </div>`;
+  document.getElementById("add-btn").addEventListener("click", async () => {
+    const name = document.getElementById("new-name").value.trim();
+    const next = [...feedList, { name, url, enabled: true }];
+    const res = await api("PUT", "/api/feeds", { feeds: next, episodes_per_feed: document.getElementById("per-feed").value });
+    toast(res.message, !res.ok);
+    if (res.ok) { feedList = next; renderFeeds(); box.innerHTML = ""; document.getElementById("new-url").value = ""; }
+  });
+});
+
+renderFeeds();
+</script>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}過去のリスト{% endblock %}
+{% block content %}
+<h1>🗓 過去のリスト</h1>
+<div class="card">
+  {% if rows %}
+  <div class="table-wrap">
+  <table>
+    <tr><th>日時</th><th>内容</th><th>本数</th><th>長さ</th><th>きっかけ</th><th></th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('history_detail', history_id=r.id) }}">{{ r.played_at | dt }}</a></td>
+      <td>{{ r.schedule_label }}</td>
+      <td>{{ r.item_count }}本</td>
+      <td>{{ r.total_sec | minutes }}</td>
+      <td class="muted">{{ {'schedule':'⏰ 自動','web':'🖱 画面から','manual':'⌨ 手動'}.get(r.trigger, r.trigger) }}</td>
+      <td><button class="btn small" data-post="/api/play/history/{{ r.id }}">▶ もう一度</button></td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+  <div class="pager">
+    {% if page > 1 %}<a class="btn small" href="?page={{ page - 1 }}">← 新しい</a>{% endif %}
+    <span class="muted">{{ page }} / {{ pages }}</span>
+    {% if page < pages %}<a class="btn small" href="?page={{ page + 1 }}">古い →</a>{% endif %}
+  </div>
+  {% else %}<p class="muted">まだ履歴がありません。</p>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{
+  "radio": {
+    "target_minutes": 90,
+    "episodes_per_feed": 3,
+    "vlc_path": "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+    "schedules": [
+      {"label": "Morning English", "start": "07:00", "end": "08:30", "days": "daily"}
+    ],
+    "feeds": [
+      {"name": "NPR Up First", "url": "https://feeds.npr.org/510318/podcast.xml", "enabled": true},
+      {"name": "BBC Global News Podcast", "url": "https://podcasts.files.bbci.co.uk/p02nq0gn.rss", "enabled": true},
+      {"name": "TED Radio Hour", "url": "https://feeds.npr.org/510298/podcast.xml", "enabled": true},
+      {"name": "6 Minute English", "url": "https://podcasts.files.bbci.co.uk/p02pc9tn.rss", "enabled": true},
+      {"name": "All Ears English", "url": "https://feeds.megaphone.fm/allearsenglish", "enabled": true},
+      {"name": "英語聞き流し | Sakura English", "url": "https://api.robotstart.jp/api/v1/feeds/378004a3/get-feeds/podcast", "enabled": false}
+    ]
+  },
+  "paths": {
+    "db_path": "./data/english_radio.db",
+    "library_dir": "./library",
+    "data_dir": "./data"
+  },
+  "slack": {
+    "webhook_url": "https://hooks.slack.com/services/XXXXX/YYYYY/ZZZZZ"
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 5210
+  },
+  "logging": {
+    "log_level": "INFO",
+    "log_dir": "./logs"
+  }
+}

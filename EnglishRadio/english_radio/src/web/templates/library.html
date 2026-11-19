@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}ライブラリ{% endblock %}
+{% block content %}
+<h1>📚 ライブラリ</h1>
+<p class="muted">これまでにダウンロードしたエピソード {{ stats.count }}本（{{ stats.duration_sec | minutes }} / {{ stats.size_bytes | size }}）。削除せずに貯めていき、新着が少ない日はここからシャッフルで流れます。</p>
+<div class="card">
+  <form class="form-row" method="get">
+    <select name="show" onchange="this.form.submit()">
+      <option value="">すべての番組</option>
+      {% for s in stats.by_show %}
+        <option value="{{ s.show }}" {{ 'selected' if s.show == show }}>{{ s.show }}（{{ s.cnt }}）</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="q" value="{{ q }}" placeholder="タイトルで検索">
+    <button class="btn" type="submit">🔍 検索</button>
+    {% if show or q %}<a class="btn" href="{{ url_for('library_page') }}">クリア</a>{% endif %}
+  </form>
+  <div class="table-wrap">
+  <table>
+    <tr><th>番組 / タイトル</th><th>配信日</th><th>長さ</th><th>再生</th><th>最後に聞いた日</th><th></th></tr>
+    {% for e in episodes %}
+    <tr>
+      <td><div class="muted">{{ e.show }}</div>{{ e.title }}</td>
+      <td>{{ (e.published or '')[:10] }}</td>
+      <td>{{ e.duration_sec | minutes }}</td>
+      <td>{% if e.play_count %}{{ e.play_count }}回{% else %}<span class="badge new">未再生</span>{% endif %}</td>
+      <td>{{ e.last_played | dt }}</td>
+      <td><button class="btn small" data-post="/api/play/episode" data-body='{{ {"guid": e.guid} | tojson }}'>▶</button></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">該当するエピソードがありません</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+{% endblock %}

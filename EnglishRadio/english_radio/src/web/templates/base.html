@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}英語ラジオ{% endblock %} | EnglishRadio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <a class="brand" href="{{ url_for('dashboard') }}">📻 英語ラジオ</a>
+    <nav>
+      {% set items = [
+        ('dashboard', '🏠 状況'), ('today', '🎧 今日のリスト'), ('history', '🗓 過去のリスト'),
+        ('library_page', '📚 ライブラリ'), ('feeds_page', '🎙 番組'), ('schedule_page', '⏰ 時間割')] %}
+      {% for ep, label in items %}
+        <a href="{{ url_for(ep) }}" class="{{ 'active' if nav == ep or (ep == 'history' and nav == 'history_detail') }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</header>
+<main>
+  {% block content %}{% endblock %}
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

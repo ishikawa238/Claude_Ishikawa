@@ -1,5 +1,9 @@
 # MorningPlaylist
 
+> **停止中（2026-11-19）**: Spotify のリフレッシュトークンが失効し（2026-10-25 から失敗）、再認証を自動化できないため、
+> 認証不要の RSS 版 [EnglishRadio](../EnglishRadio/README.md) に移行しました。タスク `MorningEnglishPlaylistUpdate` は無効化しています。
+> フォルダは参照用に残しています。
+
 英語ポッドキャストの最新エピソードで Spotify プレイリスト「Morning English」を毎朝自動更新し、Spotify Connect で再生を開始する。
 
 ## 仕組み

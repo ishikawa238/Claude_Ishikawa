@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "english-radio-web",
+      "runtimeExecutable": "EnglishRadio/english_radio/venv/Scripts/python.exe",
+      "runtimeArgs": ["EnglishRadio/english_radio/scripts/web_server.py"],
+      "port": 5210
+    }
+  ]
+}

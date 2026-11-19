@@ -52,6 +52,14 @@
       "batches": [
         {"batch_type": "morning", "schedule": "daily"}
       ]
+    },
+    "english_radio": {
+      "label": "EnglishRadio",
+      "db_path": "../EnglishRadio/english_radio/data/english_radio.db",
+      "log_dir": "../EnglishRadio/english_radio/logs",
+      "batches": [
+        {"batch_type": "morning", "schedule": "daily"}
+      ]
     }
   },
 

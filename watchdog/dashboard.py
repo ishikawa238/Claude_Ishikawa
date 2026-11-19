@@ -75,8 +75,17 @@ _SYSTEM_META: dict[str, dict] = {
             "morning": {"schedule": "毎日 07:00", "label": "朝バッチ"},
         },
     },
+    "english_radio": {
+        "description": "毎朝の英語ラジオ。ポッドキャスト RSS から mp3 を取得・蓄積 → 新着優先＋シャッフルで VLC 再生 → Slack通知",
+        "icon": "radio",
+        "url": "http://127.0.0.1:5210/",
+        "tasks": ["EnglishRadio_MorningPlay", "EnglishRadio_WebServer"],
+        "batches": {
+            "morning": {"schedule": "毎日 07:00", "label": "朝の再生"},
+        },
+    },
     "morning_playlist": {
-        "description": "英語ポッドキャスト自動再生。Spotify API で最新エピソードをプレイリストに入れ替え → Echo 再生",
+        "description": "【停止中・EnglishRadio に移行】英語ポッドキャスト自動再生（Spotify API。認証切れのため停止）",
         "icon": "headphones",
         "scheduler_only": True,
         "tasks": ["MorningEnglishPlaylistUpdate"],

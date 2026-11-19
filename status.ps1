@@ -15,7 +15,8 @@ $tasks = @(
     @{ Name = "Investment_EveningBatch_JP";      Group = "Investment" },
     @{ Name = "Investment_MonthlyBatch";         Group = "Investment" },
     @{ Name = "Investment_OpenD";                Group = "Investment" },
-    @{ Name = "MorningEnglishPlaylistUpdate";    Group = "MorningPlaylist" },
+    @{ Name = "EnglishRadio_MorningPlay";        Group = "EnglishRadio" },
+    @{ Name = "EnglishRadio_WebServer";          Group = "EnglishRadio" },
     @{ Name = "FreelanceScout_MorningBatch";     Group = "FreelanceScout" },
     @{ Name = "AiNewsDigest_MorningBatch";       Group = "AiNewsDigest" },
     @{ Name = "EnglishDaily_MorningBatch";       Group = "EnglishDaily" },
@@ -34,7 +35,8 @@ $tasks = @(
 # ---------------------------------------------------------------------------
 $servers = @(
     @{ Label = "Investment Dashboard"; Url = "http://127.0.0.1:5100/health" },
-    @{ Label = "Watchdog Dashboard";   Url = "http://127.0.0.1:5200/health" }
+    @{ Label = "Watchdog Dashboard";   Url = "http://127.0.0.1:5200/health" },
+    @{ Label = "EnglishRadio Web";     Url = "http://127.0.0.1:5210/health" }
 )
 
 # ---------------------------------------------------------------------------

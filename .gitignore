@@ -13,6 +13,7 @@ FreelanceScout/freelance_scout/config.json
 AiNewsDigest/ai_news_digest/config.json
 EnglishDaily/english_daily/config.json
 MorningPlaylist/morning_playlist/config.json
+EnglishRadio/english_radio/config.json
 watchdog/config.json
 auto_commit/config.json
 
@@ -39,6 +40,10 @@ Investment/investment_support/data/*.lock
 
 # バックテスト結果（scripts.backtest_rules の出力）
 Investment/investment_support/data/backtest/
+
+# EnglishRadio の mp3 ライブラリ（大容量）
+EnglishRadio/english_radio/library/
+EnglishRadio/english_radio/data/*.m3u
 
 # OS
 .DS_Store

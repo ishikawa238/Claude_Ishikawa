@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}状況{% endblock %}
+{% block content %}
+<div class="card hero {{ d.today.color }}">
+  <div class="icon">{{ d.today.icon }}</div>
+  <div style="flex:1;min-width:200px">
+    <div class="title">{{ d.today.text }}</div>
+    <div class="muted">
+      {% if d.next %}次は <b>{{ d.next.at.strftime('%m/%d (%a) %H:%M') }}</b> に「{{ d.next.label }}」が始まります{% else %}時間割が登録されていません{% endif %}
+    </div>
+    {% if d.today.batch and d.today.batch.message %}<div class="muted">理由: {{ d.today.batch.message }}</div>{% endif %}
+  </div>
+  <div class="actions" style="margin:0">
+    <button class="btn primary" data-post="/api/run" data-confirm="新着を取りに行って、今すぐ再生します。よろしいですか？">🔄 今すぐ流す</button>
+    {% if d.latest %}<button class="btn" data-post="/api/play/today">▶ 前回のリストを再生</button>{% endif %}
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card stat">
+    <div class="label">📚 ライブラリ</div>
+    <div class="num">{{ d.stats.count }}本</div>
+    <div class="muted">合計 {{ d.stats.duration_sec | minutes }} / {{ d.stats.size_bytes | size }}</div>
+  </div>
+  <div class="card stat">
+    <div class="label">🆕 まだ聞いていない</div>
+    <div class="num">{{ d.stats.unplayed }}本</div>
+    <div class="muted">シャッフルで優先して流れます</div>
+  </div>
+  <div class="card stat">
+    <div class="label">🎙 番組</div>
+    <div class="num">{{ d.feed_count }}番組</div>
+    <div class="muted"><a href="{{ url_for('feeds_page') }}">番組を追加・変更する</a></div>
+  </div>
+  <div class="card stat">
+    <div class="label">🔈 再生ソフト (VLC)</div>
+    {% if d.vlc %}<div class="num" style="color:var(--green)">OK</div><div class="muted">見つかりました</div>
+    {% else %}<div class="num" style="color:var(--red)">未インストール</div>
+      <div class="muted"><a href="https://www.videolan.org/" target="_blank" rel="noopener">VLC をインストール</a>すると再生できます</div>{% endif %}
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>⏰ 自動再生の予約（タスクスケジューラ）</h2>
+    {% if d.task.exists %}
+      <table>
+        <tr><th>状態</th><td>{{ '✅ 有効' if d.task.state in ('Ready', 'Running') else '⚠️ ' ~ d.task.state }}</td></tr>
+        <tr><th>次回</th><td>{{ d.task.next_run or '—' }}</td></tr>
+        <tr><th>前回</th><td>{{ d.task.last_run or '—' }}
+          {% if d.task.last_run %}（{{ '成功' if d.task.last_result == 0 else '結果コード ' ~ d.task.last_result }}）{% endif %}</td></tr>
+      </table>
+    {% else %}
+      <p>⚠️ まだ予約されていません。管理者 PowerShell で <code>setup_scheduler.ps1</code> を実行してください。</p>
+    {% endif %}
+    <p class="muted">管理画面の自動起動: {{ '✅ 登録済み' if d.web_task.exists else '未登録' }}</p>
+  </div>
+  <div class="card">
+    <h2>🗒 最近の実行</h2>
+    {% if d.recent %}
+    <table>
+      <tr><th>日時</th><th>結果</th><th>新着</th><th>再生</th></tr>
+      {% for b in d.recent %}
+      <tr>
+        <td>{{ b.start_time | dt }}</td>
+        <td><span class="badge {{ b.status }}">{{ {'success':'成功','failed':'失敗','running':'実行中','partial_failure':'一部失敗'}.get(b.status, b.status) }}</span></td>
+        <td>{{ b.new_episodes or 0 }}本</td>
+        <td>{{ b.queued_episodes or 0 }}本</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">まだ実行されていません</p>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>🎙 番組ごとの本数</h2>
+  {% set maxcnt = (d.stats.by_show | map(attribute='cnt') | max) if d.stats.by_show else 1 %}
+  {% for s in d.stats.by_show %}
+    <div style="margin-bottom:8px">
+      <div class="form-row" style="justify-content:space-between;margin:0"><span>{{ s.show }}</span><span class="muted">{{ s.cnt }}本 / {{ s.dur | minutes }}</span></div>
+      <div class="bar"><span style="width: {{ (s.cnt / maxcnt * 100) | round }}%"></span></div>
+    </div>
+  {% else %}<p class="muted">まだエピソードがありません。「今すぐ流す」を押すと集め始めます。</p>{% endfor %}
+</div>
+
+{% if d.errors %}
+<div class="card">
+  <h2>⚠️ 今日の注意メッセージ</h2>
+  <div class="log">{% for line in d.errors %}{{ line }}
+{% endfor %}</div>
+  <p class="muted">ダウンロードの一時的な失敗は、翌日に自動でやり直します。</p>
+</div>
+{% endif %}
+{% endblock %}

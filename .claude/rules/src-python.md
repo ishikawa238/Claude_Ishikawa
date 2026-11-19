@@ -12,6 +12,8 @@ paths:
   - "EnglishDaily/english_daily/scripts/**/*.py"
   - "MorningPlaylist/morning_playlist/src/**/*.py"
   - "MorningPlaylist/morning_playlist/scripts/**/*.py"
+  - "EnglishRadio/english_radio/src/**/*.py"
+  - "EnglishRadio/english_radio/scripts/**/*.py"
   - "auto_commit/**/*.py"
 ---
 

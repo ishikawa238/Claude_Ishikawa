@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}お知らせ{% endblock %}
+{% block content %}
+<h1>お知らせ</h1>
+<p class="muted">英語ラジオに追加された機能や変更点です。</p>
+
+<section class="section release-list">
+  {% for n in notes %}
+  <article class="release {{ 'latest' if loop.first }}">
+    <div class="release-head">
+      <span class="badge {{ 'new' if loop.first }}">{{ n.version }}</span>
+      <span class="faint">{{ n.date }}</span>
+      {% if loop.first %}<span class="badge success">最新</span>{% endif %}
+    </div>
+    <h2>{{ n.title or n.version }}</h2>
+    <ul>{% for item in n['items'] %}<li>{{ item }}</li>{% endfor %}</ul>
+  </article>
+  {% else %}
+  <p class="muted">まだお知らせはありません。</p>
+  {% endfor %}
+</section>
+{% endblock %}

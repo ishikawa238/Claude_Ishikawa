@@ -15,9 +15,11 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from shared.config import get_config
 from shared.db import get_connection
 from shared.logger import get_logger
-from src import artwork, config_store, feeds, paths, player, scheduler_info, status, store
+from src import artwork, config_store, feeds, paths, player, release_notes, scheduler_info, status, store
 from src.radio import AlreadyRunningError, RunOptions, ensure_db, run
 from src.schedules import DAYS_OPTIONS, duration_minutes, validate_schedules
+from src.study import store as study_store
+from src.web.study_routes import register_study
 
 HISTORY_PAGE_SIZE = 20
 REPLAY_M3U = "replay.m3u"
@@ -158,10 +160,11 @@ def create_app(config_path: Path) -> Flask:
 
     @app.context_processor
     def _inject():
-        return {"nav": request.endpoint, "days_options": DAYS_OPTIONS}
+        return {"nav": request.endpoint, "days_options": DAYS_OPTIONS, "latest_release": release_notes.latest()}
 
     _register_pages(app)
     _register_api(app)
+    register_study(app)
     return app
 
 
@@ -201,6 +204,9 @@ def _register_pages(app: Flask) -> None:
         with get_connection(paths.db_path()) as conn:
             episodes = store.list_episodes(conn, show, query)
             stats = store.library_stats(conn)
+            studied = study_store.transcribed_guids(conn)
+        for e in episodes:
+            e["has_study"] = e["guid"] in studied
         return render_template("library.html", episodes=episodes, stats=stats, show=show, q=query or "")
 
     @app.route("/feeds")
@@ -212,6 +218,10 @@ def _register_pages(app: Flask) -> None:
             for name, s in shows.items()
         }
         return render_template("feeds.html", radio=get_config().get("radio", {}), show_art=show_art)
+
+    @app.route("/releases")
+    def releases():
+        return render_template("releases.html", notes=release_notes.load())
 
     @app.route("/schedule")
     def schedule_page():

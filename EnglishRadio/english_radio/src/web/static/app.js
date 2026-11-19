@@ -56,6 +56,9 @@ function openDetail(card) {
   const play = document.getElementById("dlg-play");
   play.dataset.post = "/api/play/episode";
   play.dataset.body = JSON.stringify({ guid: d.guid });
+  const study = document.getElementById("dlg-study");
+  study.hidden = !d.study;
+  if (d.study) study.href = d.study;
   dlg.showModal();
 }
 
@@ -67,3 +70,17 @@ document.addEventListener("keydown", (ev) => {
   const card = ev.target.closest && ev.target.closest(".ecard[data-detail]");
   if (card && ev.key === "Enter" && !ev.target.closest("[data-post]")) openDetail(card);
 });
+
+// お知らせ: 最新版をまだ見ていなければナビに点を出す（既読はこのブラウザだけに保存）
+(function releaseDot() {
+  const dot = document.querySelector(".nav-dot[data-release]");
+  if (!dot) return;
+  const KEY = "englishradio.seenRelease";
+  const latest = dot.dataset.release;
+  try {
+    if (document.body.dataset.page === "releases") localStorage.setItem(KEY, latest);
+    dot.hidden = localStorage.getItem(KEY) === latest;
+  } catch (e) {
+    dot.hidden = true; // 保存できない環境では出さない
+  }
+})();

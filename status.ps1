@@ -17,6 +17,7 @@ $tasks = @(
     @{ Name = "Investment_OpenD";                Group = "Investment" },
     @{ Name = "EnglishRadio_MorningPlay";        Group = "EnglishRadio" },
     @{ Name = "EnglishRadio_WebServer";          Group = "EnglishRadio" },
+    @{ Name = "EnglishRadio_StudyBatch";         Group = "EnglishRadio" },
     @{ Name = "FreelanceScout_MorningBatch";     Group = "FreelanceScout" },
     @{ Name = "AiNewsDigest_MorningBatch";       Group = "AiNewsDigest" },
     @{ Name = "EnglishDaily_MorningBatch";       Group = "EnglishDaily" },

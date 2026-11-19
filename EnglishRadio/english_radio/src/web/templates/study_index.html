@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "_macros.html" import artwork %}
+{% block title %}学習{% endblock %}
+{% block content %}
+<h1>学習</h1>
+<p class="muted">聞いたエピソードを英文と和訳で読み返して、気になる文をくり返し聞けます。毎朝 09:00 に新しい回を自動で文字起こしします。</p>
+
+<section class="section stats">
+  <div class="stat"><div class="label">📖 学習できる回</div><div class="num">{{ stats.ready }}本</div><div class="faint">文字起こし済み</div></div>
+  <div class="stat"><div class="label">🃏 単語・フレーズ</div><div class="num">{{ stats.vocab }}語</div><div class="faint">覚えた {{ stats.known }}語</div></div>
+  <div class="stat"><div class="label">🔁 今日の復習</div><div class="num">{{ stats.due }}語</div>
+    <div class="faint">{% if stats.due %}<a href="{{ url_for('vocab_page', mode='review') }}" style="color:var(--accent)">復習をはじめる →</a>{% else %}今日はおわり ✨{% endif %}</div></div>
+</section>
+
+{% if running %}
+<p class="section notice">📝 いま文字起こしをしています。終わると下の一覧に出てきます（ページを再読み込みしてください）。</p>
+{% endif %}
+
+<section class="section">
+  <div class="section-head"><h2>学習できる回</h2></div>
+  {% if groups.ready %}
+  <div class="grid-cards">
+    {% for e in groups.ready %}
+    <a class="ecard" href="{{ url_for('study_detail', guid=e.guid) }}">
+      <div class="art-wrap">{{ artwork(e) }}
+        {% if e.ai_status == 'done' %}<div class="corner"><span class="badge success">和訳つき</span></div>{% endif %}
+      </div>
+      <div class="ttl">{{ e.title }}</div>
+      <div class="sub">{{ e.show }} ・ {{ e.duration_sec | minutes }}{% if e.vocab_count %} ・ 単語 {{ e.vocab_count }}{% endif %}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">まだありません。下の「文字起こし」を押すか、明日の朝 09:00 の自動処理をお待ちください。</p>
+  {% endif %}
+</section>
+
+{% if groups.failed %}
+<section class="section">
+  <div class="section-head"><h2>⚠️ うまくいかなかった回</h2></div>
+  <div class="tracklist">
+    {% for e in groups.failed %}
+    <div class="track study-row">
+      {{ artwork(e, 'art-sm') }}
+      <div style="min-width:0"><div class="ttl">{{ e.title }}</div><div class="sub">{{ e.show }} ・ {{ e.t_error or '原因不明' }}</div></div>
+      <button class="btn small" data-post="/api/study/transcribe" data-body='{{ {"guid": e.guid} | tojson }}' {{ 'disabled' if running }}>もう一度</button>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="section">
+  <div class="section-head">
+    <h2>文字起こし待ち <span class="faint">{{ groups.pending | length }}本</span></h2>
+    {% if groups.pending %}<button class="btn small" data-post="/api/study/run" data-confirm="まだの回をまとめて文字起こしします。PC が少し重くなります。よろしいですか？" {{ 'disabled' if running }}>📝 まとめて文字起こし</button>{% endif %}
+  </div>
+  {% if groups.pending %}
+  <div class="tracklist">
+    {% for e in groups.pending[:30] %}
+    <div class="track study-row">
+      {{ artwork(e, 'art-sm') }}
+      <div style="min-width:0"><div class="ttl">{{ e.title }}</div><div class="sub">{{ e.show }} ・ {{ e.duration_sec | minutes }}</div></div>
+      <button class="btn small" data-post="/api/study/transcribe" data-body='{{ {"guid": e.guid} | tojson }}' {{ 'disabled' if running }}>📝 文字起こし</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% if groups.pending | length > 30 %}<p class="faint">ほか {{ groups.pending | length - 30 }}本</p>{% endif %}
+  {% else %}<p class="muted">すべて文字起こし済みです 🎉</p>{% endif %}
+</section>
+{% endblock %}

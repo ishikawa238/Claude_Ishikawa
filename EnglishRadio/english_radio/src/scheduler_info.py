@@ -13,6 +13,7 @@ from src.paths import PROJECT_ROOT
 
 MORNING_TASK = "EnglishRadio_MorningPlay"
 WEB_TASK = "EnglishRadio_WebServer"
+STUDY_TASK = "EnglishRadio_StudyBatch"
 _TIMEOUT_SEC = 60
 
 _STATUS_PS = r"""
@@ -50,7 +51,7 @@ def _decode(raw: bytes) -> str:
 
 def get_task_status(task_name: str) -> dict:
     """{"exists", "state", "last_run", "last_result", "next_run"} を返す。"""
-    if task_name not in (MORNING_TASK, WEB_TASK):
+    if task_name not in (MORNING_TASK, WEB_TASK, STUDY_TASK):
         raise ValueError("未知のタスク名です")
     try:
         proc = _powershell(["-Command", _STATUS_PS.format(name=task_name)])

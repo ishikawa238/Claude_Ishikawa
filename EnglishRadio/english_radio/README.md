@@ -30,6 +30,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 |---|---|
 | `EnglishRadio_MorningPlay` | 時間割の各開始時刻に朝のラジオを再生（スリープ解除あり） |
 | `EnglishRadio_WebServer` | ログオン時に Web 管理画面を起動（http://127.0.0.1:5210/） |
+| `EnglishRadio_StudyBatch` | 毎日 09:00 に学習バッチ（文字起こし・和訳・単語）を実行（スリープ解除なし） |
 
 時間割を Web 画面で変えたときは、朝のタスクだけ自動で更新される（`setup_scheduler.ps1 -MorningOnly`）。
 
@@ -47,6 +48,9 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 # Web 管理画面を手動で起動
 .\venv\Scripts\python.exe scripts\web_server.py
+
+# 学習バッチ（まだの回を文字起こし → 和訳・単語）。--guid <guid> で1話だけ、--dry-run で予定の表示だけ
+.\venv\Scripts\python.exe scripts\study_batch.py
 
 # 既存エピソードにアートワークと紹介文を付ける（アートワーク対応前の mp3 向け。何度実行しても安全）
 .\venv\Scripts\python.exe scripts\backfill_artwork.py
@@ -71,6 +75,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | `radio.vlc_path` | VLC の場所。見つからなければ標準のインストール先と PATH も探す |
 | `paths.*` | DB・ライブラリ・m3u の置き場所（english_radio/ からの相対パス） |
 | `slack.webhook_url` | Slack 通知先。空なら通知をコンソールに表示 |
+| `study.enabled` | 毎朝の学習バッチを動かすか（false でも Web から1話ずつは文字起こしできる） |
+| `study.whisper_model` | 文字起こしモデル。既定 `small.en`（遅ければ `base.en`、精度重視なら `medium.en`） |
+| `study.max_audio_minutes` | 1回のバッチで文字起こしする音声の合計（分）。既定 120 |
+| `study.anthropic_api_key` | 和訳・単語抽出用の Claude API キー。空なら環境変数 `ANTHROPIC_API_KEY`、それも無ければ英文だけ |
+| `study.model` | 和訳に使う Claude のモデル（既定 `claude-haiku-5-5`） |
 
 ### 初期の番組
 
@@ -92,10 +101,20 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 | `data/today.m3u` | 今朝のリスト（VLC で開くとそのまま再生できる） |
 | `data/artwork/<sha1>.jpg` | 番組・エピソードのアートワーク（RSS の画像を 600px に縮小してキャッシュ） |
 | `logs/batch_YYYYMMDD.log` | 実行ログ |
+| `RELEASE_NOTES.md` | Web の「お知らせ」に出る更新履歴（機能を変えたら先頭に追記） |
+
+## 学習機能のメモ
+
+- 初回の文字起こしで Whisper モデル（small.en、約 500MB）を自動でダウンロードする（保存先 `%USERPROFILE%\.cache\huggingface`）
+- 実測: 6分43秒の回が約 52 秒（モデル読み込み込み、Core Ultra 7 258V の CPU）。90 分ぶんでおよそ 10〜15 分
+- 和訳と単語は Claude Haiku 5.5 で作る。費用は 1 日数円程度の見込み（まだ実測していない）
+- コードの構成は [src/study/README.md](src/study/README.md)
 
 ## トラブルシューティング
 
 - **再生されない / 「VLC が見つかりません」**: VLC をインストールする。別の場所に入れた場合は `radio.vlc_path` を設定
 - **ダウンロード失敗の警告**: 配信元の一時的な遅延。2回まで試し、だめなら翌日に自動でやり直す
 - **Web 画面で時間割を保存したら「反映に失敗」**: 管理者 PowerShell で `setup_scheduler.ps1` を実行
+- **学習ページの「うまくいかなかった回」に出る**: 「もう一度」で再挑戦できる（自動では3回まで）
+- **和訳が出ない**: `study.anthropic_api_key` を設定すると、次の学習バッチで英文だけの回にも和訳と単語が付く
 - **Echo で聞きたい**: PC と Echo を Bluetooth でペアリングし、Echo を PC のスピーカーにする

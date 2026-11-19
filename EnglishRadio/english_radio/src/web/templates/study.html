@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from "_macros.html" import artwork %}
+{% block title %}{{ ep.title }}{% endblock %}
+{% block content %}
+<section class="list-head study-head" style="--hero: {{ ep | art_color }}">
+  <div class="study-art">{{ artwork(ep) }}</div>
+  <div style="min-width:0">
+    <div class="eyebrow">{{ ep.show }} ・ {{ (ep.published or '')[:10] }} ・ {{ ep.duration_sec | minutes }}</div>
+    <h1>{{ ep.title }}</h1>
+    {% if t and t.summary_ja %}<p class="study-summary">{{ t.summary_ja }}</p>{% endif %}
+  </div>
+</section>
+
+{% if t and t.status == 'done' %}
+<div class="player-bar" id="player-bar">
+  <audio id="player" src="{{ url_for('audio', guid=ep.guid) }}" preload="metadata" controls></audio>
+  <div class="player-tools">
+    <div class="seg-toggle" role="group" aria-label="表示">
+      <button class="chip active" data-view="both">英＋和</button>
+      <button class="chip" data-view="en">英のみ</button>
+      <button class="chip" data-view="quiz">和訳を隠す</button>
+    </div>
+    <div class="seg-toggle" role="group" aria-label="再生速度">
+      {% for r in [0.75, 1, 1.25] %}<button class="chip {{ 'active' if r == 1 }}" data-rate="{{ r }}">{{ r }}x</button>{% endfor %}
+    </div>
+    <button class="chip" id="repeat" aria-pressed="false">🔁 1文リピート</button>
+    <button class="chip active" id="follow" aria-pressed="true">⤵ 自動スクロール</button>
+  </div>
+</div>
+
+{% if t.ai_status == 'skipped' %}
+<p class="notice">💡 英文だけ表示しています。config.json の <code>study.anthropic_api_key</code> を設定すると、次回から和訳と単語が付きます。</p>
+{% elif t.ai_status in ('none', 'failed') %}
+<p class="notice">⏳ 和訳と単語はまだです{% if t.ai_status == 'failed' %}（前回失敗: {{ t.error }}）{% endif %}。次の学習バッチで作ります。</p>
+{% endif %}
+
+<div class="study-layout">
+  <section class="transcript" id="transcript" data-view="both">
+    {% for s in t.segments %}
+    <p class="seg" id="s{{ s.idx }}" data-idx="{{ s.idx }}" data-start="{{ s.start_sec }}" data-end="{{ s.end_sec }}" tabindex="0">
+      <span class="ts">{{ '%d:%02d' | format(s.start_sec // 60, s.start_sec % 60) }}</span>
+      <span class="en">{{ s.text_en }}</span>
+      {% if s.text_ja %}<span class="ja">{{ s.text_ja }}</span>{% endif %}
+    </p>
+    {% endfor %}
+  </section>
+
+  <aside class="vocab-side">
+    <h2>覚えたい単語・フレーズ</h2>
+    {% if t.vocab %}
+    <ul class="vocab-list">
+      {% for v in t.vocab %}
+      <li class="vocab-item {{ 'known' if v.status == 'known' }}" data-vocab-id="{{ v.id }}">
+        <div class="row">
+          <button class="term-link" data-seg="{{ v.segment_idx if v.segment_idx is not none else '' }}">{{ v.term }}</button>
+          <span class="badge">{{ 'フレーズ' if v.kind == 'phrase' else '単語' }}</span>
+        </div>
+        <div class="meaning">{{ v.meaning_ja }}</div>
+        <button class="chip small known-btn" data-known="{{ 'true' if v.status != 'known' else 'false' }}">{{ '✅ 覚えた' if v.status == 'known' else '覚えた' }}</button>
+      </li>
+      {% endfor %}
+    </ul>
+    <a class="btn small" href="{{ url_for('vocab_page') }}">🃏 単語帳へ</a>
+    {% else %}<p class="muted">和訳と一緒に作られます。</p>{% endif %}
+  </aside>
+</div>
+<script id="vocab-data" type="application/json">{{ t.vocab | map(attribute='term') | list | tojson }}</script>
+<script id="vocab-segs" type="application/json">{{ t.vocab | map(attribute='segment_idx') | list | tojson }}</script>
+
+{% else %}
+<section class="section panel" id="no-transcript" data-guid="{{ ep.guid }}" data-running="{{ 'true' if running else 'false' }}">
+  {% if t and t.status == 'failed' %}
+  <h2>⚠️ 文字起こしに失敗しました</h2><p class="muted">{{ t.error }}</p>
+  {% else %}
+  <h2>📝 まだ文字起こしされていません</h2>
+  <p class="muted">文字起こしは PC の中で行います（無料）。6分の回で数分、50分の回は20分ほどかかります。</p>
+  {% endif %}
+  {% if running %}<p class="notice">いま文字起こし中です。終わると自動でこのページが更新されます…</p>{% endif %}
+  <button class="btn primary" data-post="/api/study/transcribe" data-body='{{ {"guid": ep.guid} | tojson }}' data-poll="1" {{ 'disabled' if running }}>📝 この回を文字起こしする</button>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='study.js') }}"></script>{% endblock %}

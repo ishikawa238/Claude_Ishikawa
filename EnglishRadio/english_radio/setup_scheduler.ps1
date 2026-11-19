@@ -7,6 +7,7 @@
 # 登録するタスク:
 #   EnglishRadio_MorningPlay : config.json の radio.schedules の各開始時刻に朝のラジオを再生
 #   EnglishRadio_WebServer   : ログオン時に Web 管理画面 (http://127.0.0.1:5210/) を起動
+#   EnglishRadio_StudyBatch  : 毎日 09:00 に学習バッチ（文字起こし・和訳・単語）を実行（スリープ解除なし）
 #
 # -MorningOnly を付けると朝のタスクだけを更新する（Web 管理画面のスケジュール保存から呼ばれる）。
 
@@ -16,10 +17,13 @@ param(
 
 $MorningTask = "EnglishRadio_MorningPlay"
 $WebTask = "EnglishRadio_WebServer"
+$StudyTask = "EnglishRadio_StudyBatch"
+$StudyTime = "09:00"
 $PythonExe = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
 $PythonwExe = Join-Path $PSScriptRoot "venv\Scripts\pythonw.exe"
 $MorningScript = Join-Path $PSScriptRoot "scripts\morning_radio.py"
 $WebScript = Join-Path $PSScriptRoot "scripts\web_server.py"
+$StudyScript = Join-Path $PSScriptRoot "scripts\study_batch.py"
 $WorkDir = $PSScriptRoot
 
 foreach ($p in @($PythonExe, $MorningScript)) {
@@ -121,6 +125,12 @@ try {
         $exe = if (Test-Path $PythonwExe) { $PythonwExe } else { $PythonExe }
         Add-ExecAction $web $exe $WebScript
         Register-Definition $WebTask $web
+
+        # --- 学習バッチ（朝の再生のあと。文字起こしは長くかかるので 3 時間まで） ---
+        $study = New-BaseDefinition "EnglishRadio: transcribe episodes and build study notes" "PT3H"
+        Add-ScheduleTrigger $study ([pscustomobject]@{ start = $StudyTime; days = "daily" })
+        Add-ExecAction $study $PythonExe $StudyScript
+        Register-Definition $StudyTask $study
     }
 }
 catch {
@@ -134,4 +144,5 @@ Write-Host "verify  : Get-ScheduledTask -TaskName '$MorningTask'"
 Write-Host "run now : Start-ScheduledTask -TaskName '$MorningTask'"
 if (-not $MorningOnly) {
     Write-Host "web     : Start-ScheduledTask -TaskName '$WebTask'  ->  http://127.0.0.1:5210/"
+    Write-Host "study   : Start-ScheduledTask -TaskName '$StudyTask'"
 }

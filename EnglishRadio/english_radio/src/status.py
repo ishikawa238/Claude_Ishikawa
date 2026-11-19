@@ -8,6 +8,7 @@ from datetime import datetime
 from shared.config import get_config
 from shared.db import get_connection
 from src import paths, player, scheduler_info, store
+from src.study import store as study_store
 from src.schedules import next_occurrence
 
 _TASK_CACHE: dict = {}
@@ -60,6 +61,7 @@ def dashboard() -> dict:
         recent = store.recent_batches(conn, 7)
         stats = store.library_stats(conn)
         latest = store.get_latest_history(conn)
+        study = study_store.study_stats(conn)
     nxt = next_occurrence(radio_cfg.get("schedules", []))
     feeds = radio_cfg.get("feeds", [])
     return {
@@ -73,4 +75,5 @@ def dashboard() -> dict:
         "vlc": player.find_vlc(radio_cfg.get("vlc_path")),
         "errors": recent_errors(),
         "feed_count": sum(1 for f in feeds if f.get("enabled", True)),
+        "study": study if study["ready"] or study["vocab"] else None,
     }

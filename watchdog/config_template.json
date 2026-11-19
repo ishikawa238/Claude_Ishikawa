@@ -58,7 +58,8 @@
       "db_path": "../EnglishRadio/english_radio/data/english_radio.db",
       "log_dir": "../EnglishRadio/english_radio/logs",
       "batches": [
-        {"batch_type": "morning", "schedule": "daily"}
+        {"batch_type": "morning", "schedule": "daily"},
+        {"batch_type": "study", "schedule": "daily"}
       ]
     }
   },

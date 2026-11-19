@@ -14,6 +14,7 @@ from datetime import datetime
 
 from shared.batch import now_str
 from shared.db import fetch_all, fetch_one, insert_one
+from src.study.store import init_study_schema
 
 SCHEMA = [
     """
@@ -105,6 +106,7 @@ _EPISODE_SELECT = (
 def init_db(conn: sqlite3.Connection) -> None:
     for sql in SCHEMA:
         conn.execute(sql)
+    init_study_schema(conn)
     _migrate(conn)
 
 
@@ -336,27 +338,30 @@ def is_batch_running(conn: sqlite3.Connection, batch_type: str = "morning") -> b
     return row["cnt"] > 0
 
 
-def recent_batches(conn: sqlite3.Connection, limit: int = 7) -> list[dict]:
+def recent_batches(conn: sqlite3.Connection, limit: int = 7, batch_type: str = "morning") -> list[dict]:
     rows = fetch_all(
-        conn, "SELECT * FROM batch_run_log ORDER BY start_time DESC, id DESC LIMIT ?", (limit,)
+        conn,
+        "SELECT * FROM batch_run_log WHERE batch_type = ? ORDER BY start_time DESC, id DESC LIMIT ?",
+        (batch_type, limit),
     )
     return [dict(r) for r in rows]
 
 
-def today_batch(conn: sqlite3.Connection) -> dict | None:
+def today_batch(conn: sqlite3.Connection, batch_type: str = "morning") -> dict | None:
     today = datetime.now().strftime("%Y-%m-%d")
     row = fetch_one(
         conn,
-        "SELECT * FROM batch_run_log WHERE run_date = ? ORDER BY id DESC LIMIT 1",
-        (today,),
+        "SELECT * FROM batch_run_log WHERE run_date = ? AND batch_type = ? ORDER BY id DESC LIMIT 1",
+        (today, batch_type),
     )
     return dict(row) if row else None
 
 
-def log_error(conn: sqlite3.Connection, module: str, error: Exception, fatal: bool) -> None:
+def log_error(conn: sqlite3.Connection, module: str, error: Exception, fatal: bool,
+              batch_type: str = "morning") -> None:
     insert_one(conn, "error_log", {
         "error_time": now_str(),
-        "batch_type": "morning",
+        "batch_type": batch_type,
         "module": module,
         "error_type": type(error).__name__,
         "error_message": str(error)[:1000],

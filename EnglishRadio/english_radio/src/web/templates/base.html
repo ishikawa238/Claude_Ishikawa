@@ -11,18 +11,22 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@700;800&family=Noto+Sans+JP:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body data-page="{{ nav or '' }}">
 <div class="shell">
   <aside class="sidebar">
     <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">📻</span>英語ラジオ</a>
     <nav class="nav">
       {% set items = [
         ('dashboard', '🏠', 'ホーム'), ('today', '🎧', '今日'), ('history', '🗓', '過去'),
-        ('library', '📚', 'ライブラリ'), ('feeds_page', '🎙', '番組'), ('schedule_page', '⏰', '時間割')] %}
-      {% for ep, ico, label in items %}
-        {% set target = 'library_page' if ep == 'library' else ep %}
-        {% set active = nav == target or (ep == 'history' and nav == 'history_detail') %}
-        <a href="{{ url_for(target) }}" class="{{ 'active' if active }}" {{ 'aria-current=page' if active }}><span class="ico">{{ ico }}</span><span>{{ label }}</span></a>
+        ('library_page', '📚', 'ライブラリ'), ('study_index', '📖', '学習'), ('vocab_page', '🃏', '単語帳'),
+        ('feeds_page', '🎙', '番組'), ('schedule_page', '⏰', '時間割'), ('releases', '🆕', 'お知らせ')] %}
+      {% set aliases = {'history_detail': 'history', 'study_detail': 'study_index'} %}
+      {% set current = aliases.get(nav, nav) %}
+      {% for target, ico, label in items %}
+        {% set active = current == target %}
+        <a href="{{ url_for(target) }}" class="{{ 'active' if active }}" {{ 'aria-current=page' if active }}><span class="ico">{{ ico }}</span><span>{{ label }}</span>
+          {%- if target == 'releases' and latest_release %}<span class="nav-dot" data-release="{{ latest_release.version }}" hidden aria-label="新しいお知らせ"></span>{% endif -%}
+        </a>
       {% endfor %}
     </nav>
     <div class="sidebar-foot">毎朝の英語ポッドキャスト</div>
@@ -47,6 +51,7 @@
     <p id="dlg-summary"></p>
     <div class="form-row">
       <button class="btn primary" id="dlg-play">▶ 再生する</button>
+      <a class="btn" id="dlg-study" href="#" hidden>📖 学習する</a>
       <button class="btn" onclick="this.closest('dialog').close()">閉じる</button>
     </div>
   </div>

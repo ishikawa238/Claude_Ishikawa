@@ -79,9 +79,10 @@ _SYSTEM_META: dict[str, dict] = {
         "description": "毎朝の英語ラジオ。ポッドキャスト RSS から mp3 を取得・蓄積 → 新着優先＋シャッフルで VLC 再生 → Slack通知",
         "icon": "radio",
         "url": "http://127.0.0.1:5210/",
-        "tasks": ["EnglishRadio_MorningPlay", "EnglishRadio_WebServer"],
+        "tasks": ["EnglishRadio_MorningPlay", "EnglishRadio_WebServer", "EnglishRadio_StudyBatch"],
         "batches": {
             "morning": {"schedule": "毎日 07:00", "label": "朝の再生"},
+            "study": {"schedule": "毎日 09:00", "label": "文字起こし・和訳"},
         },
     },
     "morning_playlist": {

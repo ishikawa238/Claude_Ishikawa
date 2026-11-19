@@ -34,7 +34,7 @@
 
 {# 正方形アートワーク付きカード（クリックで詳細） #}
 {% macro ecard(e, show_source=false) %}
-<div class="ecard" tabindex="0" data-detail='{{ {"title": e.title, "show": e.show, "summary": e.summary or "", "published": (e.published or "")[:10], "minutes": e.duration_sec | minutes, "plays": e.play_count, "guid": e.guid, "art": e | art_url, "color": e | art_color} | tojson }}'>
+<div class="ecard" tabindex="0" data-detail='{{ {"title": e.title, "show": e.show, "summary": e.summary or "", "published": (e.published or "")[:10], "minutes": e.duration_sec | minutes, "plays": e.play_count, "guid": e.guid, "art": e | art_url, "color": e | art_color, "study": url_for('study_detail', guid=e.guid) if e.has_study else ""} | tojson }}'>
   <div class="art-wrap">
     {{ artwork(e) }}
     {% if show_source %}<div class="corner">{{ source_badge(e.source) }}</div>{% endif %}

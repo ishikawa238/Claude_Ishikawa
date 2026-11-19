@@ -3,3 +3,7 @@ requests>=2.31.0
 mutagen>=1.47.0
 flask>=3.0.0
 Pillow>=13.0.0
+faster-whisper>=1.2.1
+# faster-whisper 1.2.1 は PyAV 16 以降の av.open() 引数変更に未対応のため 15 系に固定
+av>=15,<16
+anthropic>=2.10.0

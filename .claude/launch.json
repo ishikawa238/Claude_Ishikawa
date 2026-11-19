@@ -6,6 +6,12 @@
       "runtimeExecutable": "EnglishRadio/english_radio/venv/Scripts/python.exe",
       "runtimeArgs": ["EnglishRadio/english_radio/scripts/web_server.py"],
       "port": 5210
+    },
+    {
+      "name": "english-radio-web-preview",
+      "runtimeExecutable": "EnglishRadio/english_radio/venv/Scripts/python.exe",
+      "runtimeArgs": ["-c", "import sys; sys.path.insert(0, 'EnglishRadio/english_radio/scripts'); import _bootstrap; p = _bootstrap.setup(); from src.web.app import create_app; create_app(p).run(host='127.0.0.1', port=5211, threaded=True)"],
+      "port": 5211
     }
   ]
 }

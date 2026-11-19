@@ -22,6 +22,25 @@
   </div>
 </section>
 
+{% if latest_release or d.study %}
+<section class="section quick-row">
+  {% if d.study %}
+  <a class="quick-card" href="{{ url_for('vocab_page', mode='review') if d.study.due else url_for('study_index') }}">
+    <span class="quick-ico">🃏</span>
+    <span><b>{% if d.study.due %}今日の復習 {{ d.study.due }}語{% else %}今日の復習はおわり ✨{% endif %}</b>
+      <span class="faint">学習できる回 {{ d.study.ready }}本 ・ 単語 {{ d.study.vocab }}語</span></span>
+  </a>
+  {% endif %}
+  {% if latest_release %}
+  <a class="quick-card" href="{{ url_for('releases') }}">
+    <span class="quick-ico">🆕</span>
+    <span><b>{{ latest_release.version }} {{ latest_release.title }}</b>
+      <span class="faint">{{ latest_release.date }} ・ お知らせを見る</span></span>
+  </a>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if items %}
 <section class="section">
   <div class="section-head"><h2>今日のラインナップ</h2><a href="{{ url_for('today') }}">すべて表示</a></div>

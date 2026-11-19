@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}単語帳{% endblock %}
+{% block content %}
+{% if review %}
+<h1>復習</h1>
+<p class="muted">英語を見て意味を思い出してから、答えを見ましょう。正解するほど次に出るまでの間隔が延びます（1→2→4→7→15→30日）。</p>
+<section class="section" id="review" data-total="{{ words | length }}">
+  {% if words %}
+  <div class="review-progress"><span id="rv-count">1</span> / <span id="rv-total">{{ words | length }}</span></div>
+  <div class="review-card" id="rv-card" tabindex="0">
+    <div class="eyebrow" id="rv-kind"></div>
+    <div class="review-term" id="rv-term"></div>
+    <div class="review-answer" id="rv-answer" hidden>
+      <div class="review-meaning" id="rv-meaning"></div>
+      <p class="en" id="rv-ex-en"></p>
+      <p class="ja" id="rv-ex-ja"></p>
+      <a class="faint" id="rv-link" href="#">▶ 元の文を聞く</a>
+    </div>
+  </div>
+  <div class="form-row review-actions">
+    <button class="btn primary" id="rv-show">答えを見る（Space）</button>
+    <button class="btn" id="rv-ng" hidden>😵 まだ（←）</button>
+    <button class="btn primary" id="rv-ok" hidden>😊 わかった（→）</button>
+  </div>
+  <div class="review-done" id="rv-done" hidden>
+    <h2>おつかれさま！ 🎉</h2>
+    <p class="muted">今日の復習はおわりです。</p>
+    <a class="btn" href="{{ url_for('vocab_page') }}">単語帳にもどる</a>
+  </div>
+  <script id="review-data" type="application/json">{{ words | tojson }}</script>
+  {% else %}
+  <p class="muted">今日復習する単語はありません ✨</p>
+  <a class="btn" href="{{ url_for('vocab_page') }}">単語帳にもどる</a>
+  {% endif %}
+</section>
+
+{% else %}
+<h1>単語帳</h1>
+<p class="muted">エピソードから抜き出した、覚えておきたい単語・フレーズです。</p>
+<section class="section stats">
+  <div class="stat"><div class="label">🃏 ぜんぶ</div><div class="num">{{ stats.vocab }}語</div></div>
+  <div class="stat"><div class="label">✅ 覚えた</div><div class="num">{{ stats.known }}語</div></div>
+  <div class="stat"><div class="label">🔁 今日の復習</div><div class="num">{{ stats.due }}語</div>
+    {% if stats.due %}<a class="btn primary small" href="{{ url_for('vocab_page', mode='review') }}" style="margin-top:6px">▶ 復習をはじめる</a>{% endif %}</div>
+</section>
+
+<form class="form-row section" method="get">
+  <select name="show" aria-label="番組" onchange="this.form.submit()">
+    <option value="">すべての番組</option>
+    {% for s in shows %}<option value="{{ s }}" {{ 'selected' if s == show }}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="status" aria-label="状態" onchange="this.form.submit()">
+    {% for value, label in [('', 'すべての状態'), ('new', 'まだ復習していない'), ('learning', '練習中'), ('known', '覚えた')] %}
+    <option value="{{ value }}" {{ 'selected' if (status or '') == value }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</form>
+
+<section class="section">
+  {% if words %}
+  <ul class="vocab-table">
+    {% for v in words %}
+    <li class="vocab-item {{ 'known' if v.status == 'known' }}" data-vocab-id="{{ v.id }}">
+      <div class="row">
+        <b class="term">{{ v.term }}</b>
+        <span class="badge">{{ 'フレーズ' if v.kind == 'phrase' else '単語' }}</span>
+        <span class="badge {{ 'success' if v.status == 'known' else ('queued' if v.status == 'learning' else '') }}">{{ {'new': '未復習', 'learning': '練習中', 'known': '覚えた'}[v.status] }}</span>
+        {% if v.status != 'known' %}<span class="faint">次の復習 {{ '今日' if v.next_review <= today else v.next_review[5:].replace('-', '/') }}</span>{% endif %}
+      </div>
+      <div class="meaning">{{ v.meaning_ja }}</div>
+      {% if v.example_en %}<p class="en">{{ v.example_en }}</p>{% endif %}
+      {% if v.example_ja %}<p class="ja">{{ v.example_ja }}</p>{% endif %}
+      <div class="row">
+        <a class="faint" href="{{ url_for('study_detail', guid=v.guid) }}{{ '#s' ~ v.segment_idx if v.segment_idx is not none }}">🎧 {{ v.show }} ・ {{ v.episode_title }}</a>
+        <button class="chip small known-btn" data-known="{{ 'true' if v.status != 'known' else 'false' }}">{{ '✅ 覚えた' if v.status == 'known' else '覚えた' }}</button>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">まだ単語がありません。エピソードを文字起こしすると、和訳と一緒に作られます（<a href="{{ url_for('study_index') }}" style="color:var(--accent)">学習</a>）。</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='study.js') }}"></script>{% endblock %}
